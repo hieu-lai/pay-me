@@ -25,8 +25,6 @@ export const add = zodMutation({
       return existingUser._id
     }
 
-    console.log({ identity })
-
     return await ctx.db.insert('users', {
       tokenIdentifier: identity.tokenIdentifier,
       clerkUserId: identity.subject,
