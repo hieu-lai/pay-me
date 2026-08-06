@@ -1,7 +1,11 @@
 import { Link } from '@tanstack/react-router'
-import { Button, buttonVariants } from '#/components/ui/button'
+import { buttonVariants } from '#/components/ui/button'
 import { Skeleton } from '#/components/ui/skeleton'
 import { AuthLoading, Authenticated, Unauthenticated } from 'convex/react'
+import { Suspense } from 'react'
+import { ErrorBoundary } from 'react-error-boundary'
+
+import UserAvatar from './user-avatar'
 
 export function Header() {
   return (
@@ -11,7 +15,11 @@ export function Header() {
         <Skeleton className="size-8 rounded-full" />
       </AuthLoading>
       <Authenticated>
-        <Button>Join up</Button>
+        <ErrorBoundary fallback={<div>Error</div>}>
+          <Suspense fallback={<Skeleton className="size-8 rounded-full" />}>
+            <UserAvatar />
+          </Suspense>
+        </ErrorBoundary>
       </Authenticated>
       <Unauthenticated>
         <div className="flex items-center gap-2">

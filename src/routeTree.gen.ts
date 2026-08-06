@@ -14,7 +14,6 @@ import { Route as AuthLayoutRouteRouteImport } from './routes/_auth-layout/route
 import { Route as DashboardRouteRouteImport } from './routes/dashboard/route'
 import { Route as AuthLayoutSignInSplatRouteImport } from './routes/_auth-layout/sign-in/$'
 import { Route as AuthLayoutSignUpSplatRouteImport } from './routes/_auth-layout/sign-up/$'
-import { Route as ApiAuthSignUpCallbackRouteImport } from './routes/api/auth/sign-up/callback'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -40,25 +39,18 @@ const AuthLayoutSignUpSplatRoute = AuthLayoutSignUpSplatRouteImport.update({
   path: '/sign-up/$',
   getParentRoute: () => AuthLayoutRouteRoute,
 } as any)
-const ApiAuthSignUpCallbackRoute = ApiAuthSignUpCallbackRouteImport.update({
-  id: '/api/auth/sign-up/callback',
-  path: '/api/auth/sign-up/callback',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRouteRoute
   '/sign-in/$': typeof AuthLayoutSignInSplatRoute
   '/sign-up/$': typeof AuthLayoutSignUpSplatRoute
-  '/api/auth/sign-up/callback': typeof ApiAuthSignUpCallbackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRouteRoute
   '/sign-in/$': typeof AuthLayoutSignInSplatRoute
   '/sign-up/$': typeof AuthLayoutSignUpSplatRoute
-  '/api/auth/sign-up/callback': typeof ApiAuthSignUpCallbackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -67,23 +59,12 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRouteRoute
   '/_auth-layout/sign-in/$': typeof AuthLayoutSignInSplatRoute
   '/_auth-layout/sign-up/$': typeof AuthLayoutSignUpSplatRoute
-  '/api/auth/sign-up/callback': typeof ApiAuthSignUpCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/dashboard'
-    | '/sign-in/$'
-    | '/sign-up/$'
-    | '/api/auth/sign-up/callback'
+  fullPaths: '/' | '/dashboard' | '/sign-in/$' | '/sign-up/$'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/dashboard'
-    | '/sign-in/$'
-    | '/sign-up/$'
-    | '/api/auth/sign-up/callback'
+  to: '/' | '/dashboard' | '/sign-in/$' | '/sign-up/$'
   id:
     | '__root__'
     | '/'
@@ -91,14 +72,12 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/_auth-layout/sign-in/$'
     | '/_auth-layout/sign-up/$'
-    | '/api/auth/sign-up/callback'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthLayoutRouteRoute: typeof AuthLayoutRouteRouteWithChildren
   DashboardRouteRoute: typeof DashboardRouteRoute
-  ApiAuthSignUpCallbackRoute: typeof ApiAuthSignUpCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -138,13 +117,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthLayoutSignUpSplatRouteImport
       parentRoute: typeof AuthLayoutRouteRoute
     }
-    '/api/auth/sign-up/callback': {
-      id: '/api/auth/sign-up/callback'
-      path: '/api/auth/sign-up/callback'
-      fullPath: '/api/auth/sign-up/callback'
-      preLoaderRoute: typeof ApiAuthSignUpCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -166,7 +138,6 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthLayoutRouteRoute: AuthLayoutRouteRouteWithChildren,
   DashboardRouteRoute: DashboardRouteRoute,
-  ApiAuthSignUpCallbackRoute: ApiAuthSignUpCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

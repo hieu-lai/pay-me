@@ -5,8 +5,8 @@ export default defineSchema({
   users: defineTable({
     tokenIdentifier: v.string(),
     clerkUserId: v.string(),
-    email: v.optional(v.string()),
-    name: v.optional(v.string()),
+    email: v.string(),
+    name: v.string(),
     imageUrl: v.optional(v.string()),
   })
     .index('by_tokenIdentifier', ['tokenIdentifier'])

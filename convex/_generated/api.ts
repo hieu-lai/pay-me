@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as http from "../http.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
 import type * as users from "../users.js";
@@ -21,6 +22,7 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
+  http: typeof http;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
   users: typeof users;

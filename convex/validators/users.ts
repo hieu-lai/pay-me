@@ -5,8 +5,8 @@ export const userValidator = z.object(
   withSystemFields('users', {
     tokenIdentifier: z.string(),
     clerkUserId: z.string(),
-    email: z.string().optional(),
-    name: z.string().optional(),
+    email: z.string(),
+    name: z.string(),
     imageUrl: z.string().optional(),
   }),
 )

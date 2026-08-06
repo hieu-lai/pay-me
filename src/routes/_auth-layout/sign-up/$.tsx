@@ -11,8 +11,7 @@ function RouteComponent() {
       signInUrl="/sign-in"
       routing="path"
       path="/sign-up"
-      forceRedirectUrl="/api/auth/sign-up/callback"
-      fallbackRedirectUrl="/"
+      // fallbackRedirectUrl="/"
     />
   )
 }
