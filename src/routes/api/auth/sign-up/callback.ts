@@ -54,7 +54,7 @@ export async function handleSignUpCallback(
       return redirectToSignIn(request)
     }
 
-    const token = await getToken({ template: 'convex' })
+    const token = await getToken()
 
     if (!token) {
       return redirectToSignIn(request)
