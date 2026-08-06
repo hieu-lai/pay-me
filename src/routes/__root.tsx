@@ -8,6 +8,8 @@ import {
   createRootRouteWithContext,
   useRouteContext,
 } from '@tanstack/react-router'
+import { ThemeProvider } from '#/components/theme-provider'
+import { TooltipProvider } from '#/components/ui/tooltip'
 import { getAuth } from '#/server-fns/get-auth'
 import type { ConvexReactClient } from 'convex/react'
 import { ConvexProviderWithClerk } from 'convex/react-clerk'
@@ -60,9 +62,13 @@ function RootComponent() {
   return (
     <ClerkProvider>
       <ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
-        <RootDocument>
-          <Outlet />
-        </RootDocument>
+        <ThemeProvider>
+          <TooltipProvider>
+            <RootDocument>
+              <Outlet />
+            </RootDocument>
+          </TooltipProvider>
+        </ThemeProvider>
       </ConvexProviderWithClerk>
     </ClerkProvider>
   )
@@ -70,7 +76,7 @@ function RootComponent() {
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>

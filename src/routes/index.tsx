@@ -6,9 +6,9 @@ export const Route = createFileRoute('/')({ component: Home })
 
 function Home() {
   return (
-    <div className="dev min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <div className="dev2 h-400">Stuff goes here</div>
+      <div className="h-400">Stuff goes here</div>
     </div>
   )
 }
