@@ -9,8 +9,10 @@ import {
   useRouteContext,
 } from '@tanstack/react-router'
 import { ThemeProvider } from '#/components/theme-provider'
+import { Toaster } from '#/components/ui/toast'
 import { TooltipProvider } from '#/components/ui/tooltip'
 import { getAuth } from '#/server-fns/get-auth'
+import { ConvexQueryCacheProvider } from 'convex-helpers/react/cache'
 import type { ConvexReactClient } from 'convex/react'
 import { ConvexProviderWithClerk } from 'convex/react-clerk'
 
@@ -62,13 +64,15 @@ function RootComponent() {
   return (
     <ClerkProvider>
       <ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
-        <ThemeProvider>
-          <TooltipProvider>
-            <RootDocument>
-              <Outlet />
-            </RootDocument>
-          </TooltipProvider>
-        </ThemeProvider>
+        <ConvexQueryCacheProvider>
+          <ThemeProvider>
+            <TooltipProvider>
+              <RootDocument>
+                <Outlet />
+              </RootDocument>
+            </TooltipProvider>
+          </ThemeProvider>
+        </ConvexQueryCacheProvider>
       </ConvexProviderWithClerk>
     </ClerkProvider>
   )
@@ -82,6 +86,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
+        <Toaster />
         <Scripts />
       </body>
     </html>

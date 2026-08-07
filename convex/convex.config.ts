@@ -1,3 +1,4 @@
+import migrations from '@convex-dev/migrations/convex.config.js'
 import { defineApp } from 'convex/server'
 import { v } from 'convex/values'
 
@@ -6,7 +7,12 @@ const app = defineApp({
     CLERK_FRONTEND_API_URL: v.string(),
     CLERK_SECRET_KEY: v.string(),
     CLERK_WEBHOOK_SIGNING_SECRET: v.string(),
+    PAYMENT_DESTINATION_ENCRYPTION_KEYS: v.string(),
+    PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION: v.string(),
+    PAYMENT_DESTINATION_FINGERPRINT_KEY: v.string(),
   },
 })
+
+app.use(migrations)
 
 export default app

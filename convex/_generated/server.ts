@@ -37,6 +37,9 @@ type Env = {
   readonly CLERK_FRONTEND_API_URL: string;
   readonly CLERK_SECRET_KEY: string;
   readonly CLERK_WEBHOOK_SIGNING_SECRET: string;
+  readonly PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION: string;
+  readonly PAYMENT_DESTINATION_ENCRYPTION_KEYS: string;
+  readonly PAYMENT_DESTINATION_FINGERPRINT_KEY: string;
 };
 
 /**

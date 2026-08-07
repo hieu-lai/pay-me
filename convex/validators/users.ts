@@ -1,4 +1,4 @@
-import { withSystemFields } from 'convex-helpers/server/zod4'
+import { withSystemFields, zid } from 'convex-helpers/server/zod4'
 import { z } from 'zod'
 
 export const userValidator = z.object(
@@ -8,5 +8,6 @@ export const userValidator = z.object(
     email: z.string(),
     name: z.string(),
     imageUrl: z.string().optional(),
+    defaultPaymentDestinationId: zid('paymentDestinations').optional(),
   }),
 )

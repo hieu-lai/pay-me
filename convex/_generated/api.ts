@@ -9,9 +9,13 @@
  */
 
 import type * as http from "../http.js";
+import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
+import type * as migrations from "../migrations.js";
+import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as users from "../users.js";
+import type * as validators_paymentDestinations from "../validators/paymentDestinations.js";
 import type * as validators_users from "../validators/users.js";
 
 import type {
@@ -23,9 +27,13 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   http: typeof http;
+  "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
+  migrations: typeof migrations;
+  paymentDestinations: typeof paymentDestinations;
   users: typeof users;
+  "validators/paymentDestinations": typeof validators_paymentDestinations;
   "validators/users": typeof validators_users;
 }> = anyApi as any;
 
@@ -55,4 +63,6 @@ export const internal: FilterApi<
   FunctionReference<any, "internal">
 > = anyApi as any;
 
-export const components = componentsGeneric() as unknown as {};
+export const components = componentsGeneric() as unknown as {
+  migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
+};

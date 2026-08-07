@@ -14,6 +14,10 @@ import { Route as AuthLayoutRouteRouteImport } from './routes/_auth-layout/route
 import { Route as DashboardRouteRouteImport } from './routes/dashboard/route'
 import { Route as AuthLayoutSignInSplatRouteImport } from './routes/_auth-layout/sign-in/$'
 import { Route as AuthLayoutSignUpSplatRouteImport } from './routes/_auth-layout/sign-up/$'
+import { Route as DashboardAccountIndexRouteImport } from './routes/dashboard/account/index'
+import { Route as DashboardPayoutMethodsIndexRouteImport } from './routes/dashboard/payout-methods/index'
+import { Route as DashboardProfileIndexRouteImport } from './routes/dashboard/profile/index'
+import { Route as DashboardRequestIndexRouteImport } from './routes/dashboard/request/index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -39,32 +43,81 @@ const AuthLayoutSignUpSplatRoute = AuthLayoutSignUpSplatRouteImport.update({
   path: '/sign-up/$',
   getParentRoute: () => AuthLayoutRouteRoute,
 } as any)
+const DashboardAccountIndexRoute = DashboardAccountIndexRouteImport.update({
+  id: '/account/',
+  path: '/account/',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
+const DashboardPayoutMethodsIndexRoute =
+  DashboardPayoutMethodsIndexRouteImport.update({
+    id: '/payout-methods/',
+    path: '/payout-methods/',
+    getParentRoute: () => DashboardRouteRoute,
+  } as any)
+const DashboardProfileIndexRoute = DashboardProfileIndexRouteImport.update({
+  id: '/profile/',
+  path: '/profile/',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
+const DashboardRequestIndexRoute = DashboardRequestIndexRouteImport.update({
+  id: '/request/',
+  path: '/request/',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/dashboard': typeof DashboardRouteRoute
+  '/dashboard': typeof DashboardRouteRouteWithChildren
   '/sign-in/$': typeof AuthLayoutSignInSplatRoute
   '/sign-up/$': typeof AuthLayoutSignUpSplatRoute
+  '/dashboard/account/': typeof DashboardAccountIndexRoute
+  '/dashboard/payout-methods/': typeof DashboardPayoutMethodsIndexRoute
+  '/dashboard/profile/': typeof DashboardProfileIndexRoute
+  '/dashboard/request/': typeof DashboardRequestIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/dashboard': typeof DashboardRouteRoute
+  '/dashboard': typeof DashboardRouteRouteWithChildren
   '/sign-in/$': typeof AuthLayoutSignInSplatRoute
   '/sign-up/$': typeof AuthLayoutSignUpSplatRoute
+  '/dashboard/account': typeof DashboardAccountIndexRoute
+  '/dashboard/payout-methods': typeof DashboardPayoutMethodsIndexRoute
+  '/dashboard/profile': typeof DashboardProfileIndexRoute
+  '/dashboard/request': typeof DashboardRequestIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_auth-layout': typeof AuthLayoutRouteRouteWithChildren
-  '/dashboard': typeof DashboardRouteRoute
+  '/dashboard': typeof DashboardRouteRouteWithChildren
   '/_auth-layout/sign-in/$': typeof AuthLayoutSignInSplatRoute
   '/_auth-layout/sign-up/$': typeof AuthLayoutSignUpSplatRoute
+  '/dashboard/account/': typeof DashboardAccountIndexRoute
+  '/dashboard/payout-methods/': typeof DashboardPayoutMethodsIndexRoute
+  '/dashboard/profile/': typeof DashboardProfileIndexRoute
+  '/dashboard/request/': typeof DashboardRequestIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/dashboard' | '/sign-in/$' | '/sign-up/$'
+  fullPaths:
+    | '/'
+    | '/dashboard'
+    | '/sign-in/$'
+    | '/sign-up/$'
+    | '/dashboard/account/'
+    | '/dashboard/payout-methods/'
+    | '/dashboard/profile/'
+    | '/dashboard/request/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dashboard' | '/sign-in/$' | '/sign-up/$'
+  to:
+    | '/'
+    | '/dashboard'
+    | '/sign-in/$'
+    | '/sign-up/$'
+    | '/dashboard/account'
+    | '/dashboard/payout-methods'
+    | '/dashboard/profile'
+    | '/dashboard/request'
   id:
     | '__root__'
     | '/'
@@ -72,12 +125,16 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/_auth-layout/sign-in/$'
     | '/_auth-layout/sign-up/$'
+    | '/dashboard/account/'
+    | '/dashboard/payout-methods/'
+    | '/dashboard/profile/'
+    | '/dashboard/request/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthLayoutRouteRoute: typeof AuthLayoutRouteRouteWithChildren
-  DashboardRouteRoute: typeof DashboardRouteRoute
+  DashboardRouteRoute: typeof DashboardRouteRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -117,6 +174,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthLayoutSignUpSplatRouteImport
       parentRoute: typeof AuthLayoutRouteRoute
     }
+    '/dashboard/account/': {
+      id: '/dashboard/account/'
+      path: '/account'
+      fullPath: '/dashboard/account/'
+      preLoaderRoute: typeof DashboardAccountIndexRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
+    '/dashboard/payout-methods/': {
+      id: '/dashboard/payout-methods/'
+      path: '/payout-methods'
+      fullPath: '/dashboard/payout-methods/'
+      preLoaderRoute: typeof DashboardPayoutMethodsIndexRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
+    '/dashboard/profile/': {
+      id: '/dashboard/profile/'
+      path: '/profile'
+      fullPath: '/dashboard/profile/'
+      preLoaderRoute: typeof DashboardProfileIndexRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
+    '/dashboard/request/': {
+      id: '/dashboard/request/'
+      path: '/request'
+      fullPath: '/dashboard/request/'
+      preLoaderRoute: typeof DashboardRequestIndexRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
   }
 }
 
@@ -134,10 +219,28 @@ const AuthLayoutRouteRouteWithChildren = AuthLayoutRouteRoute._addFileChildren(
   AuthLayoutRouteRouteChildren,
 )
 
+interface DashboardRouteRouteChildren {
+  DashboardAccountIndexRoute: typeof DashboardAccountIndexRoute
+  DashboardPayoutMethodsIndexRoute: typeof DashboardPayoutMethodsIndexRoute
+  DashboardProfileIndexRoute: typeof DashboardProfileIndexRoute
+  DashboardRequestIndexRoute: typeof DashboardRequestIndexRoute
+}
+
+const DashboardRouteRouteChildren: DashboardRouteRouteChildren = {
+  DashboardAccountIndexRoute: DashboardAccountIndexRoute,
+  DashboardPayoutMethodsIndexRoute: DashboardPayoutMethodsIndexRoute,
+  DashboardProfileIndexRoute: DashboardProfileIndexRoute,
+  DashboardRequestIndexRoute: DashboardRequestIndexRoute,
+}
+
+const DashboardRouteRouteWithChildren = DashboardRouteRoute._addFileChildren(
+  DashboardRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthLayoutRouteRoute: AuthLayoutRouteRouteWithChildren,
-  DashboardRouteRoute: DashboardRouteRoute,
+  DashboardRouteRoute: DashboardRouteRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
