@@ -93,7 +93,7 @@ export function Item({ kind, label, maskedDisplay, isDefault, id }: Props) {
         </ItemMedia>
         <ItemContent>
           <ItemTitle>
-            {label}
+            {label || (kind === 'bankAccount' ? 'Account' : 'PayID')}
             {isDefault && <Badge>Default</Badge>}
           </ItemTitle>
         </ItemContent>
