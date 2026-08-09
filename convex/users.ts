@@ -4,8 +4,8 @@ import { z } from 'zod'
 
 import { internalMutation, internalQuery } from './_generated/server'
 import { requireUser } from './lib/requireUser'
-import { userSearchText } from './lib/userSearch'
 import { userQuery } from './lib/userFunctions'
+import { userSearchText } from './lib/userSearch'
 import { userValidator } from './validators/users'
 
 const zodInternalQuery = zCustomQuery(internalQuery, NoOp)
@@ -27,25 +27,22 @@ export const me = userQuery({
 /** Find public profiles by name or PayMe Username. */
 export const search = userQuery({
   args: {
-    query: z.string(),
+    query: z.string().trim().min(1),
   },
   returns: z.array(
     z.object({
       id: zid('users'),
       name: z.string(),
+      hasPaymentDestination: z.boolean(),
       username: z.string().optional(),
       imageUrl: z.string().optional(),
     }),
   ),
   handler: async (ctx, args) => {
-    const searchTerm = args.query.trim()
-
-    if (searchTerm.length < 2) return []
-
     const users = await ctx.db
       .query('users')
       .withSearchIndex('search_by_searchText', (q) =>
-        q.search('searchText', searchTerm),
+        q.search('searchText', args.query),
       )
       .take(11)
 
@@ -55,6 +52,7 @@ export const search = userQuery({
       .map((user) => ({
         id: user._id,
         name: user.name,
+        hasPaymentDestination: user.defaultPaymentDestinationId !== undefined,
         ...(user.username === undefined ? {} : { username: user.username }),
         ...(user.imageUrl === undefined ? {} : { imageUrl: user.imageUrl }),
       }))

@@ -6,9 +6,9 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
+import { useInfiniteScroll } from '@/hooks/use-infinite-scroll'
 import { usePaginatedQuery } from 'convex-helpers/react/cache'
 import { PiggyBankIcon } from 'lucide-react'
-import { useEffect, useRef } from 'react'
 
 import { api } from '../../../../../../convex/_generated/api'
 import { AddPayoutMethod } from '../add-method'
@@ -23,24 +23,13 @@ export function PaymentDestinations() {
     {},
     { initialNumItems: PAGE_SIZE },
   )
-  const loadMoreRef = useRef<HTMLDivElement>(null)
+  const loadMoreRef = useInfiniteScroll<HTMLDivElement>({
+    enabled: status === 'CanLoadMore',
+    onLoadMore: () => loadMore(PAGE_SIZE),
+    rootMargin: '200px',
+  })
   const loadingItemCount = status === 'LoadingFirstPage' ? 3 : 1
   const isEmpty = !isLoading && results.length === 0
-
-  useEffect(() => {
-    const loadMoreElement = loadMoreRef.current
-    if (!loadMoreElement || status !== 'CanLoadMore') return
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) loadMore(PAGE_SIZE)
-      },
-      { rootMargin: '200px' },
-    )
-
-    observer.observe(loadMoreElement)
-    return () => observer.disconnect()
-  }, [loadMore, status])
 
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-2 py-8">

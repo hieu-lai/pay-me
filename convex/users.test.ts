@@ -111,6 +111,7 @@ describe('users.search', () => {
       {
         id: recipientId,
         name: 'Ada Lovelace',
+        hasPaymentDestination: false,
         imageUrl: 'https://example.com/ada.png',
       },
     ])
@@ -124,8 +125,8 @@ describe('users.search', () => {
     )
   })
 
-  test.each(['', ' ', ' A '])(
-    'returns no users for the short search term %j',
+  test.each(['', ' '])(
+    'rejects the empty search term %j after trimming',
     async (query) => {
       const t = convexTest(schema, modules)
       await t.mutation(internal.users.addUser, addUserArgs)
@@ -133,9 +134,31 @@ describe('users.search', () => {
 
       await expect(
         authenticated.query(api.users.search, { query }),
-      ).resolves.toEqual([])
+      ).rejects.toThrow()
     },
   )
+
+  test('accepts a one-character search term', async () => {
+    const t = convexTest(schema, modules)
+    await t.mutation(internal.users.addUser, addUserArgs)
+    const recipientId = await t.mutation(internal.users.addUser, {
+      tokenIdentifier: 'https://clerk.example.test|user_456',
+      clerkUserId: 'user_456',
+      email: 'q@example.com',
+      name: 'Q',
+    })
+    const authenticated = t.withIdentity(identity)
+
+    await expect(
+      authenticated.query(api.users.search, { query: ' Q ' }),
+    ).resolves.toEqual([
+      {
+        id: recipientId,
+        name: 'Q',
+        hasPaymentDestination: false,
+      },
+    ])
+  })
 
   test('matches an optional PayMe Username', async () => {
     const t = convexTest(schema, modules)
@@ -158,7 +181,46 @@ describe('users.search', () => {
       {
         id: recipientId,
         name: 'Rear Admiral',
+        hasPaymentDestination: false,
         username: 'gracehopper',
+      },
+    ])
+  })
+
+  test('flags a user with a default payment destination', async () => {
+    const t = convexTest(schema, modules)
+    await t.mutation(internal.users.addUser, addUserArgs)
+    const recipientId = await t.mutation(internal.users.addUser, {
+      tokenIdentifier: 'https://clerk.example.test|user_456',
+      clerkUserId: 'user_456',
+      email: 'ada@example.com',
+      name: 'Ada Lovelace',
+    })
+    await t.run(async (ctx) => {
+      const destinationId = await ctx.db.insert('paymentDestinations', {
+        ownerUserId: recipientId,
+        kind: 'payId',
+        payIdType: 'email',
+        searchLabel: 'ada@example.com',
+        maskedDisplay: 'a**@example.com',
+        fingerprint: 'fingerprint',
+        ciphertext: 'ciphertext',
+        nonce: 'nonce',
+        keyVersion: 'v1',
+      })
+      await ctx.db.patch('users', recipientId, {
+        defaultPaymentDestinationId: destinationId,
+      })
+    })
+    const authenticated = t.withIdentity(identity)
+
+    await expect(
+      authenticated.query(api.users.search, { query: 'Ada' }),
+    ).resolves.toEqual([
+      {
+        id: recipientId,
+        name: 'Ada Lovelace',
+        hasPaymentDestination: true,
       },
     ])
   })
