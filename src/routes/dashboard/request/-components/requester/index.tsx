@@ -8,21 +8,19 @@ import {
 } from '#/components/ui/card'
 
 import { Form } from './form'
+import { SubmitButton } from './submit-button'
 
 export function Requester() {
   return (
     <Card className="max-w-lg flex-1">
       <CardHeader>
         <CardTitle>Request</CardTitle>
-        {/* <CardDescription>
-          Enter your email below to login to your account
-        </CardDescription> */}
       </CardHeader>
       <CardContent>
         <Form />
       </CardContent>
       <CardFooter>
-        <Button className="w-full">Request</Button>
+        <SubmitButton />
       </CardFooter>
     </Card>
   )

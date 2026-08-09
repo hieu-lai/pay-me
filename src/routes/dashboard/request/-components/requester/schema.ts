@@ -35,6 +35,7 @@ export const formSchema = z.object({
         imageUrl: z.string().optional(),
       }),
     )
+    .min(1, 'Choose at least one recipient.')
     .max(MAX_RECIPIENTS, `You can add up to ${MAX_RECIPIENTS} recipients.`),
 })
 

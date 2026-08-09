@@ -24,12 +24,12 @@ import {
 import getInitials from '#/lib/get-initials'
 import { DollarSignIcon, XIcon } from 'lucide-react'
 
-import { SearchRecipients } from './search-recipients'
 import { MAX_RECIPIENTS } from './schema'
+import { SearchRecipients } from './search-recipients'
 import { useRequestForm } from './use-request-form'
 
 export function Form() {
-  const form = useRequestForm()
+  const form = useRequestForm({ onSubmit: (values) => console.log({ values }) })
 
   return (
     <form
