@@ -1,0 +1,1252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PayMe agreement lifecycle prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17231f;
+        --muted: #61706a;
+        --line: #d9e2de;
+        --panel: #ffffff;
+        --canvas: #f4f7f5;
+        --accent: #087a63;
+        --accent-soft: #ddf3ec;
+        --warn: #a85d08;
+        --warn-soft: #fff2d8;
+        --danger: #a33a3a;
+        --danger-soft: #fae4e4;
+        --shadow: 0 14px 40px rgba(28, 49, 41, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+
+      main {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 44px 0 80px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 800px;
+        margin-bottom: 12px;
+        font-size: clamp(2rem, 5vw, 3.4rem);
+        letter-spacing: -0.045em;
+        line-height: 1.02;
+      }
+
+      h2 {
+        margin-bottom: 16px;
+        font-size: 1.35rem;
+        letter-spacing: -0.02em;
+      }
+
+      h3 {
+        margin-bottom: 8px;
+        font-size: 1rem;
+      }
+
+      .eyebrow {
+        margin-bottom: 10px;
+        color: var(--accent);
+        font-size: 0.76rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .lede {
+        max-width: 850px;
+        margin-bottom: 16px;
+        color: #3d4d47;
+        font-size: 1.06rem;
+      }
+
+      .throwaway {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 28px;
+        padding: 7px 11px;
+        border: 1px solid #edc984;
+        border-radius: 999px;
+        background: var(--warn-soft);
+        color: #70430d;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .panel {
+        margin-bottom: 22px;
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .change {
+        margin-bottom: 18px;
+        padding: 12px 14px;
+        border-left: 4px solid var(--accent);
+        border-radius: 8px;
+        background: var(--accent-soft);
+        color: #174c3f;
+        font-weight: 650;
+      }
+
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .status-card {
+        min-height: 106px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fbfcfb;
+      }
+
+      .status-card.wide {
+        grid-column: span 2;
+      }
+
+      .label {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 750;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .value {
+        font-size: 1rem;
+        font-weight: 760;
+      }
+
+      .detail {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 9px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: #11614f;
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+
+      .badge.warn {
+        background: var(--warn-soft);
+        color: var(--warn);
+      }
+
+      .badge.danger {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .button-groups {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .button-group {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #fbfcfb;
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      button {
+        border: 1px solid #aebdb7;
+        border-radius: 9px;
+        background: #fff;
+        color: var(--ink);
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.84rem;
+        font-weight: 680;
+        padding: 9px 11px;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      button:focus-visible {
+        outline: 3px solid rgba(8, 122, 99, 0.25);
+        outline-offset: 2px;
+      }
+
+      button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+      }
+
+      button.danger {
+        border-color: #dbaaaa;
+        color: var(--danger);
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.42;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        margin: 0 -4px 18px;
+        padding: 4px;
+      }
+
+      .tab[aria-selected="true"] {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        color: #0e5f4d;
+      }
+
+      .scenario-copy {
+        max-width: 800px;
+        color: #42534c;
+      }
+
+      .steps {
+        display: grid;
+        gap: 9px;
+        margin-top: 18px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+      }
+
+      .step.current {
+        border-color: var(--accent);
+        background: #f4fbf8;
+      }
+
+      .step.done {
+        color: var(--muted);
+      }
+
+      .step-number {
+        display: grid;
+        width: 28px;
+        height: 28px;
+        place-items: center;
+        border-radius: 50%;
+        background: #e8eeeb;
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+
+      .decision-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .decision {
+        padding: 16px;
+        border: 1px solid #bed8cf;
+        border-radius: 12px;
+        background: #f4fbf8;
+      }
+
+      .decision p {
+        margin-bottom: 0;
+        color: #40524b;
+        font-size: 0.9rem;
+      }
+
+      .evidence-list {
+        display: grid;
+        gap: 8px;
+        max-height: 390px;
+        overflow: auto;
+      }
+
+      .evidence-item {
+        display: grid;
+        grid-template-columns: 78px 120px minmax(0, 1fr);
+        gap: 10px;
+        padding: 10px 0;
+        border-bottom: 1px solid #edf1ef;
+        font-size: 0.84rem;
+      }
+
+      .evidence-item:last-child {
+        border-bottom: 0;
+      }
+
+      .evidence-time,
+      .evidence-kind {
+        color: var(--muted);
+      }
+
+      .empty {
+        color: var(--muted);
+        font-style: italic;
+      }
+
+      .footnote {
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      @media (max-width: 850px) {
+        .status-grid,
+        .button-groups,
+        .decision-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .status-card.wide {
+          grid-column: span 1;
+        }
+      }
+
+      @media (max-width: 620px) {
+        main {
+          width: min(100% - 20px, 1180px);
+          padding-top: 28px;
+        }
+
+        .status-grid,
+        .button-groups,
+        .decision-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .step {
+          grid-template-columns: 34px minmax(0, 1fr);
+        }
+
+        .step button {
+          grid-column: 2;
+          justify-self: start;
+        }
+
+        .evidence-item {
+          grid-template-columns: 68px 95px minmax(0, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">PayMe logic prototype</div>
+      <h1>Can we trust the agreement status we show?</h1>
+      <p class="lede">
+        Exercise a proposed model for signed Zepto webhooks, duplicate and
+        out-of-order events, GET reconciliation, worker recovery, evidence,
+        and the difference between an agreement outcome and the health of our
+        tracking. The question is whether these rules produce an honest,
+        operable lifecycle without treating any one webhook as final truth.
+      </p>
+      <div class="throwaway">Throwaway prototype — not production code</div>
+
+      <section class="panel" aria-labelledby="state-heading">
+        <h2 id="state-heading">Current agreement</h2>
+        <div class="change" id="last-change" aria-live="polite"></div>
+        <div class="status-grid" id="state-grid"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="free-play-heading">
+        <h2 id="free-play-heading">Free play</h2>
+        <p class="footnote">
+          Buttons stay available so you can deliberately try nonsensical
+          orders. The model records or refuses them and explains why.
+        </p>
+        <div class="button-groups">
+          <div class="button-group">
+            <h3>Webhook deliveries</h3>
+            <div class="button-row" id="webhook-actions"></div>
+          </div>
+          <div class="button-group">
+            <h3>Reconciliation and recovery</h3>
+            <div class="button-row" id="reconcile-actions"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="walkthrough-heading">
+        <h2 id="walkthrough-heading">Guided walkthroughs</h2>
+        <div class="tabs" id="scenario-tabs" role="tablist"></div>
+        <div id="scenario"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="decisions-heading">
+        <h2 id="decisions-heading">Decision points to react to</h2>
+        <div class="decision-grid">
+          <article class="decision">
+            <h3>1. Provisional webhook projection</h3>
+            <p>
+              A verified lifecycle event updates the visible state quickly,
+              but it remains “provisional” until GET confirms the current
+              provider resource. Is that the right balance of speed and truth?
+            </p>
+          </article>
+          <article class="decision">
+            <h3>2. No timestamp wins</h3>
+            <p>
+              Delivery ID and event ID deduplicate evidence. Provider publish
+              time is retained but never used as a winner. A suspicious or
+              late transition triggers GET; a confirmed irrevocable state is
+              never reopened by webhook alone.
+            </p>
+          </article>
+          <article class="decision">
+            <h3>3. Bounded reconciliation</h3>
+            <p>
+              Waiting agreements check every 30 minutes, active or suspended
+              agreements get a daily safety-net check, conflicts check now,
+              and six failed GETs or 24 hours without a successful check moves
+              tracking to operator review. Confirmed terminal states stop.
+            </p>
+          </article>
+          <article class="decision">
+            <h3>4. Two operator-facing axes</h3>
+            <p>
+              “Waiting”, “ready”, “recoverable”, and “ended” describe the
+              provider lifecycle. Separately, “current”, “checking”,
+              “retrying”, and “operator review” describe tracking health.
+              Normalized evidence and dedupe keys live with the agreement;
+              raw webhook bodies never do.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="evidence-heading">
+        <h2 id="evidence-heading">Normalized evidence</h2>
+        <p class="footnote">
+          Newest first. The raw signed body exists only long enough to verify
+          and parse it. Invalid signatures are counted as security rejects,
+          not trusted agreement evidence.
+        </p>
+        <div class="evidence-list" id="evidence-list"></div>
+      </section>
+    </main>
+
+    <script>
+      // Pure state module. It deliberately has no DOM dependencies so the
+      // transition logic can be lifted out after the prototype is validated.
+      const AgreementLifecycle = (() => {
+        const TERMINAL = new Set([
+          "cancelled",
+          "declined",
+          "failed",
+          "expired",
+        ]);
+
+        const EVENT_TO_STATE = {
+          "payto_agreement.activated": "active",
+          "payto_agreement.suspended": "suspended",
+          "payto_agreement.reactivated": "active",
+          "payto_agreement.cancelled": "cancelled",
+          "payto_agreement.declined": "declined",
+          "payto_agreement.failed": "failed",
+          "payto_agreement.expired": "expired",
+        };
+
+        const KNOWN_STATES = new Set([
+          "pending",
+          "created",
+          "active",
+          "suspended",
+          ...TERMINAL,
+        ]);
+
+        const RETRY_MINUTES = [0.5, 2, 15, 60, 360, 1440];
+
+        function clone(value) {
+          return structuredClone(value);
+        }
+
+        function formatTime(minutes) {
+          if (minutes === null) return "—";
+          if (minutes === 0) return "now";
+          if (minutes < 60) return `T+${minutes}m`;
+          if (minutes < 1440) return `T+${minutes / 60}h`;
+          return `T+${minutes / 1440}d`;
+        }
+
+        function interpretation(state) {
+          if (state.lifecycle.state === "unknown") return "Unknown to PayMe";
+          if (["pending", "created"].includes(state.lifecycle.state))
+            return "Waiting for Payer";
+          if (state.lifecycle.state === "active") return "Ready";
+          if (state.lifecycle.state === "suspended")
+            return "Temporarily unavailable";
+          return "Ended";
+        }
+
+        function scheduleFor(providerState, now) {
+          if (["pending", "created"].includes(providerState)) return now + 30;
+          if (["active", "suspended", "unknown"].includes(providerState))
+            return now + 1440;
+          return null;
+        }
+
+        function addEvidence(state, kind, summary, outcome = "accepted") {
+          state.sequence += 1;
+          state.evidence.unshift({
+            id: `evidence-${state.sequence}`,
+            at: state.now,
+            kind,
+            summary,
+            outcome,
+          });
+        }
+
+        function clearLease(state) {
+          state.tracking.lease = null;
+        }
+
+        function initialState() {
+          return {
+            now: 0,
+            sequence: 1,
+            generatedDelivery: 0,
+            lifecycle: {
+              state: "created",
+              rawState: null,
+              source: "GET",
+              confidence: "confirmed",
+              observedAt: 0,
+              publishedAt: 0,
+              previousConfirmed: "created",
+            },
+            tracking: {
+              health: "current",
+              reason: "Initial GET observed the provider agreement.",
+              nextCheckAt: 30,
+              consecutiveFailures: 0,
+              failureStartedAt: null,
+              lease: null,
+            },
+            deadlineAt: 5 * 1440,
+            dedupe: {
+              deliveryIds: [],
+              eventIds: [],
+              duplicatesIgnored: 0,
+            },
+            securityRejects: 0,
+            processingCrashes: 0,
+            lastAcceptedWebhook: null,
+            lastChange:
+              "Starting point: creation is complete and GET confirms the agreement is waiting for the Payer.",
+            evidence: [
+              {
+                id: "evidence-1",
+                at: 0,
+                kind: "GET",
+                summary: "Observed provider state created.",
+                outcome: "accepted",
+              },
+            ],
+          };
+        }
+
+        function webhook(state, action) {
+          const next = clone(state);
+
+          if (!action.signatureValid) {
+            next.securityRejects += 1;
+            next.lastChange =
+              "Rejected the delivery before parsing or changing agreement state: the HMAC signature was invalid.";
+            return next;
+          }
+
+          const duplicateDelivery = next.dedupe.deliveryIds.includes(
+            action.deliveryId,
+          );
+          const duplicateEvent = next.dedupe.eventIds.includes(action.eventId);
+          if (duplicateDelivery || duplicateEvent) {
+            next.dedupe.duplicatesIgnored += 1;
+            next.lastChange = `Ignored a replay: ${duplicateDelivery ? "delivery ID" : "event ID"} was already committed.`;
+            return next;
+          }
+
+          next.dedupe.deliveryIds.push(action.deliveryId);
+          next.dedupe.eventIds.push(action.eventId);
+          next.lastAcceptedWebhook = clone(action);
+
+          const target = EVENT_TO_STATE[action.eventType];
+          addEvidence(
+            next,
+            "verified webhook",
+            `${action.eventType} (${action.eventId}); provider-published ${formatTime(action.publishedAt)}.`,
+          );
+
+          if (!target) {
+            next.tracking.health = "verification due";
+            next.tracking.reason =
+              "The verified event is not a lifecycle transition PayMe knows; preserve it and ask GET for current state.";
+            next.tracking.nextCheckAt = next.now;
+            next.lastChange =
+              "Retained the unknown or non-lifecycle event without guessing a state; an immediate GET is due.";
+            return next;
+          }
+
+          const currentIsConfirmedTerminal =
+            next.lifecycle.confidence === "confirmed" &&
+            TERMINAL.has(next.lifecycle.state);
+          if (currentIsConfirmedTerminal && target !== next.lifecycle.state) {
+            next.tracking.health = "verification due";
+            next.tracking.reason =
+              "A webhook conflicts with an irrevocable state previously confirmed by GET.";
+            next.tracking.nextCheckAt = next.now;
+            next.lastChange =
+              "Recorded the conflicting event but refused to reopen the confirmed terminal agreement; GET must investigate.";
+            return next;
+          }
+
+          if (next.lifecycle.confidence === "confirmed") {
+            next.lifecycle.previousConfirmed = next.lifecycle.state;
+          }
+          next.lifecycle.state = target;
+          next.lifecycle.rawState = null;
+          next.lifecycle.source = "verified webhook";
+          next.lifecycle.confidence = "provisional";
+          next.lifecycle.observedAt = next.now;
+          next.lifecycle.publishedAt = action.publishedAt;
+          next.tracking.health = "verification due";
+          next.tracking.reason =
+            "Webhooks are prompt evidence, but delivery ordering is not guaranteed.";
+          next.tracking.nextCheckAt = next.now;
+          next.lastChange = `Projected ${target} provisionally and scheduled an immediate GET; publish time was retained but did not win ordering.`;
+          return next;
+        }
+
+        function getSuccess(state, action) {
+          const next = clone(state);
+          const raw = action.providerState;
+          const known = KNOWN_STATES.has(raw);
+          addEvidence(
+            next,
+            "GET",
+            `Observed provider state ${raw}.`,
+            known ? "accepted" : "unknown state",
+          );
+          clearLease(next);
+
+          if (!known) {
+            if (next.lifecycle.confidence === "confirmed") {
+              next.lifecycle.previousConfirmed = next.lifecycle.state;
+            }
+            next.lifecycle.state = "unknown";
+            next.lifecycle.rawState = raw;
+            next.lifecycle.source = "GET";
+            next.lifecycle.confidence = "confirmed";
+            next.lifecycle.observedAt = next.now;
+            next.tracking.health = "operator review";
+            next.tracking.reason =
+              "GET returned a provider state this API version does not recognize.";
+            next.tracking.nextCheckAt = next.now + 1440;
+            next.tracking.consecutiveFailures = 0;
+            next.tracking.failureStartedAt = null;
+            next.lastChange =
+              "Preserved the raw unknown provider state and raised operator review instead of rejecting or coercing it.";
+            return next;
+          }
+
+          const currentIsConfirmedTerminal =
+            next.lifecycle.confidence === "confirmed" &&
+            TERMINAL.has(next.lifecycle.state);
+          if (currentIsConfirmedTerminal && raw !== next.lifecycle.state) {
+            next.tracking.health = "operator review";
+            next.tracking.reason =
+              "GET contradicted a provider state documented as irrevocable.";
+            next.tracking.nextCheckAt = next.now + 1440;
+            next.lastChange =
+              "Kept the original terminal projection and raised operator review for the provider contradiction.";
+            return next;
+          }
+
+          next.lifecycle.state = raw;
+          next.lifecycle.rawState = null;
+          next.lifecycle.source = "GET";
+          next.lifecycle.confidence = "confirmed";
+          next.lifecycle.observedAt = next.now;
+          next.lifecycle.publishedAt = null;
+          next.lifecycle.previousConfirmed = raw;
+          next.tracking.consecutiveFailures = 0;
+          next.tracking.failureStartedAt = null;
+
+          if (TERMINAL.has(raw)) {
+            next.tracking.health = "stopped";
+            next.tracking.reason =
+              "GET confirmed a terminal provider outcome; scheduled polling is complete.";
+            next.tracking.nextCheckAt = null;
+            next.lastChange = `GET confirmed ${raw}; lifecycle polling stopped while normalized evidence remains.`;
+          } else {
+            next.tracking.health = "current";
+            next.tracking.reason = "GET confirmed the current provider resource.";
+            next.tracking.nextCheckAt = scheduleFor(raw, next.now);
+            next.lastChange = `GET confirmed ${raw}; the next safety-net check follows the lifecycle cadence.`;
+          }
+          return next;
+        }
+
+        function getFailed(state) {
+          const next = clone(state);
+          clearLease(next);
+          next.tracking.consecutiveFailures += 1;
+          if (next.tracking.failureStartedAt === null) {
+            next.tracking.failureStartedAt = next.now;
+          }
+          addEvidence(
+            next,
+            "GET",
+            "Provider could not be reached; lifecycle projection unchanged.",
+            "temporary failure",
+          );
+
+          const elapsed = next.now - next.tracking.failureStartedAt;
+          if (
+            next.tracking.consecutiveFailures >= RETRY_MINUTES.length ||
+            elapsed >= 1440
+          ) {
+            next.tracking.health = "operator review";
+            next.tracking.reason =
+              "GET has failed six times or for 24 hours; automatic checks are no longer enough.";
+            next.tracking.nextCheckAt = next.now + 1440;
+            next.lastChange =
+              "Kept the last honest provider projection and raised operator review after bounded retries.";
+            return next;
+          }
+
+          const delay = RETRY_MINUTES[next.tracking.consecutiveFailures - 1];
+          next.tracking.health = "retrying";
+          next.tracking.reason =
+            "A temporary GET failure does not change lifecycle state.";
+          next.tracking.nextCheckAt = next.now + delay;
+          next.lastChange = `GET failed safely; retry ${next.tracking.consecutiveFailures + 1} is due in ${delay} minutes.`;
+          return next;
+        }
+
+        function reduce(state, action) {
+          if (action.type === "reset") return initialState();
+
+          if (action.type === "webhook") return webhook(state, action);
+
+          if (action.type === "generatedWebhook") {
+            const id = state.generatedDelivery + 1;
+            const next = webhook(state, {
+              type: "webhook",
+              signatureValid: true,
+              eventType: action.eventType,
+              deliveryId: `delivery-${id}`,
+              eventId: `event-${id}`,
+              publishedAt: action.publishedAt ?? state.now,
+            });
+            next.generatedDelivery = id;
+            return next;
+          }
+
+          if (action.type === "duplicateLastWebhook") {
+            if (!state.lastAcceptedWebhook) {
+              const next = clone(state);
+              next.lastChange = "There is no accepted webhook to replay yet.";
+              return next;
+            }
+            return webhook(state, state.lastAcceptedWebhook);
+          }
+
+          if (action.type === "invalidSignature") {
+            return webhook(state, {
+              type: "webhook",
+              signatureValid: false,
+              eventType: "payto_agreement.activated",
+              deliveryId: "untrusted-delivery",
+              eventId: "untrusted-event",
+              publishedAt: state.now,
+            });
+          }
+
+          if (action.type === "webhookCrashBeforeCommit") {
+            const next = clone(state);
+            next.processingCrashes += 1;
+            next.lastChange =
+              "Simulated a crash before the durable mutation: no event, dedupe key, or state change exists. The pre-existing safety-net poll must repair the miss.";
+            return next;
+          }
+
+          if (action.type === "beginCheck") {
+            const next = clone(state);
+            if (
+              next.tracking.lease &&
+              next.tracking.lease.expiresAt > next.now
+            ) {
+              next.lastChange =
+                "A second worker could not claim the live reconciliation lease.";
+              return next;
+            }
+            next.tracking.lease = {
+              token: `lease-${next.sequence + 1}`,
+              expiresAt: next.now + 3,
+            };
+            next.tracking.health = "checking";
+            next.tracking.reason =
+              "One worker holds a short reconciliation lease.";
+            next.tracking.nextCheckAt = null;
+            next.lastChange =
+              "A worker claimed the reconciliation lease; duplicate workers are now harmless.";
+            return next;
+          }
+
+          if (action.type === "workerCrash") {
+            const next = clone(state);
+            next.lastChange = next.tracking.lease
+              ? "The worker crashed. Its lease remains visible and will expire; lifecycle state did not change."
+              : "No reconciliation worker currently holds a lease to crash.";
+            return next;
+          }
+
+          if (action.type === "expireLease") {
+            const next = clone(state);
+            if (!next.tracking.lease) {
+              next.lastChange = "There is no reconciliation lease to expire.";
+              return next;
+            }
+            next.now = Math.max(next.now, next.tracking.lease.expiresAt);
+            clearLease(next);
+            next.tracking.health = "retrying";
+            next.tracking.reason =
+              "The crashed worker's lease expired; a replacement may safely claim.";
+            next.tracking.nextCheckAt = next.now;
+            next.lastChange =
+              "Expired the abandoned lease and made the same GET work eligible again.";
+            return next;
+          }
+
+          if (action.type === "getSuccess") return getSuccess(state, action);
+          if (action.type === "getFailed") return getFailed(state);
+
+          if (action.type === "advanceToNext") {
+            const next = clone(state);
+            if (next.tracking.nextCheckAt === null) {
+              next.lastChange =
+                "No scheduled reconciliation is due; this projection is either being checked or confirmed terminal.";
+              return next;
+            }
+            next.now = Math.max(next.now, next.tracking.nextCheckAt);
+            next.tracking.health = "verification due";
+            next.tracking.reason = "The scheduled safety-net check is now due.";
+            next.lastChange = `Advanced to ${formatTime(next.now)}; a worker may claim the due GET.`;
+            return next;
+          }
+
+          if (action.type === "fetchHistory") {
+            const next = clone(state);
+            addEvidence(
+              next,
+              "history GET",
+              "Captured normalized provider transition history for investigation.",
+            );
+            next.lastChange =
+              "Captured normalized history evidence without storing the raw provider response.";
+            return next;
+          }
+
+          return state;
+        }
+
+        return {
+          initialState,
+          reduce,
+          interpretation,
+          formatTime,
+          isTerminal: (value) => TERMINAL.has(value),
+        };
+      })();
+    </script>
+
+    <script>
+      // Throwaway page shell around the pure module above.
+      let state = AgreementLifecycle.initialState();
+      let scenarioIndex = 0;
+      let scenarioStep = 0;
+
+      const event = (eventType, options = {}) => ({
+        type: "generatedWebhook",
+        eventType,
+        ...options,
+      });
+
+      const scenarios = [
+        {
+          name: "Activation",
+          description:
+            "The Payer authorizes the agreement. Watch the webhook make the state useful quickly without pretending that unordered delivery is a current-resource read.",
+          watch:
+            "The lifecycle becomes provisionally ready, then GET makes it confirmed and schedules a daily safety-net check.",
+          steps: [
+            ["Receive signed activation", event("payto_agreement.activated")],
+            ["GET confirms active", { type: "getSuccess", providerState: "active" }],
+          ],
+        },
+        {
+          name: "Replay & late event",
+          description:
+            "An activation is confirmed, its delivery is replayed, then an older suspension arrives late. Zepto delivery order is not guaranteed.",
+          watch:
+            "The replay is a no-op. Publish time does not decide the winner; the late event becomes provisional until GET restores current truth.",
+          steps: [
+            ["Receive activation", event("payto_agreement.activated")],
+            ["GET confirms active", { type: "getSuccess", providerState: "active" }],
+            ["Replay the same delivery", { type: "duplicateLastWebhook" }],
+            [
+              "Receive older suspension late",
+              event("payto_agreement.suspended", { publishedAt: -120 }),
+            ],
+            ["GET still says active", { type: "getSuccess", providerState: "active" }],
+          ],
+        },
+        {
+          name: "Missed webhook",
+          description:
+            "The webhook handler crashes before its mutation commits. Because any HTTP response may end Zepto retries, polling must be sufficient to discover the outcome alone.",
+          watch:
+            "Nothing provider-facing is invented at crash time. The already-scheduled waiting-state poll later discovers a terminal decline.",
+          steps: [
+            ["Crash before durable commit", { type: "webhookCrashBeforeCommit" }],
+            ["Advance to safety-net check", { type: "advanceToNext" }],
+            ["GET discovers declined", { type: "getSuccess", providerState: "declined" }],
+          ],
+        },
+        {
+          name: "Worker crash",
+          description:
+            "A reconciliation worker dies after claiming work. The short lease should isolate duplicate workers without stranding the check.",
+          watch:
+            "Lifecycle state never changes because of an operational crash. Lease expiry makes the same GET safely claimable again.",
+          steps: [
+            ["Claim reconciliation", { type: "beginCheck" }],
+            ["Worker crashes", { type: "workerCrash" }],
+            ["Lease expires", { type: "expireLease" }],
+            ["Replacement claims", { type: "beginCheck" }],
+            ["GET confirms suspended", { type: "getSuccess", providerState: "suspended" }],
+          ],
+        },
+        {
+          name: "Terminal conflict",
+          description:
+            "Cancellation is confirmed, then an activation event arrives. Zepto documents cancellation as irrevocable, so a webhook must not resurrect it.",
+          watch:
+            "The conflicting event stays as evidence and prompts GET, while the confirmed terminal projection remains intact.",
+          steps: [
+            ["Receive cancellation", event("payto_agreement.cancelled")],
+            ["GET confirms cancelled", { type: "getSuccess", providerState: "cancelled" }],
+            ["Receive impossible activation", event("payto_agreement.activated")],
+            ["GET still says cancelled", { type: "getSuccess", providerState: "cancelled" }],
+            ["Fetch final history", { type: "fetchHistory" }],
+          ],
+        },
+        {
+          name: "Unknown state",
+          description:
+            "Zepto adds a provider state before PayMe upgrades its pinned API model. Rejecting the read would hide the most important fact.",
+          watch:
+            "The raw state is preserved as a confirmed unknown variant, the previous known state remains visible, and operator review is raised.",
+          steps: [
+            ["Receive unfamiliar event", event("payto_agreement.paused_by_bank")],
+            [
+              "GET returns unfamiliar state",
+              { type: "getSuccess", providerState: "paused_by_bank" },
+            ],
+          ],
+        },
+      ];
+
+      const webhookActions = [
+        ["Activate", event("payto_agreement.activated")],
+        ["Suspend", event("payto_agreement.suspended")],
+        ["Reactivate", event("payto_agreement.reactivated")],
+        ["Cancel", event("payto_agreement.cancelled")],
+        ["Decline", event("payto_agreement.declined")],
+        ["Expire", event("payto_agreement.expired")],
+        ["Fail", event("payto_agreement.failed")],
+        ["Unknown event", event("payto_agreement.paused_by_bank")],
+        ["Replay last", { type: "duplicateLastWebhook" }],
+        ["Invalid signature", { type: "invalidSignature" }],
+        ["Crash before commit", { type: "webhookCrashBeforeCommit" }],
+      ];
+
+      const reconcileActions = [
+        ["Advance to next check", { type: "advanceToNext" }],
+        ["Claim check", { type: "beginCheck" }],
+        ["Worker crashes", { type: "workerCrash" }],
+        ["Expire lease", { type: "expireLease" }],
+        ["GET: active", { type: "getSuccess", providerState: "active" }],
+        ["GET: suspended", { type: "getSuccess", providerState: "suspended" }],
+        ["GET: cancelled", { type: "getSuccess", providerState: "cancelled" }],
+        ["GET: unknown", { type: "getSuccess", providerState: "paused_by_bank" }],
+        ["GET fails", { type: "getFailed" }],
+        ["Fetch history", { type: "fetchHistory" }],
+        ["Reset", { type: "reset" }, "danger"],
+      ];
+
+      function dispatch(action) {
+        state = AgreementLifecycle.reduce(state, action);
+        render();
+      }
+
+      function badgeClass(value) {
+        if (["operator review", "unknown"].includes(value)) return "danger";
+        if (
+          [
+            "provisional",
+            "verification due",
+            "retrying",
+            "checking",
+            "suspended",
+          ].includes(value)
+        )
+          return "warn";
+        return "";
+      }
+
+      function badge(value) {
+        return `<span class="badge ${badgeClass(value)}">${value}</span>`;
+      }
+
+      function safe(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      function stateCard(label, value, detail, wide = false) {
+        return `
+          <article class="status-card ${wide ? "wide" : ""}">
+            <span class="label">${label}</span>
+            <div class="value">${value}</div>
+            <div class="detail">${detail}</div>
+          </article>`;
+      }
+
+      function renderState() {
+        document.querySelector("#last-change").textContent = state.lastChange;
+        const lifecycleName =
+          state.lifecycle.state === "unknown"
+            ? `unknown: ${safe(state.lifecycle.rawState)}`
+            : state.lifecycle.state;
+        const previous = state.lifecycle.previousConfirmed
+          ? `Last confirmed: ${state.lifecycle.previousConfirmed}`
+          : "No earlier confirmed state";
+        const lease = state.tracking.lease
+          ? `${state.tracking.lease.token}, expires ${AgreementLifecycle.formatTime(state.tracking.lease.expiresAt)}`
+          : "No worker owns reconciliation";
+
+        document.querySelector("#state-grid").innerHTML = [
+          stateCard(
+            "Provider lifecycle",
+            badge(lifecycleName),
+            `${previous}; observed ${AgreementLifecycle.formatTime(state.lifecycle.observedAt)}`,
+          ),
+          stateCard(
+            "User meaning",
+            AgreementLifecycle.interpretation(state),
+            AgreementLifecycle.isTerminal(state.lifecycle.state)
+              ? "Provider outcome is terminal"
+              : "Provider lifecycle can still change",
+          ),
+          stateCard(
+            "Projection confidence",
+            badge(state.lifecycle.confidence),
+            `Source: ${state.lifecycle.source}${state.lifecycle.publishedAt === null ? "" : `; published ${AgreementLifecycle.formatTime(state.lifecycle.publishedAt)}`}`,
+          ),
+          stateCard(
+            "Tracking health",
+            badge(state.tracking.health),
+            state.tracking.reason,
+          ),
+          stateCard(
+            "Next check",
+            AgreementLifecycle.formatTime(state.tracking.nextCheckAt),
+            `Clock: ${AgreementLifecycle.formatTime(state.now)}; resolution deadline: ${AgreementLifecycle.formatTime(state.deadlineAt)}`,
+          ),
+          stateCard(
+            "Reconciliation lease",
+            state.tracking.lease ? badge("claimed") : badge("free"),
+            lease,
+          ),
+          stateCard(
+            "Webhook trust boundary",
+            `${state.dedupe.deliveryIds.length} accepted · ${state.securityRejects} rejected`,
+            `${state.dedupe.duplicatesIgnored} replay(s) ignored; ${state.processingCrashes} pre-commit crash(es) simulated`,
+            true,
+          ),
+          stateCard(
+            "Evidence retained",
+            `${state.evidence.length} normalized entries`,
+            "No raw request or response bodies; dedupe IDs live with the agreement evidence.",
+            true,
+          ),
+        ].join("");
+      }
+
+      function makeActionButton(label, action, className = "") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.className = className;
+        button.addEventListener("click", () => dispatch(action));
+        return button;
+      }
+
+      function renderActions() {
+        const webhookRoot = document.querySelector("#webhook-actions");
+        const reconcileRoot = document.querySelector("#reconcile-actions");
+        webhookRoot.replaceChildren(
+          ...webhookActions.map(([label, action, className]) =>
+            makeActionButton(label, action, className),
+          ),
+        );
+        reconcileRoot.replaceChildren(
+          ...reconcileActions.map(([label, action, className]) =>
+            makeActionButton(label, action, className),
+          ),
+        );
+      }
+
+      function selectScenario(index) {
+        scenarioIndex = index;
+        scenarioStep = 0;
+        state = AgreementLifecycle.initialState();
+        render();
+      }
+
+      function runScenarioStep(index) {
+        if (index !== scenarioStep) return;
+        dispatch(scenarios[scenarioIndex].steps[index][1]);
+        scenarioStep += 1;
+        renderScenario();
+      }
+
+      function renderScenario() {
+        const tabs = document.querySelector("#scenario-tabs");
+        tabs.replaceChildren(
+          ...scenarios.map((scenario, index) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "tab";
+            button.textContent = scenario.name;
+            button.setAttribute("role", "tab");
+            button.setAttribute("aria-selected", String(index === scenarioIndex));
+            button.addEventListener("click", () => selectScenario(index));
+            return button;
+          }),
+        );
+
+        const scenario = scenarios[scenarioIndex];
+        const root = document.querySelector("#scenario");
+        root.innerHTML = `
+          <div class="scenario-copy">
+            <h3>${scenario.name}</h3>
+            <p>${scenario.description}</p>
+            <p><strong>Watch for:</strong> ${scenario.watch}</p>
+          </div>
+          <div class="steps">
+            ${scenario.steps
+              .map(
+                ([label], index) => `
+                  <div class="step ${index < scenarioStep ? "done" : ""} ${index === scenarioStep ? "current" : ""}">
+                    <span class="step-number">${index + 1}</span>
+                    <span>${label}</span>
+                    <button type="button" data-step="${index}" ${index !== scenarioStep ? "disabled" : ""}>
+                      ${index < scenarioStep ? "Done" : "Run step"}
+                    </button>
+                  </div>`,
+              )
+              .join("")}
+          </div>`;
+        root.querySelectorAll("[data-step]").forEach((button) => {
+          button.addEventListener("click", () =>
+            runScenarioStep(Number(button.dataset.step)),
+          );
+        });
+      }
+
+      function renderEvidence() {
+        const root = document.querySelector("#evidence-list");
+        if (!state.evidence.length) {
+          root.innerHTML = '<div class="empty">No evidence yet.</div>';
+          return;
+        }
+        root.innerHTML = state.evidence
+          .map(
+            (entry) => `
+              <div class="evidence-item">
+                <span class="evidence-time">${AgreementLifecycle.formatTime(entry.at)}</span>
+                <span class="evidence-kind">${safe(entry.kind)}</span>
+                <span>${safe(entry.summary)} <strong>${safe(entry.outcome)}</strong></span>
+              </div>`,
+          )
+          .join("");
+      }
+
+      function render() {
+        renderState();
+        renderEvidence();
+        renderScenario();
+      }
+
+      renderActions();
+      render();
+    </script>
+  </body>
+</html>
