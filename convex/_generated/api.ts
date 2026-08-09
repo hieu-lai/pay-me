@@ -15,6 +15,7 @@ import type * as lib_userFunctions from "../lib/userFunctions.js";
 import type * as lib_userSearch from "../lib/userSearch.js";
 import type * as migrations from "../migrations.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
+import type * as seed from "../seed.js";
 import type * as users from "../users.js";
 import type * as validators_paymentDestinations from "../validators/paymentDestinations.js";
 import type * as validators_users from "../validators/users.js";
@@ -34,6 +35,7 @@ const fullApi: ApiFromModules<{
   "lib/userSearch": typeof lib_userSearch;
   migrations: typeof migrations;
   paymentDestinations: typeof paymentDestinations;
+  seed: typeof seed;
   users: typeof users;
   "validators/paymentDestinations": typeof validators_paymentDestinations;
   "validators/users": typeof validators_users;
