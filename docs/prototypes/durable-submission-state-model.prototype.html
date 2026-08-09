@@ -1,0 +1,1130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PROTOTYPE — Durable Money Request submission</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #15231f;
+        --muted: #60706a;
+        --line: #dce4e0;
+        --paper: #f6f8f7;
+        --panel: #ffffff;
+        --accent: #176b51;
+        --accent-soft: #e6f2ed;
+        --warn: #8b5a11;
+        --warn-soft: #fff5dd;
+        --danger: #9f3038;
+        --danger-soft: #fdecef;
+        --shadow: 0 12px 32px rgba(21, 35, 31, 0.08);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+
+      button { font: inherit; }
+
+      .shell {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 44px 0 80px;
+      }
+
+      .eyebrow {
+        color: var(--accent);
+        font-size: 0.76rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 760px;
+        margin: 8px 0 10px;
+        font-size: clamp(2rem, 5vw, 3.5rem);
+        letter-spacing: -0.045em;
+        line-height: 1.02;
+      }
+
+      .lede {
+        max-width: 830px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 1.05rem;
+      }
+
+      .question {
+        margin: 26px 0 0;
+        padding: 18px 20px;
+        border: 1px solid #efd69f;
+        border-radius: 14px;
+        background: var(--warn-soft);
+      }
+
+      .question strong { color: var(--warn); }
+
+      .rule-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 10px;
+        margin: 16px 0 0;
+      }
+
+      .rule {
+        padding: 13px 14px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
+        font-size: 0.9rem;
+      }
+
+      .rule b { display: block; margin-bottom: 2px; }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 30px 0 14px;
+      }
+
+      h2, h3 { margin: 0; letter-spacing: -0.02em; }
+      h2 { font-size: 1.35rem; }
+      h3 { font-size: 1rem; }
+
+      .button {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        color: var(--ink);
+        cursor: pointer;
+        padding: 9px 12px;
+        font-weight: 700;
+      }
+
+      .button:hover { border-color: var(--accent); }
+      .button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+      .button.warn { color: var(--warn); }
+      .button.danger { color: var(--danger); }
+      .button:disabled { cursor: not-allowed; opacity: 0.45; }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+        gap: 12px;
+      }
+
+      .metric,
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .metric { padding: 16px; }
+      .metric-label { color: var(--muted); font-size: 0.78rem; font-weight: 700; text-transform: uppercase; }
+      .metric-value { margin-top: 3px; font-size: 1.45rem; font-weight: 850; }
+
+      .state-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(280px, 0.9fr);
+        gap: 14px;
+        margin-top: 14px;
+      }
+
+      .panel { padding: 18px; }
+      .panel-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      .muted { color: var(--muted); }
+      .small { font-size: 0.84rem; }
+
+      .empty {
+        padding: 28px 16px;
+        border: 1px dashed var(--line);
+        border-radius: 12px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .request {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+
+      .request:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+      .request-title { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
+
+      .agreement-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+        gap: 9px;
+        margin-top: 10px;
+      }
+
+      .agreement {
+        width: 100%;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: #fbfcfb;
+        color: inherit;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .agreement:hover { border-color: var(--accent); }
+      .agreement.selected { border: 2px solid var(--accent); padding: 11px; background: var(--accent-soft); }
+      .agreement-top { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        background: #edf1ef;
+        color: #4d5d57;
+        padding: 3px 8px;
+        font-size: 0.72rem;
+        font-weight: 800;
+      }
+
+      .badge.created { background: var(--accent-soft); color: var(--accent); }
+      .badge.verifying, .badge.retry_wait, .badge.manual_hold { background: var(--warn-soft); color: var(--warn); }
+      .badge.failed { background: var(--danger-soft); color: var(--danger); }
+
+      .agreement dl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 4px 8px;
+        margin: 10px 0 0;
+        font-size: 0.76rem;
+      }
+
+      .agreement dt { color: var(--muted); }
+      .agreement dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+
+      .timeline {
+        display: grid;
+        gap: 10px;
+        max-height: 570px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+
+      .event {
+        padding-left: 12px;
+        border-left: 3px solid var(--line);
+      }
+
+      .event.latest { border-color: var(--accent); }
+      .event-title { font-size: 0.84rem; font-weight: 800; }
+      .event-detail { color: var(--muted); font-size: 0.78rem; }
+
+      .controls {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .control-group {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 14px;
+      }
+
+      .control-group p { margin: 4px 0 10px; color: var(--muted); font-size: 0.8rem; }
+      .button-stack { display: grid; gap: 7px; }
+
+      .walkthroughs { margin-top: 34px; }
+      .tabs { display: flex; gap: 7px; overflow-x: auto; margin: 12px 0 0; padding-bottom: 4px; }
+      .tab { white-space: nowrap; }
+      .tab.active { background: var(--accent-soft); border-color: #bcd9cd; color: var(--accent); }
+
+      .walkthrough { margin-top: 10px; }
+      .walkthrough-intro { max-width: 790px; margin: 5px 0 16px; color: var(--muted); }
+      .steps { display: grid; gap: 9px; counter-reset: steps; }
+      .step {
+        display: grid;
+        grid-template-columns: 28px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        padding: 10px;
+        background: #fafbfa;
+      }
+
+      .step::before {
+        counter-increment: steps;
+        content: counter(steps);
+        display: grid;
+        place-items: center;
+        width: 25px;
+        height: 25px;
+        border-radius: 50%;
+        background: #e8edeb;
+        color: var(--muted);
+        font-size: 0.75rem;
+        font-weight: 800;
+      }
+
+      .step.done { opacity: 0.58; }
+      .step.current { border-color: var(--accent); background: var(--accent-soft); }
+      .step.current::before { background: var(--accent); color: white; }
+
+      .decision-prompts {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .prompt {
+        padding: 14px;
+        border: 1px solid #efd69f;
+        border-radius: 12px;
+        background: var(--warn-soft);
+      }
+
+      .prompt b { color: var(--warn); }
+
+      @media (max-width: 850px) {
+        .state-layout { grid-template-columns: 1fr; }
+        .step { grid-template-columns: 28px 1fr; }
+        .step .button { grid-column: 2; justify-self: start; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="eyebrow">Throwaway logic prototype · not production code</div>
+      <h1>Can one submission intent create agreements exactly once?</h1>
+      <p class="lede">
+        Drive a Money Request through browser retries, independent Zepto calls,
+        ambiguous network outcomes, partial success, and operator intervention.
+        The full durable state and evidence trail stay visible after every action.
+      </p>
+
+      <div class="question">
+        <strong>Question under test.</strong> Does this proposed orchestration ensure
+        that the same submission intent never creates duplicate PayTo Agreements,
+        while failures for one Payer never erase or recreate agreements already
+        created for other Payers?
+      </div>
+
+      <div class="rule-grid" aria-label="Proposed rules under test">
+        <div class="rule"><b>Intent key defines sameness</b>Same key + same payload returns the original Money Request. Same key + changed payload is a conflict.</div>
+        <div class="rule"><b>No heuristic deduplication</b>A different key is a deliberate new intent, even when the visible details happen to match.</div>
+        <div class="rule"><b>Allocate before calling Zepto</b>One transaction creates the Money Request, all one-to-five agreement records, and every stable provider UID.</div>
+        <div class="rule"><b>Ambiguity means GET first</b>After a lost response, duplicate UID, or crash, reconcile by the same UID before another POST.</div>
+        <div class="rule"><b>Payers progress independently</b>Every agreement has its own work, failure, evidence, and retry path. Request progress is derived.</div>
+        <div class="rule"><b>Operator retry is narrow</b>It reopens one safe agreement using the same local record and UID; it never rewinds created siblings.</div>
+      </div>
+
+      <div class="toolbar">
+        <h2>Current durable state</h2>
+        <button class="button" id="reset-all" type="button">Reset everything</button>
+      </div>
+      <div id="summary" class="summary-grid"></div>
+
+      <div class="state-layout">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Money Requests and per-Payer agreements</h3>
+            <span class="small muted">Select an agreement to target free-play actions</span>
+          </div>
+          <div id="requests"></div>
+        </section>
+        <aside class="panel">
+          <div class="panel-head">
+            <h3>Append-only evidence</h3>
+            <span id="event-count" class="small muted"></span>
+          </div>
+          <div id="timeline" class="timeline"></div>
+        </aside>
+      </div>
+
+      <section aria-labelledby="free-play-title">
+        <div class="toolbar">
+          <div>
+            <h2 id="free-play-title">Free play</h2>
+            <div id="selected-label" class="small muted"></div>
+          </div>
+        </div>
+        <div class="controls">
+          <div class="control-group">
+            <h3>Submit from the browser</h3>
+            <p>These actions operate on the durable submission-intent registry.</p>
+            <div class="button-stack">
+              <button class="button primary" data-action="submit-a">Submit intent A · 3 Payers</button>
+              <button class="button" data-action="retry-a">Browser retries intent A</button>
+              <button class="button warn" data-action="conflict-a">Reuse key A with changed amount</button>
+              <button class="button" data-action="submit-b">New intent B · same visible details</button>
+              <button class="button danger" data-action="submit-six">Try to submit 6 Payers</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <h3>Selected Zepto call</h3>
+            <p>Each button represents one independently leased worker outcome.</p>
+            <div class="button-stack">
+              <button class="button" data-action="claim-worker">A scheduled job claims this agreement</button>
+              <button class="button primary" data-action="created">Zepto returns 201 Created</button>
+              <button class="button warn" data-action="timeout-created">Response lost · Zepto did create it</button>
+              <button class="button warn" data-action="timeout-unknown">Transport retries exhausted · outcome unknown</button>
+              <button class="button warn" data-action="rate-limit">Known rate limit · wait automatically</button>
+              <button class="button danger" data-action="config-hold">Credentials/configuration needs an operator</button>
+              <button class="button danger" data-action="permanent-failure">Immutable payload is permanently rejected</button>
+              <button class="button" data-action="duplicate-job">Another scheduled job tries to claim it</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <h3>Reconcile or retry selected agreement</h3>
+            <p>POST is gated until existence is known; every retry keeps the same UID.</p>
+            <div class="button-stack">
+              <button class="button primary" data-action="reconcile-found">GET finds the agreement</button>
+              <button class="button warn" data-action="reconcile-missing">GET returns 404 once</button>
+              <button class="button" data-action="absence-confirmed">Quiet window + repeated 404 confirms absence</button>
+              <button class="button" data-action="scheduled-retry">Run a due automatic retry</button>
+              <button class="button warn" data-action="operator-retry">Operator retries this agreement</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="walkthroughs" aria-labelledby="walkthrough-title">
+        <h2 id="walkthrough-title">Guided walkthroughs</h2>
+        <div id="tabs" class="tabs" role="tablist"></div>
+        <div id="walkthrough" class="panel walkthrough"></div>
+      </section>
+
+      <section class="walkthroughs" aria-labelledby="decision-title">
+        <h2 id="decision-title">What should feel contentious?</h2>
+        <div class="decision-prompts">
+          <div class="prompt"><b>Intent boundary.</b> Should a fresh key always mean a fresh Money Request, or should PayMe block lookalike submissions too?</div>
+          <div class="prompt"><b>Ambiguous absence.</b> Is a bounded quiet window plus repeated 404 enough before re-POSTing the same UID?</div>
+          <div class="prompt"><b>Manual recovery.</b> Should operator retry be allowed only for configuration/manual holds, while immutable-payload failures require a fresh, explicit intent?</div>
+          <div class="prompt"><b>Partial failure.</b> Is “two created, one failed” the correct durable outcome, with no all-or-nothing rollback?</div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // Pure state module. It has no DOM knowledge and can be lifted out of this page.
+      const DurableSubmissionModel = (() => {
+        const PAYERS = ["Alex", "Blair", "Casey"];
+
+        const freshState = () => ({
+          requests: [],
+          intents: {},
+          selectedAgreementId: null,
+          nextRequestNumber: 1,
+          nextAgreementNumber: 1,
+          evidence: [],
+          nextEventNumber: 1,
+          lastChange: "Nothing has been submitted yet.",
+        });
+
+        const clone = (value) => structuredClone(value);
+
+        const fingerprint = (payload) =>
+          JSON.stringify({
+            amountCents: payload.amountCents,
+            payers: [...payload.payers].sort(),
+          });
+
+        const addEvidence = (state, title, detail) => {
+          state.evidence.push({ number: state.nextEventNumber++, title, detail });
+          state.lastChange = `${title} — ${detail}`;
+        };
+
+        const selectedAgreement = (state) => {
+          for (const request of state.requests) {
+            const agreement = request.agreements.find(
+              (candidate) => candidate.id === state.selectedAgreementId,
+            );
+            if (agreement) return { request, agreement };
+          }
+          return null;
+        };
+
+        const selectFirstAgreement = (state, request) => {
+          state.selectedAgreementId ||= request.agreements[0]?.id ?? null;
+        };
+
+        const submit = (state, intentKey, payload) => {
+          if (payload.payers.length < 1 || payload.payers.length > 5) {
+            addEvidence(
+              state,
+              "Submission rejected before persistence",
+              `An intent must contain one to five distinct Payers; ${payload.payers.length} were supplied.`,
+            );
+            return;
+          }
+
+          const payloadFingerprint = fingerprint(payload);
+          const existing = state.intents[intentKey];
+          if (existing) {
+            if (existing.fingerprint !== payloadFingerprint) {
+              addEvidence(
+                state,
+                "Idempotency conflict",
+                `${intentKey} already belongs to ${existing.requestId}; changed details cannot reuse it.`,
+              );
+              return;
+            }
+
+            const request = state.requests.find((item) => item.id === existing.requestId);
+            if (request) selectFirstAgreement(state, request);
+            addEvidence(
+              state,
+              "Existing Money Request returned",
+              `${intentKey} resolved to ${existing.requestId}; no rows or Zepto jobs were added.`,
+            );
+            return;
+          }
+
+          const requestNumber = state.nextRequestNumber++;
+          const request = {
+            id: `MR-${requestNumber}`,
+            intentKey,
+            fingerprint: payloadFingerprint,
+            amountCents: payload.amountCents,
+            agreements: payload.payers.map((payer) => {
+              const agreementNumber = state.nextAgreementNumber++;
+              return {
+                id: `AGR-${agreementNumber}`,
+                payer,
+                providerUid: `payme_mr${requestNumber}_${payer.toLowerCase()}`,
+                creationState: "queued",
+                providerPresence: "unknown",
+                providerState: "not observed",
+                postAttempts: 0,
+                getAttempts: 0,
+                missingObservations: 0,
+                lease: "available",
+                failure: null,
+              };
+            }),
+          };
+
+          state.requests.push(request);
+          state.intents[intentKey] = {
+            requestId: request.id,
+            fingerprint: payloadFingerprint,
+          };
+          selectFirstAgreement(state, request);
+          addEvidence(
+            state,
+            "Money Request committed atomically",
+            `${request.id} and ${request.agreements.length} stable agreement UID${request.agreements.length === 1 ? "" : "s"} were saved before remote work.`,
+          );
+        };
+
+        const requireSelected = (state, label, allowedStates = null) => {
+          const selected = selectedAgreement(state);
+          if (!selected) {
+            addEvidence(state, `${label} ignored`, "Select an agreement after submitting a Money Request.");
+            return null;
+          }
+          if (allowedStates && !allowedStates.includes(selected.agreement.creationState)) {
+            addEvidence(
+              state,
+              `${label} made no change`,
+              `${selected.agreement.id} is ${selected.agreement.creationState}; its stable UID and current state were preserved.`,
+            );
+            return null;
+          }
+          return selected;
+        };
+
+        const finishAttempt = (agreement) => {
+          agreement.lease = "available";
+        };
+
+        const reduce = (previousState, action) => {
+          const state = clone(previousState);
+          const standardPayload = { amountCents: 4250, payers: PAYERS };
+
+          if (action.type === "RESET") return freshState();
+
+          if (action.type === "SELECT_AGREEMENT") {
+            state.selectedAgreementId = action.agreementId;
+            state.lastChange = `${action.agreementId} selected for free play.`;
+            return state;
+          }
+
+          if (action.type === "SUBMIT_A") {
+            submit(state, "intent-A", standardPayload);
+            return state;
+          }
+          if (action.type === "RETRY_A") {
+            submit(state, "intent-A", standardPayload);
+            return state;
+          }
+          if (action.type === "CONFLICT_A") {
+            submit(state, "intent-A", { ...standardPayload, amountCents: 4300 });
+            return state;
+          }
+          if (action.type === "SUBMIT_B") {
+            submit(state, "intent-B", standardPayload);
+            return state;
+          }
+          if (action.type === "SUBMIT_SIX") {
+            submit(state, "intent-six", {
+              amountCents: 4250,
+              payers: ["Alex", "Blair", "Casey", "Devon", "Emery", "Flynn"],
+            });
+            return state;
+          }
+
+          if (action.type === "SELECT_BY_PAYER") {
+            const request = state.requests[action.requestIndex ?? 0];
+            const agreement = request?.agreements.find((item) => item.payer === action.payer);
+            if (agreement) state.selectedAgreementId = agreement.id;
+            return state;
+          }
+
+          if (action.type === "CLAIM_WORKER") {
+            const selected = requireSelected(state, "Worker claim", ["queued"]);
+            if (!selected) return state;
+            selected.agreement.creationState = "submitting";
+            selected.agreement.lease = "held by one worker";
+            selected.agreement.postAttempts += 1;
+            selected.agreement.failure = null;
+            addEvidence(
+              state,
+              "One worker claimed the agreement",
+              `${selected.agreement.id} is the only worker allowed to POST ${selected.agreement.providerUid} during this lease.`,
+            );
+            return state;
+          }
+
+          if (action.type === "CREATED") {
+            const selected = requireSelected(state, "Create", ["submitting"]);
+            if (!selected) return state;
+            selected.agreement.creationState = "created";
+            selected.agreement.providerPresence = "present";
+            selected.agreement.providerState = "pending";
+            finishAttempt(selected.agreement);
+            addEvidence(
+              state,
+              "Zepto agreement observed",
+              `${selected.agreement.id} received 201 for ${selected.agreement.providerUid}; creation work is complete, lifecycle tracking continues.`,
+            );
+            return state;
+          }
+
+          if (action.type === "TIMEOUT_CREATED" || action.type === "TIMEOUT_UNKNOWN") {
+            const selected = requireSelected(state, "Ambiguous POST", ["submitting"]);
+            if (!selected) return state;
+            selected.agreement.creationState = "verifying";
+            selected.agreement.providerPresence = "unknown";
+            finishAttempt(selected.agreement);
+            addEvidence(
+              state,
+              "POST outcome became ambiguous",
+              `${selected.agreement.id} keeps UID ${selected.agreement.providerUid}; only GET reconciliation is allowed now.`,
+            );
+            return state;
+          }
+
+          if (action.type === "RATE_LIMIT") {
+            const selected = requireSelected(state, "Rate-limit handling", ["submitting"]);
+            if (!selected) return state;
+            selected.agreement.creationState = "retry_wait";
+            selected.agreement.providerPresence = "known absent";
+            selected.agreement.failure = "Zepto rate limit; retry after the provider delay";
+            finishAttempt(selected.agreement);
+            addEvidence(
+              state,
+              "Automatic retry scheduled",
+              `${selected.agreement.id} is known not to exist yet; a later POST will reuse ${selected.agreement.providerUid}.`,
+            );
+            return state;
+          }
+
+          if (action.type === "CONFIG_HOLD") {
+            const selected = requireSelected(state, "Manual hold", ["submitting"]);
+            if (!selected) return state;
+            selected.agreement.creationState = "manual_hold";
+            selected.agreement.providerPresence = "known absent";
+            selected.agreement.failure = "Credentials or account configuration must be repaired";
+            finishAttempt(selected.agreement);
+            addEvidence(
+              state,
+              "Agreement paused for an operator",
+              `${selected.agreement.id} stopped automatic attempts; siblings keep their own state.`,
+            );
+            return state;
+          }
+
+          if (action.type === "PERMANENT_FAILURE") {
+            const selected = requireSelected(state, "Permanent failure", ["submitting"]);
+            if (!selected) return state;
+            selected.agreement.creationState = "failed";
+            selected.agreement.providerPresence = "known absent";
+            selected.agreement.failure = "Immutable agreement payload was rejected and cannot be corrected in place";
+            finishAttempt(selected.agreement);
+            addEvidence(
+              state,
+              "Agreement creation failed permanently",
+              `${selected.agreement.id} remains as durable failed intent; operator retry is blocked and siblings are untouched.`,
+            );
+            return state;
+          }
+
+          if (action.type === "DUPLICATE_JOB") {
+            const selected = requireSelected(state, "Duplicate job");
+            if (!selected) return state;
+            if (selected.agreement.creationState === "queued") {
+              selected.agreement.creationState = "submitting";
+              selected.agreement.lease = "held by one worker";
+              selected.agreement.postAttempts += 1;
+              selected.agreement.failure = null;
+              addEvidence(
+                state,
+                "One scheduled job won the lease",
+                `${selected.agreement.id} was eligible, so this delivery became the sole active worker.`,
+              );
+              return state;
+            }
+            addEvidence(
+              state,
+              "Duplicate job exited safely",
+              `${selected.agreement.id} is already ${selected.agreement.creationState}; the lease/state guard prevented another Zepto call.`,
+            );
+            return state;
+          }
+
+          if (action.type === "RECONCILE_FOUND") {
+            const selected = requireSelected(state, "Reconciliation", ["verifying"]);
+            if (!selected) return state;
+            selected.agreement.getAttempts += 1;
+            selected.agreement.creationState = "created";
+            selected.agreement.providerPresence = "present";
+            selected.agreement.providerState = "pending";
+            selected.agreement.failure = null;
+            addEvidence(
+              state,
+              "GET recovered the agreement",
+              `${selected.agreement.id} matched stable UID ${selected.agreement.providerUid}; no second POST was needed.`,
+            );
+            return state;
+          }
+
+          if (action.type === "RECONCILE_MISSING") {
+            const selected = requireSelected(state, "Reconciliation", ["verifying"]);
+            if (!selected) return state;
+            selected.agreement.getAttempts += 1;
+            selected.agreement.missingObservations += 1;
+            selected.agreement.providerPresence = "not visible yet";
+            addEvidence(
+              state,
+              "GET returned 404, but POST remains gated",
+              `${selected.agreement.id} stays verifying because one 404 cannot disprove an in-flight ambiguous create.`,
+            );
+            return state;
+          }
+
+          if (action.type === "ABSENCE_CONFIRMED") {
+            const selected = requireSelected(state, "Absence confirmation", ["verifying"]);
+            if (!selected) return state;
+            selected.agreement.getAttempts += 1;
+            selected.agreement.missingObservations += 1;
+            selected.agreement.creationState = "queued";
+            selected.agreement.providerPresence = "known absent";
+            selected.agreement.failure = null;
+            addEvidence(
+              state,
+              "Provider absence confirmed after the quiet window",
+              `${selected.agreement.id} may POST again, but only with unchanged UID ${selected.agreement.providerUid}.`,
+            );
+            return state;
+          }
+
+          if (action.type === "SCHEDULED_RETRY") {
+            const selected = requireSelected(state, "Scheduled retry", ["retry_wait"]);
+            if (!selected) return state;
+            selected.agreement.creationState = "queued";
+            selected.agreement.failure = null;
+            addEvidence(
+              state,
+              "Automatic delay elapsed",
+              `${selected.agreement.id} is queued for another leased POST with the same UID.`,
+            );
+            return state;
+          }
+
+          if (action.type === "OPERATOR_RETRY") {
+            const selected = requireSelected(state, "Operator retry");
+            if (!selected) return state;
+            if (selected.agreement.creationState === "manual_hold") {
+              selected.agreement.creationState = "queued";
+              selected.agreement.failure = null;
+              addEvidence(
+                state,
+                "Operator reopened one agreement",
+                `${selected.agreement.id} will retry with ${selected.agreement.providerUid}; no sibling changed.`,
+              );
+              return state;
+            }
+            if (selected.agreement.creationState === "failed") {
+              addEvidence(
+                state,
+                "Operator retry refused",
+                `${selected.agreement.id} has an immutable-input failure; recovery requires a deliberate new intent, not mutation or replay.`,
+              );
+              return state;
+            }
+            addEvidence(
+              state,
+              "Operator retry made no change",
+              `${selected.agreement.id} is ${selected.agreement.creationState}; operator retry is reserved for manual holds.`,
+            );
+            return state;
+          }
+
+          addEvidence(state, "Unknown action ignored", action.type);
+          return state;
+        };
+
+        const derive = (state) => {
+          const agreements = state.requests.flatMap((request) => request.agreements);
+          const count = (creationState) =>
+            agreements.filter((agreement) => agreement.creationState === creationState).length;
+          return {
+            requestCount: state.requests.length,
+            agreementCount: agreements.length,
+            createdCount: count("created"),
+            attentionCount: count("manual_hold") + count("failed"),
+          };
+        };
+
+        return { freshState, reduce, derive };
+      })();
+
+      // Throwaway page shell.
+      const actionMap = {
+        "submit-a": { type: "SUBMIT_A" },
+        "retry-a": { type: "RETRY_A" },
+        "conflict-a": { type: "CONFLICT_A" },
+        "submit-b": { type: "SUBMIT_B" },
+        "submit-six": { type: "SUBMIT_SIX" },
+        "claim-worker": { type: "CLAIM_WORKER" },
+        created: { type: "CREATED" },
+        "timeout-created": { type: "TIMEOUT_CREATED" },
+        "timeout-unknown": { type: "TIMEOUT_UNKNOWN" },
+        "rate-limit": { type: "RATE_LIMIT" },
+        "config-hold": { type: "CONFIG_HOLD" },
+        "permanent-failure": { type: "PERMANENT_FAILURE" },
+        "duplicate-job": { type: "DUPLICATE_JOB" },
+        "reconcile-found": { type: "RECONCILE_FOUND" },
+        "reconcile-missing": { type: "RECONCILE_MISSING" },
+        "absence-confirmed": { type: "ABSENCE_CONFIRMED" },
+        "scheduled-retry": { type: "SCHEDULED_RETRY" },
+        "operator-retry": { type: "OPERATOR_RETRY" },
+      };
+
+      const walkthroughs = [
+        {
+          name: "Browser retry",
+          description:
+            "A response is lost in the browser. Watch the same intent return the original Money Request, while a changed payload is rejected rather than silently attached to it.",
+          steps: [
+            ["Submit intent A", { type: "SUBMIT_A" }],
+            ["Retry the exact same intent", { type: "RETRY_A" }],
+            ["Try the same key with a changed amount", { type: "CONFLICT_A" }],
+            ["Use a new key for the same visible details", { type: "SUBMIT_B" }],
+          ],
+        },
+        {
+          name: "Partial success",
+          description:
+            "Three Payers progress independently. One succeeds, one fails permanently, and one is recovered after an ambiguous timeout. Created agreements never roll back.",
+          steps: [
+            ["Commit a Money Request for three Payers", { type: "SUBMIT_A" }],
+            ["Select Alex", { type: "SELECT_BY_PAYER", payer: "Alex" }],
+            ["Alex's worker claims the agreement", { type: "CLAIM_WORKER" }],
+            ["Alex receives 201 Created", { type: "CREATED" }],
+            ["Select Blair", { type: "SELECT_BY_PAYER", payer: "Blair" }],
+            ["Blair's worker claims the agreement", { type: "CLAIM_WORKER" }],
+            ["Blair's immutable payload is rejected", { type: "PERMANENT_FAILURE" }],
+            ["Select Casey", { type: "SELECT_BY_PAYER", payer: "Casey" }],
+            ["Casey's worker claims the agreement", { type: "CLAIM_WORKER" }],
+            ["Casey's response is lost after creation", { type: "TIMEOUT_CREATED" }],
+            ["GET finds Casey by stable UID", { type: "RECONCILE_FOUND" }],
+          ],
+        },
+        {
+          name: "Ambiguous POST",
+          description:
+            "A transport failure may have happened before or after Zepto created the agreement. A 404 does not immediately unlock another POST.",
+          steps: [
+            ["Commit the request", { type: "SUBMIT_A" }],
+            ["A worker claims Alex's agreement", { type: "CLAIM_WORKER" }],
+            ["Transport retries end without a known response", { type: "TIMEOUT_UNKNOWN" }],
+            ["The first GET returns 404", { type: "RECONCILE_MISSING" }],
+            ["A quiet window and another 404 confirm absence", { type: "ABSENCE_CONFIRMED" }],
+            ["A new worker claims the same agreement and UID", { type: "CLAIM_WORKER" }],
+            ["Retry succeeds with the original UID", { type: "CREATED" }],
+          ],
+        },
+        {
+          name: "Operator retry",
+          description:
+            "An operator fixes shared credentials and reopens one paused agreement. A different agreement with invalid immutable input cannot be replayed in place.",
+          steps: [
+            ["Commit the request", { type: "SUBMIT_A" }],
+            ["Select Alex", { type: "SELECT_BY_PAYER", payer: "Alex" }],
+            ["Alex's worker claims the agreement", { type: "CLAIM_WORKER" }],
+            ["Alex is already created", { type: "CREATED" }],
+            ["Select Blair", { type: "SELECT_BY_PAYER", payer: "Blair" }],
+            ["Blair's worker claims the agreement", { type: "CLAIM_WORKER" }],
+            ["Pause Blair for account configuration", { type: "CONFIG_HOLD" }],
+            ["Operator retries Blair", { type: "OPERATOR_RETRY" }],
+            ["A new worker claims Blair", { type: "CLAIM_WORKER" }],
+            ["Blair succeeds with the same UID", { type: "CREATED" }],
+            ["Select Casey", { type: "SELECT_BY_PAYER", payer: "Casey" }],
+            ["Casey's worker claims the agreement", { type: "CLAIM_WORKER" }],
+            ["Casey's immutable payload fails", { type: "PERMANENT_FAILURE" }],
+            ["Operator retry is refused for Casey", { type: "OPERATOR_RETRY" }],
+          ],
+        },
+        {
+          name: "Duplicate worker",
+          description:
+            "Repeated scheduler delivery is harmless. The agreement state/lease is checked before every provider call, including after creation.",
+          steps: [
+            ["Commit the request", { type: "SUBMIT_A" }],
+            ["The first scheduled job claims Alex", { type: "CLAIM_WORKER" }],
+            ["A duplicate job loses the lease", { type: "DUPLICATE_JOB" }],
+            ["The intended worker creates the agreement", { type: "CREATED" }],
+            ["Another stale job wakes after creation", { type: "DUPLICATE_JOB" }],
+          ],
+        },
+      ];
+
+      let state = DurableSubmissionModel.freshState();
+      let activeWalkthrough = 0;
+      let activeStep = 0;
+
+      const escapeHtml = (value) =>
+        String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+
+      const currency = (cents) =>
+        new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(cents / 100);
+
+      const dispatch = (action) => {
+        state = DurableSubmissionModel.reduce(state, action);
+        render();
+      };
+
+      function renderSummary() {
+        const summary = DurableSubmissionModel.derive(state);
+        const metrics = [
+          ["Money Requests", summary.requestCount],
+          ["Agreement intents", summary.agreementCount],
+          ["Zepto agreements found", summary.createdCount],
+          ["Needs attention", summary.attentionCount],
+        ];
+        document.querySelector("#summary").innerHTML = metrics
+          .map(
+            ([label, value]) => `
+              <div class="metric">
+                <div class="metric-label">${escapeHtml(label)}</div>
+                <div class="metric-value">${escapeHtml(value)}</div>
+              </div>`,
+          )
+          .join("");
+      }
+
+      function renderRequests() {
+        const root = document.querySelector("#requests");
+        if (state.requests.length === 0) {
+          root.innerHTML = '<div class="empty">Submit an intent or start a walkthrough to create durable state.</div>';
+          return;
+        }
+        root.innerHTML = state.requests
+          .map((request) => {
+            const counts = request.agreements.reduce((result, agreement) => {
+              result[agreement.creationState] = (result[agreement.creationState] ?? 0) + 1;
+              return result;
+            }, {});
+            const progress = Object.entries(counts)
+              .map(([key, count]) => `${count} ${key.replaceAll("_", " ")}`)
+              .join(" · ");
+            return `
+              <article class="request">
+                <div class="request-title">
+                  <h3>${escapeHtml(request.id)}</h3>
+                  <span class="badge">${escapeHtml(request.intentKey)}</span>
+                  <span class="muted small">${currency(request.amountCents)} each · derived: ${escapeHtml(progress)}</span>
+                </div>
+                <div class="agreement-grid">
+                  ${request.agreements
+                    .map(
+                      (agreement) => `
+                        <button
+                          class="agreement ${agreement.id === state.selectedAgreementId ? "selected" : ""}"
+                          data-select-agreement="${escapeHtml(agreement.id)}"
+                          type="button"
+                        >
+                          <div class="agreement-top">
+                            <strong>${escapeHtml(agreement.payer)}</strong>
+                            <span class="badge ${escapeHtml(agreement.creationState)}">${escapeHtml(agreement.creationState.replaceAll("_", " "))}</span>
+                          </div>
+                          <dl>
+                            <dt>Local record</dt><dd>${escapeHtml(agreement.id)}</dd>
+                            <dt>Stable UID</dt><dd class="mono">${escapeHtml(agreement.providerUid)}</dd>
+                            <dt>Provider</dt><dd>${escapeHtml(agreement.providerPresence)}</dd>
+                            <dt>POST / GET</dt><dd>${agreement.postAttempts} / ${agreement.getAttempts}</dd>
+                            <dt>Lease</dt><dd>${escapeHtml(agreement.lease)}</dd>
+                            ${agreement.failure ? `<dt>Failure</dt><dd>${escapeHtml(agreement.failure)}</dd>` : ""}
+                          </dl>
+                        </button>`,
+                    )
+                    .join("")}
+                </div>
+              </article>`;
+          })
+          .join("");
+
+        root.querySelectorAll("[data-select-agreement]").forEach((button) => {
+          button.addEventListener("click", () =>
+            dispatch({
+              type: "SELECT_AGREEMENT",
+              agreementId: button.dataset.selectAgreement,
+            }),
+          );
+        });
+      }
+
+      function renderTimeline() {
+        document.querySelector("#event-count").textContent = `${state.evidence.length} entries`;
+        const timeline = document.querySelector("#timeline");
+        if (state.evidence.length === 0) {
+          timeline.innerHTML = '<div class="empty">Every meaningful observation will append here.</div>';
+          return;
+        }
+        timeline.innerHTML = [...state.evidence]
+          .reverse()
+          .map(
+            (event, index) => `
+              <div class="event ${index === 0 ? "latest" : ""}">
+                <div class="event-title">${event.number}. ${escapeHtml(event.title)}</div>
+                <div class="event-detail">${escapeHtml(event.detail)}</div>
+              </div>`,
+          )
+          .join("");
+      }
+
+      function renderSelected() {
+        let selected = null;
+        for (const request of state.requests) {
+          const agreement = request.agreements.find((item) => item.id === state.selectedAgreementId);
+          if (agreement) selected = `${request.id} · ${agreement.payer} · ${agreement.id}`;
+        }
+        document.querySelector("#selected-label").textContent = selected
+          ? `Selected: ${selected}`
+          : "No agreement selected yet.";
+      }
+
+      function renderTabs() {
+        const tabs = document.querySelector("#tabs");
+        tabs.innerHTML = walkthroughs
+          .map(
+            (walkthrough, index) => `
+              <button class="button tab ${index === activeWalkthrough ? "active" : ""}" data-tab="${index}" type="button">
+                ${escapeHtml(walkthrough.name)}
+              </button>`,
+          )
+          .join("");
+        tabs.querySelectorAll("[data-tab]").forEach((button) => {
+          button.addEventListener("click", () => {
+            activeWalkthrough = Number(button.dataset.tab);
+            activeStep = 0;
+            state = DurableSubmissionModel.freshState();
+            render();
+          });
+        });
+      }
+
+      function renderWalkthrough() {
+        const walkthrough = walkthroughs[activeWalkthrough];
+        document.querySelector("#walkthrough").innerHTML = `
+          <h3>${escapeHtml(walkthrough.name)}</h3>
+          <p class="walkthrough-intro">${escapeHtml(walkthrough.description)} Starting or changing a walkthrough resets all demo state.</p>
+          <div class="steps">
+            ${walkthrough.steps
+              .map(
+                ([label], index) => `
+                  <div class="step ${index < activeStep ? "done" : index === activeStep ? "current" : ""}">
+                    <span>${escapeHtml(label)}</span>
+                    <button class="button ${index === activeStep ? "primary" : ""}" data-step="${index}" ${index === activeStep ? "" : "disabled"} type="button">
+                      ${index < activeStep ? "Done" : "Do this"}
+                    </button>
+                  </div>`,
+              )
+              .join("")}
+          </div>`;
+
+        const currentButton = document.querySelector(`[data-step="${activeStep}"]`);
+        currentButton?.addEventListener("click", () => {
+          const [, action] = walkthrough.steps[activeStep];
+          state = DurableSubmissionModel.reduce(state, action);
+          activeStep += 1;
+          render();
+        });
+      }
+
+      function render() {
+        renderSummary();
+        renderRequests();
+        renderTimeline();
+        renderSelected();
+        renderTabs();
+        renderWalkthrough();
+      }
+
+      document.querySelectorAll("[data-action]").forEach((button) => {
+        button.addEventListener("click", () => dispatch(actionMap[button.dataset.action]));
+      });
+      document.querySelector("#reset-all").addEventListener("click", () => {
+        state = DurableSubmissionModel.freshState();
+        activeStep = 0;
+        render();
+      });
+
+      render();
+    </script>
+  </body>
+</html>
