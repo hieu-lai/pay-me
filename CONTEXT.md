@@ -23,5 +23,5 @@ The single Payment Destination automatically selected for a User when they have 
 _Avoid_: Primary destination
 
 **PayMe Username**:
-An optional public identifier chosen by a User during PayMe onboarding and used by other Users to find them. A User without a PayMe Username remains discoverable by name.
+An optional, PayMe-owned public identifier chosen by a User during onboarding and used by other Users to find them. A User without a PayMe Username remains discoverable by name.
 _Avoid_: Clerk username

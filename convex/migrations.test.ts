@@ -136,18 +136,29 @@ test('backfills missing payment destination search labels idempotently', async (
   ).resolves.toMatchObject({ searchLabel: 'Everyday' })
 })
 
-test('backfills missing user search text from the user name', async () => {
+test('backfills missing user search text from name and optional username', async () => {
   const t = convexTest(legacySchema, modules)
   migrationComponent.register(t)
 
-  const userId = await t.run(async (ctx) =>
-    ctx.db.insert('users', {
+  const { namedUserId, usernameUserId } = await t.run(async (ctx) => {
+    const insertedNamedUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'issuer|searchable-user',
       clerkUserId: 'searchable-user',
       email: 'searchable@example.com',
       name: 'Searchable User',
-    }),
-  )
+    })
+    const insertedUsernameUserId = await ctx.db.insert('users', {
+      tokenIdentifier: 'issuer|username-user',
+      clerkUserId: 'username-user',
+      email: 'username@example.com',
+      name: 'Username User',
+      username: 'payme-user',
+    })
+    return {
+      namedUserId: insertedNamedUserId,
+      usernameUserId: insertedUsernameUserId,
+    }
+  })
 
   await t.run(async (ctx) => {
     await runToCompletion(
@@ -158,6 +169,12 @@ test('backfills missing user search text from the user name', async () => {
   })
 
   await expect(
-    t.run(async (ctx) => ctx.db.get('users', userId)),
-  ).resolves.toMatchObject({ searchText: 'Searchable User' })
+    t.run(async (ctx) => ({
+      namedUser: await ctx.db.get('users', namedUserId),
+      usernameUser: await ctx.db.get('users', usernameUserId),
+    })),
+  ).resolves.toMatchObject({
+    namedUser: { searchText: 'Searchable User' },
+    usernameUser: { searchText: 'Username User payme-user' },
+  })
 })
