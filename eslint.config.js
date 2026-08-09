@@ -20,6 +20,7 @@ export default [
     ignores: [
       '.output/**',
       'convex/_generated/**',
+      'convex/lib/zepto/generated/**',
       'eslint.config.js',
       'prettier.config.js',
     ],

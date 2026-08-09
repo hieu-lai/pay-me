@@ -1,0 +1,142 @@
+---
+openapi: 3.0.1
+info:
+  title: Zepto Merchant Reports API
+  version: '20260101'
+  description: Documentation for the Zepto Merchant Reports API.
+  termsOfService: https://www.zepto.com.au/customer-terms
+  contact:
+    email: support@zepto.com.au
+tags:
+- name: Merchant Reports
+  description: The Zepto Merchant Reports API is used to generate temporary download
+    links for reports. Access to this API is limited. Please contact Zepto for more
+    information.
+security:
+- bearerAuth: []
+paths:
+  "/merchant_reports/payto_settlement/{report_date}/download":
+    post:
+      summary: generate download link
+      tags:
+      - PayTo Settlement
+      description: Generates a presigned download link for the PayTo settlement report
+        for the given date.
+      parameters:
+      - name: report_date
+        in: path
+        required: true
+        description: The date of the settlement report in YYYY-MM-DD format.
+        schema:
+          type: string
+          format: date
+          example: '2025-04-16'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/merchant_reports.download"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+servers:
+- description: Zepto Sandbox
+  url: https://api.sandbox.zeptopayments.com
+- description: Zepto Production
+  url: https://api.zeptopayments.com
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    ZeptoAPIVersion:
+      name: Zepto-API-Version
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: "^\\d{8}$"
+        default: '20250101'
+        example: '20260101'
+      description: API version in YYYYMMDD format. Defaults to 20250101 (legacy) when
+        omitted.
+  schemas:
+    merchant_reports.download:
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          type: object
+          required:
+          - id
+          - type
+          - attributes
+          - links
+          properties:
+            id:
+              type: string
+              example: urn:zepto:data:artefact:payto-settlement.d77d1e34ae554b8eb193c6df65f5a686.20251029.csv
+            type:
+              type: string
+              enum:
+              - merchant_reports
+            attributes:
+              type: object
+              required:
+              - type
+              - download_link
+              properties:
+                type:
+                  type: string
+                  enum:
+                  - payto_settlement
+                download_link:
+                  type: object
+                  required:
+                  - url
+                  - expires_at
+                  properties:
+                    url:
+                      type: string
+                      format: uri
+                      description: Presigned URL to download the report
+                      example: https://a.presigned.url/
+                    expires_at:
+                      type: string
+                      format: date-time
+                      description: Presigned URL expiry in ISO8601 format
+            links:
+              type: object
+              required:
+              - download
+              properties:
+                download:
+                  type: object
+                  required:
+                  - href
+                  - meta
+                  properties:
+                    href:
+                      type: string
+                      format: uri
+                      description: The URL to generate a download link
+                      example: https://api.zeptopayments.com/merchant_reports/payto_settlement/2025-04-16/download
+                    meta:
+                      type: object
+                      required:
+                      - method
+                      properties:
+                        method:
+                          type: string
+                          description: The HTTP method to use for generating a download
+                            link
+                          enum:
+                          - POST
+                          example: POST
+                        zepto_account_id:
+                          type: string
+                          description: The Zepto account ID associated with the report
+                          example: 00000000-0000-0000-0000-000000000000

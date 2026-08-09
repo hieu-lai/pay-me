@@ -1,0 +1,2484 @@
+---
+openapi: 3.0.1
+info:
+  title: Zepto Clients API (Alpha)
+  version: '20260101'
+  description: Documentation for the Zepto Clients API.
+  termsOfService: https://www.zepto.com.au/customer-terms
+  contact:
+    email: support@zepto.com.au
+tags:
+- name: Clients
+  description: |
+    The Zepto Clients API allows registration of clients who indirectly use the Zepto platform
+    via your Zepto integration.
+- name: Merchant Category Codes (MCC)
+  description: |-
+    Comprehensive list of Merchant Category Codes that can be used when creating Client records.
+
+    |Code|Description|
+    |---|---|
+    |0742|Veterinary Services|
+    |0763|Agricultural Cooperative|
+    |0780|Landscaping Services|
+    |1520|General Services|
+    |1711|Heating, Plumbing, A/C|
+    |1731|Electrical Services|
+    |1740|Masonry, Stonework, and Plaster|
+    |1750|Carpentry Services|
+    |1761|Roofing/Siding, Sheet Metal|
+    |1771|Concrete Work Services|
+    |1799|Special Trade Services|
+    |2741|Miscellaneous Publishing and Printing|
+    |2791|Typesetting, Plate Making, and Related Services|
+    |2842|Specialty Cleaning|
+    |4011|Railroads|
+    |4111|Commuter Transport, Ferries|
+    |4112|Passenger Railways|
+    |4119|Ambulance Services|
+    |4121|Taxicabs/Limousines|
+    |4131|Bus Lines|
+    |4214|Motor Freight Carriers and Trucking - Local and Long Distance, Moving and Storage Companies, and Local Delivery Services|
+    |4215|Courier Services|
+    |4225|Public Warehousing and Storage - Farm Products, Refrigerated Goods, Household Goods, and Storage|
+    |4411|Cruise Lines|
+    |4457|Boat Rentals and Leases|
+    |4468|Marinas, Service and Supplies|
+    |4511|Airlines, Air Carriers|
+    |4582|Airports, Flying Fields|
+    |4722|Travel Agencies, Tour Operators|
+    |4723|TUI Travel - Germany|
+    |4784|Tolls/Bridge Fees|
+    |4789|Transportation Services (Not Elsewhere Classified)|
+    |4812|Telecommunication Equipment and Telephone Sales|
+    |4814|Telecommunication Services|
+    |4816|Computer Network Services/Cyberlocker|
+    |4821|Telegraph Services|
+    |4829|Wires, Money Orders|
+    |4899|Cable, Satellite, and Other Pay Television and Radio|
+    |4900|Utilities|
+    |5013|Motor Vehicle Supplies and New Parts|
+    |5021|Office and Commercial Furniture|
+    |5039|Construction Materials (Not Elsewhere Classified)|
+    |5044|Photographic, Photocopy, Microfilm Equipment, and Supplies|
+    |5045|Computers, Peripherals, and Software|
+    |5046|Commercial Equipment (Not Elsewhere Classified)|
+    |5047|Medical, Dental, Ophthalmic, and Hospital Equipment and Supplies|
+    |5051|Metal Service Centers|
+    |5065|Electrical Parts and Equipment|
+    |5072|Hardware, Equipment, and Supplies|
+    |5074|Plumbing, Heating Equipment, and Supplies|
+    |5085|Industrial Supplies (Not Elsewhere Classified)|
+    |5094|Precious Stones and Metals, Watches and Jewellery|
+    |5099|Durable Goods (Not Elsewhere Classified)|
+    |5111|Stationary, Office Supplies, Printing and Writing Paper|
+    |5122|Drugs, Drug Proprietaries, and Druggist Sundries|
+    |5131|Piece Goods, Notions, and Other Dry Goods|
+    |5137|Uniforms, Commercial Clothing|
+    |5139|Commercial Footwear|
+    |5169|Chemicals and Allied Products (Not Elsewhere Classified)|
+    |5172|Petroleum and Petroleum Products|
+    |5192|Books, Periodicals, and Newspapers|
+    |5193|Florists Supplies, Nursery Stock, and Flowers|
+    |5198|Paints, Varnishes, and Supplies|
+    |5199|Nondurable Goods (Not Elsewhere Classified)|
+    |5200|Home Supply Warehouse Stores|
+    |5211|Lumber, Building Materials Stores|
+    |5231|Glass, Paint, and Wallpaper Stores|
+    |5251|Hardware Stores|
+    |5261|Nurseries, Lawn and Garden Supply Stores|
+    |5262|Marketplaces|
+    |5271|Mobile Home Dealers|
+    |5300|Wholesale Clubs|
+    |5309|Duty Free Stores|
+    |5310|Discount Stores|
+    |5311|Department Stores|
+    |5331|Variety Stores|
+    |5399|Miscellaneous General Merchandise|
+    |5411|Grocery Stores, Supermarkets|
+    |5422|Freezer and Locker Meat Provisioners|
+    |5441|Candy, Nut, and Confectionery Stores|
+    |5451|Dairy Products Stores|
+    |5462|Bakeries|
+    |5499|Miscellaneous Food Stores - Convenience Stores and Specialty Markets|
+    |5511|Car and Truck Dealers (New & Used) Sales, Service, Repairs Parts and Leasing|
+    |5521|Car and Truck Dealers (Used Only) Sales, Service, Repairs Parts and Leasing|
+    |5531|Auto and Home Supply Stores|
+    |5532|Automotive Tire Stores|
+    |5533|Automotive Parts and Accessories Stores|
+    |5541|Service Stations|
+    |5542|Automated Fuel Dispensers|
+    |5551|Boat Dealers|
+    |5552|Electric Vehicle Charging|
+    |5561|Motorcycle Shops, Dealers|
+    |5571|Motorcycle Shops and Dealers|
+    |5592|Motor Homes Dealers|
+    |5598|Snowmobile Dealers|
+    |5599|Miscellaneous Auto Dealers|
+    |5611|Mens and Boys Clothing and Accessories Stores|
+    |5621|Womens Ready-To-Wear Stores|
+    |5631|Womens Accessory and Specialty Shops|
+    |5641|Childrens and Infants Wear Stores|
+    |5651|Family Clothing Stores|
+    |5655|Sports and Riding Apparel Stores|
+    |5661|Shoe Stores|
+    |5681|Furriers and Fur Shops|
+    |5691|Mens, Womens Clothing Stores|
+    |5697|Tailors, Alterations|
+    |5698|Wig and Toupee Stores|
+    |5699|Miscellaneous Apparel and Accessory Shops|
+    |5712|Furniture, Home Furnishings, and Equipment Stores, Except Appliances|
+    |5713|Floor Covering Stores|
+    |5714|Drapery, Window Covering, and Upholstery Stores|
+    |5718|Fireplace, Fireplace Screens, and Accessories Stores|
+    |5719|Miscellaneous Home Furnishing Specialty Stores|
+    |5722|Household Appliance Stores|
+    |5732|Electronics Stores|
+    |5733|Music Stores-Musical Instruments, Pianos, and Sheet Music|
+    |5734|Computer Software Stores|
+    |5735|Record Stores|
+    |5811|Caterers|
+    |5812|Eating Places, Restaurants|
+    |5813|Drinking Places|
+    |5814|Fast Food Restaurants|
+    |5815|Digital Goods Media – Books, Movies, Music|
+    |5816|Digital Goods – Games (Games of Skill not Luck)|
+    |5817|Digital Goods – Applications (Excludes Games)|
+    |5818|Digital Goods – Large Digital Goods Merchant|
+    |5912|Drug Stores and Pharmacies|
+    |5921|Package Stores-Beer, Wine, and Liquor|
+    |5931|Used Merchandise and Second-hand Stores|
+    |5932|Antique Shops|
+    |5933|Pawn Shops|
+    |5935|Wrecking and Salvage Yard,|
+    |5937|Antique Reproductions|
+    |5940|Bicycle Shops|
+    |5941|Sporting Goods Stores|
+    |5942|Book Stores|
+    |5943|Stationery Stores, Office, and School Supply Stores|
+    |5944|Jewellery Stores, Watches, Clocks, and Silverware Stores|
+    |5945|Hobby, Toy, and Game Shops|
+    |5946|Camera and Photographic Supply Stores|
+    |5947|Gift, Card, Novelty, and Souvenir Shops|
+    |5948|Luggage and Leather Goods Stores|
+    |5949|Sewing, Needlework, Fabric, and Piece Goods Stores|
+    |5950|Glassware, Crystal Stores|
+    |5960|Direct Marketing - Insurance Services|
+    |5962|Direct Marketing - Travel|
+    |5963|Door-To-Door Sales|
+    |5964|Direct Marketing - Catalog Merchant|
+    |5965|Direct Marketing - Combination Catalog and Retail Merchant|
+    |5966|Direct Marketing - Outbound Telemarketing|
+    |5967|Direct Marketing - Inbound Telemarketing|
+    |5968|Direct Marketing - Subscription|
+    |5969|Direct Marketing - Other|
+    |5970|Artists Supply and Craft Shops|
+    |5971|Art Dealers and Galleries|
+    |5972|Stamp and Coin Stores|
+    |5973|Religious Goods Stores|
+    |5975|Hearing Aids Sales and Supplies|
+    |5976|Orthopaedic Goods - Prosthetic Devices|
+    |5977|Cosmetic Stores|
+    |5978|Typewriter Stores|
+    |5983|Fuel Dealers (Non-Automotive)|
+    |5992|Florists|
+    |5993|Cigar Stores and Stands|
+    |5994|News Dealers and Newsstands|
+    |5995|Pet Shops, Pet Food, and Supplies|
+    |5996|Swimming Pools Sales|
+    |5997|Electric Razor Stores|
+    |5998|Tent and Awning Shops|
+    |5999|Miscellaneous Specialty Retail|
+    |6010|Manual Cash Disburse|
+    |6011|Automated Cash Disburse|
+    |6012|Financial Institutions|
+    |6051|Non-FI, Money Orders|
+    |6052|Buy Now Pay Later|
+    |6053|Cash Management|
+    |6054|Digital Currency Exchange|
+    |6055|Earned Wage Access|
+    |6056|Lending|
+    |6057|Investment|
+    |6058|Foreign Exchange services|
+    |6059|Funds Management|
+    |6060|Remittance Providers|
+    |6061|Virtual Wallet|
+    |6062|Pay Day Lending|
+    |6063|Debt collection agencies|
+    |6064|Event Management|
+    |6065|Ticketing|
+    |6066|Payment services platforms|
+    |6211|Security Brokers/Dealers|
+    |6300|Insurance Underwriting, Premiums|
+    |6399|Insurance - Default|
+    |6513|Real Estate Agents and Managers - Rentals|
+    |6530|Remote Stored Value Load - Merchant|
+    |6540|Non-FI, Stored Value Card Purchase/Load|
+    |7011|Hotels, Motels, and Resorts|
+    |7012|Timeshares|
+    |7032|Sporting/Recreation Camps|
+    |7033|Trailer Parks, Campgrounds|
+    |7210|Laundry, Cleaning Services|
+    |7211|Laundries|
+    |7216|Dry Cleaners|
+    |7217|Carpet/Upholstery Cleaning|
+    |7221|Photographic Studios|
+    |7230|Barber and Beauty Shops|
+    |7251|Shoe Repair/Hat Cleaning|
+    |7261|Funeral Services, Crematories|
+    |7273|Dating/Escort Services|
+    |7276|Tax Preparation Services|
+    |7277|Counselling Services|
+    |7278|Buying/Shopping Services|
+    |7296|Clothing Rental|
+    |7297|Massage Parlors|
+    |7298|Health and Beauty Spas|
+    |7299|Miscellaneous General Services|
+    |7311|Advertising Services|
+    |7321|Credit Reporting Agencies|
+    |7333|Commercial Photography, Art and Graphics|
+    |7338|Quick Copy, Repro, and Blueprint|
+    |7339|Secretarial Support Services|
+    |7342|Exterminating Services|
+    |7349|Cleaning and Maintenance|
+    |7361|Employment/Temp Agencies|
+    |7372|Computer Programming|
+    |7375|Information Retrieval Services|
+    |7379|Computer Repair|
+    |7392|Consulting, Public Relations|
+    |7393|Detective Agencies|
+    |7394|Equipment Rental|
+    |7395|Photo Developing|
+    |7399|Miscellaneous Business Services|
+    |7511|Truck Stop|
+    |7512|Car Rental Agencies|
+    |7513|Truck/Utility Trailer Rentals|
+    |7519|Recreational Vehicle Rentals|
+    |7523|Parking Lots, Garages|
+    |7531|Auto Body Repair Shops|
+    |7534|Tire Retreading and Repair|
+    |7535|Auto Paint Shops|
+    |7538|Auto Service Shops|
+    |7542|Car Washes|
+    |7549|Towing Services|
+    |7622|Electronics Repair Shops|
+    |7623|A/C, Refrigeration Repair|
+    |7629|Small Appliance Repair|
+    |7631|Watch/Jewellery Repair|
+    |7641|Furniture Repair, Refinishing|
+    |7692|Welding Repair|
+    |7699|Miscellaneous Repair Shops|
+    |7800|Government-Owned Lotteries (US Region only)|
+    |7801|Government Licensed On-line Casinos (On-Line Gambling)(US Region only)|
+    |7802|Government-Licensed Horse/Dog Racing (US Region only)|
+    |7829|Picture/Video Production|
+    |7832|Motion Picture Theaters|
+    |7841|Video Tape Rental Stores|
+    |7911|Dance Hall, Studios, Schools|
+    |7922|Theatrical Ticket Agencies|
+    |7929|Bands, Orchestras|
+    |7932|Billiard/Pool Establishments|
+    |7933|Bowling Alleys|
+    |7941|Sports Clubs/Fields|
+    |7991|Tourist Attractions and Exhibits|
+    |7992|Golf Courses - Public|
+    |7993|Video Amusement Game Supplies|
+    |7994|Video Game Arcades|
+    |7995|Betting/Casino Gambling|
+    |7996|Amusement Parks/Carnivals|
+    |7997|Country Clubs|
+    |7998|Aquariums|
+    |7999|Miscellaneous Recreation Services|
+    |8011|Doctors|
+    |8021|Dentists, Orthodontists|
+    |8031|Osteopaths|
+    |8041|Chiropractors|
+    |8042|Optometrists, Ophthalmologist|
+    |8043|Opticians, Eyeglasses|
+    |8049|Chiropodists, Podiatrists|
+    |8050|Nursing/Personal Care|
+    |8062|Hospitals|
+    |8071|Medical and Dental Labs|
+    |8099|Medical Services|
+    |8111|Legal Services, Attorneys|
+    |8211|Elementary, Secondary Schools|
+    |8220|Colleges, Universities|
+    |8241|Correspondence Schools|
+    |8244|Business/Secretarial Schools|
+    |8249|Vocational/Trade Schools|
+    |8299|Educational Services|
+    |8351|Child Care Services|
+    |8398|Charitable and Social Service Organizations - Fundraising|
+    |8641|Civic, Social, Fraternal Associations|
+    |8651|Political Organizations|
+    |8661|Religious Organizations|
+    |8675|Automobile Associations|
+    |8699|Membership Organizations|
+    |8734|Testing Laboratories|
+    |8911|Architectural/Surveying Services|
+    |8931|Accounting/Bookkeeping Services|
+    |8999|Professional Services|
+    |9211|Court Costs, Including Alimony and Child Support - Courts of Law|
+    |9222|Fines - Government Administrative Entities|
+    |9223|Bail and Bond Payments (payment to the surety for the bond, not the actual bond paid to the government agency)|
+    |9311|Tax Payments - Government Agencies|
+    |9399|Government Services (Not Elsewhere Classified)|
+    |9402|Postal Services - Government Only|
+    |9405|U.S. Federal Government Agencies or Departments|
+    |9406|Government-Owned Lotteries (Non-US region)|
+    |9702|Emergency Services (GCAS) (Visa use only)|
+    |9950|Intra-Company Purchases|
+security:
+- bearerAuth: []
+paths:
+  "/clients":
+    post:
+      summary: Create Client
+      tags:
+      - Clients
+      description: |
+        The Zepto Clients API allows registration of clients who indirectly use the Zepto platform
+        via your Zepto integration.
+
+        Merchants are required to keep their sub-client details up to date with Zepto via the update client endpoint.
+      parameters: []
+      responses:
+        '201':
+          description: successful
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                properties:
+                  data:
+                    "$ref": "#/components/schemas/clients.client_response"
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              examples:
+                Generic validation error:
+                  summary: Generic validation error
+                  value:
+                    errors:
+                    - title: Validation Failed
+                      detail: params.type is missing
+              schema:
+                "$ref": "#/components/schemas/clients.errors"
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              examples:
+                Unauthorised access token:
+                  summary: Unauthorised access token
+                  value:
+                    errors:
+                    - title: Unauthorised access token
+                      detail: Access token is expired or not valid
+                      links:
+                        about: https://docs.zeptopayments.com/docs/zepto-api#authentication-and-authorisation
+              schema:
+                "$ref": "#/components/schemas/clients.errors"
+        '403':
+          description: forbidden
+        '500':
+          description: Internal Server Error
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/clients.client_request"
+    get:
+      summary: List Clients
+      tags:
+      - Clients
+      parameters:
+      - name: per_page
+        description: Number of results per page
+        in: query
+        schema:
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+      - name: starting_after
+        description: Opaque pagination cursor value. Set by following "next" links.
+        in: query
+        schema:
+          type: string
+      - name: legal_name
+        description: Filter clients by legal name. The filtering is case insensitive
+          and must match the beginning of the provided legal name.
+        in: query
+        schema:
+          type: string
+      - name: australian_business_number
+        description: Filter clients by ABN.
+        in: query
+        schema:
+          type: string
+      responses:
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              examples:
+                Non integer per_page:
+                  summary: Non integer per_page
+                  value:
+                    errors:
+                    - title: Invalid request parameters
+                      detail: The `per_page` param is not valid.
+                No record with ID matching starting_after param:
+                  summary: No record with ID matching starting_after param
+                  value:
+                    errors:
+                    - title: Invalid request parameters
+                      detail: Could not find a record for the given `starting_after`
+                        param.
+              schema:
+                "$ref": "#/components/schemas/clients.errors"
+        '200':
+          description: successful
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/clients.list"
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              examples:
+                Unauthorised access token:
+                  summary: Unauthorised access token
+                  value:
+                    errors:
+                    - title: Unauthorised access token
+                      detail: Access token is expired or not valid
+                      links:
+                        about: https://docs.zeptopayments.com/docs/zepto-api#authentication-and-authorisation
+              schema:
+                "$ref": "#/components/schemas/clients.errors"
+        '403':
+          description: forbidden
+        '500':
+          description: Internal Server Error
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/clients/{client_id}":
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+    - name: client_id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      summary: Show Client
+      tags:
+      - Clients
+      responses:
+        '200':
+          description: successful
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                properties:
+                  data:
+                    "$ref": "#/components/schemas/clients.client_response"
+        '404':
+          description: Not Found
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              examples:
+                Unauthorised access token:
+                  summary: Unauthorised access token
+                  value:
+                    errors:
+                    - title: Unauthorised access token
+                      detail: Access token is expired or not valid
+                      links:
+                        about: https://docs.zeptopayments.com/docs/zepto-api#authentication-and-authorisation
+              schema:
+                "$ref": "#/components/schemas/clients.errors"
+        '403':
+          description: forbidden
+        '500':
+          description: Internal Server Error
+    patch:
+      summary: Update Client
+      tags:
+      - Clients
+      description: There are certain attributes that cannot be updated here such as
+        the ABN, ACN and MCC. Please reach out to the Zepto Compliance team (compliance@zepto.com.au)
+        to have them updated.
+      parameters: []
+      responses:
+        '202':
+          description: accepted
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/clients.errors"
+        '404':
+          description: not found
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              examples:
+                Unauthorised access token:
+                  summary: Unauthorised access token
+                  value:
+                    errors:
+                    - title: Unauthorised access token
+                      detail: Access token is expired or not valid
+                      links:
+                        about: https://docs.zeptopayments.com/docs/zepto-api#authentication-and-authorisation
+              schema:
+                "$ref": "#/components/schemas/clients.errors"
+        '403':
+          description: forbidden
+        '500':
+          description: Internal Server Error
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              "$ref": "#/components/schemas/clients.client_update_request"
+servers:
+- description: Zepto Sandbox
+  url: https://api.sandbox.zeptopayments.com
+- description: Zepto Production
+  url: https://api.zeptopayments.com
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    ZeptoAPIVersion:
+      name: Zepto-API-Version
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: "^\\d{8}$"
+        default: '20250101'
+        example: '20260101'
+      description: API version in YYYYMMDD format. Defaults to 20250101 (legacy) when
+        omitted.
+  schemas:
+    clients.client:
+      type: object
+      additionalProperties: false
+      properties:
+        australian_business_number:
+          type: string
+          description: The Australian Business Number (ABN) of the client.
+          example: '12345678901'
+          minLength: 11
+          maxLength: 11
+          pattern: "^\\d+$"
+        australian_company_number:
+          type: string
+          description: The Australian Company Number (ACN) of the client.
+          example: '045678901'
+          minLength: 9
+          maxLength: 9
+          pattern: "^\\d+$"
+        australian_credit_licence:
+          type: string
+          description: The Australian Credit Licence of the client (if applicable).
+          example: '123456'
+        australian_financial_services_licence:
+          type: string
+          description: The Australian Financial Services Licence of the client (if
+            applicable).
+          example: '777888999'
+        austrac_number:
+          type: string
+          description: The AUSTRAC number of the client (if applicable).
+          example: '1234567'
+        business_names:
+          type: array
+          description: The business/trading names registered to the client's legal
+            entity. For `individual` clients, this should be the client's legal name.
+          items:
+            type: string
+          example:
+          - Business Name 1
+          - Business Name 2
+        business_registration_date:
+          type: string
+          description: The business registration date of the client.
+          format: date
+          example: '2025-02-01'
+        company_incorporation_date:
+          type: string
+          description: The company incorporation date of the client.
+          format: date
+          example: '2025-02-01'
+        contact_information:
+          type: object
+          description: The contact information of the client. Required if RTP services
+            requested.
+          properties:
+            contact_name:
+              type: string
+              description: 'The contact name for the client. Required if RTP services
+                requested. '
+              example: Contact Name
+            email:
+              type: string
+              description: The contact email address for the client. Required if RTP
+                services requested.
+              example: contact@example.com
+            phone:
+              type: string
+              description: The contact phone number for the client. Required if RTP
+                services requested.
+              example: "+61400123456"
+              pattern: "^[\\d\\s\\-+()]+$"
+        id:
+          type: string
+          description: The unique identifier of the client (UUIDv7).
+          example: '01955dea-b445-7841-a145-77b4b2c00089'
+        legal_name:
+          type: string
+          description: The legal name of the client.
+          example: Legal Name Pty Ltd
+        merchant_category_code:
+          type: string
+          description: The Merchant Category Code (MCC) of the client.
+          enum:
+          - '0742'
+          - '0763'
+          - '0780'
+          - '1520'
+          - '1711'
+          - '1731'
+          - '1740'
+          - '1750'
+          - '1761'
+          - '1771'
+          - '1799'
+          - '2741'
+          - '2791'
+          - '2842'
+          - '4011'
+          - '4111'
+          - '4112'
+          - '4119'
+          - '4121'
+          - '4131'
+          - '4214'
+          - '4215'
+          - '4225'
+          - '4411'
+          - '4457'
+          - '4468'
+          - '4511'
+          - '4582'
+          - '4722'
+          - '4723'
+          - '4784'
+          - '4789'
+          - '4812'
+          - '4814'
+          - '4816'
+          - '4821'
+          - '4829'
+          - '4899'
+          - '4900'
+          - '5013'
+          - '5021'
+          - '5039'
+          - '5044'
+          - '5045'
+          - '5046'
+          - '5047'
+          - '5051'
+          - '5065'
+          - '5072'
+          - '5074'
+          - '5085'
+          - '5094'
+          - '5099'
+          - '5111'
+          - '5122'
+          - '5131'
+          - '5137'
+          - '5139'
+          - '5169'
+          - '5172'
+          - '5192'
+          - '5193'
+          - '5198'
+          - '5199'
+          - '5200'
+          - '5211'
+          - '5231'
+          - '5251'
+          - '5261'
+          - '5262'
+          - '5271'
+          - '5300'
+          - '5309'
+          - '5310'
+          - '5311'
+          - '5331'
+          - '5399'
+          - '5411'
+          - '5422'
+          - '5441'
+          - '5451'
+          - '5462'
+          - '5499'
+          - '5511'
+          - '5521'
+          - '5531'
+          - '5532'
+          - '5533'
+          - '5541'
+          - '5542'
+          - '5551'
+          - '5552'
+          - '5561'
+          - '5571'
+          - '5592'
+          - '5598'
+          - '5599'
+          - '5611'
+          - '5621'
+          - '5631'
+          - '5641'
+          - '5651'
+          - '5655'
+          - '5661'
+          - '5681'
+          - '5691'
+          - '5697'
+          - '5698'
+          - '5699'
+          - '5712'
+          - '5713'
+          - '5714'
+          - '5718'
+          - '5719'
+          - '5722'
+          - '5732'
+          - '5733'
+          - '5734'
+          - '5735'
+          - '5811'
+          - '5812'
+          - '5813'
+          - '5814'
+          - '5815'
+          - '5816'
+          - '5817'
+          - '5818'
+          - '5912'
+          - '5921'
+          - '5931'
+          - '5932'
+          - '5933'
+          - '5935'
+          - '5937'
+          - '5940'
+          - '5941'
+          - '5942'
+          - '5943'
+          - '5944'
+          - '5945'
+          - '5946'
+          - '5947'
+          - '5948'
+          - '5949'
+          - '5950'
+          - '5960'
+          - '5962'
+          - '5963'
+          - '5964'
+          - '5965'
+          - '5966'
+          - '5967'
+          - '5968'
+          - '5969'
+          - '5970'
+          - '5971'
+          - '5972'
+          - '5973'
+          - '5975'
+          - '5976'
+          - '5977'
+          - '5978'
+          - '5983'
+          - '5992'
+          - '5993'
+          - '5994'
+          - '5995'
+          - '5996'
+          - '5997'
+          - '5998'
+          - '5999'
+          - '6010'
+          - '6011'
+          - '6012'
+          - '6051'
+          - '6052'
+          - '6053'
+          - '6054'
+          - '6055'
+          - '6056'
+          - '6057'
+          - '6058'
+          - '6059'
+          - '6060'
+          - '6061'
+          - '6062'
+          - '6063'
+          - '6064'
+          - '6065'
+          - '6066'
+          - '6211'
+          - '6300'
+          - '6399'
+          - '6513'
+          - '6530'
+          - '6540'
+          - '7011'
+          - '7012'
+          - '7032'
+          - '7033'
+          - '7210'
+          - '7211'
+          - '7216'
+          - '7217'
+          - '7221'
+          - '7230'
+          - '7251'
+          - '7261'
+          - '7273'
+          - '7276'
+          - '7277'
+          - '7278'
+          - '7296'
+          - '7297'
+          - '7298'
+          - '7299'
+          - '7311'
+          - '7321'
+          - '7333'
+          - '7338'
+          - '7339'
+          - '7342'
+          - '7349'
+          - '7361'
+          - '7372'
+          - '7375'
+          - '7379'
+          - '7392'
+          - '7393'
+          - '7394'
+          - '7395'
+          - '7399'
+          - '7511'
+          - '7512'
+          - '7513'
+          - '7519'
+          - '7523'
+          - '7531'
+          - '7534'
+          - '7535'
+          - '7538'
+          - '7542'
+          - '7549'
+          - '7622'
+          - '7623'
+          - '7629'
+          - '7631'
+          - '7641'
+          - '7692'
+          - '7699'
+          - '7800'
+          - '7801'
+          - '7802'
+          - '7829'
+          - '7832'
+          - '7841'
+          - '7911'
+          - '7922'
+          - '7929'
+          - '7932'
+          - '7933'
+          - '7941'
+          - '7991'
+          - '7992'
+          - '7993'
+          - '7994'
+          - '7995'
+          - '7996'
+          - '7997'
+          - '7998'
+          - '7999'
+          - '8011'
+          - '8021'
+          - '8031'
+          - '8041'
+          - '8042'
+          - '8043'
+          - '8049'
+          - '8050'
+          - '8062'
+          - '8071'
+          - '8099'
+          - '8111'
+          - '8211'
+          - '8220'
+          - '8241'
+          - '8244'
+          - '8249'
+          - '8299'
+          - '8351'
+          - '8398'
+          - '8641'
+          - '8651'
+          - '8661'
+          - '8675'
+          - '8699'
+          - '8734'
+          - '8911'
+          - '8931'
+          - '8999'
+          - '9211'
+          - '9222'
+          - '9223'
+          - '9311'
+          - '9399'
+          - '9402'
+          - '9405'
+          - '9406'
+          - '9702'
+          - '9950'
+          example: '6060'
+        primary_bank_account_bban:
+          type: string
+          description: The primary bank account of the client.
+          example: 123456-123123123
+        registered_address:
+          type: string
+          description: The registered address of the client.
+          example: 123 Street, City, Country
+        risk_level:
+          type: string
+          description: The risk level of the client according to agreed KYC/AML policies
+            with Zepto.
+          enum:
+          - low
+          - medium
+          - high
+          example: low
+        services:
+          type: object
+          description: The access status of specific platform services provided by
+            Zepto for the client.
+          properties:
+            de:
+              type: string
+              description: The DE service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example:
+              nullable: true
+            payto:
+              type: string
+              description: The PayTo service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example: active
+              nullable: true
+            rtp:
+              type: string
+              description: The RTP service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example: pending
+              nullable: true
+        type:
+          type: string
+          description: The structure type of the client, either 'business' or 'individual'.
+          enum:
+          - business
+          - individual
+          example: business
+        website_url:
+          type: string
+          description: The website URL of the client.
+          example: https://example.com
+    clients.client_business_request:
+      type: object
+      required:
+      - australian_business_number
+      - business_names
+      - business_registration_date
+      - legal_name
+      - merchant_category_code
+      - registered_address
+      - risk_level
+      - services
+      - type
+      - website_url
+      additionalProperties: false
+      properties:
+        austrac_number:
+          type: string
+          description: The AUSTRAC number of the client (if applicable).
+          example: '1234567'
+        australian_business_number:
+          type: string
+          description: The Australian Business Number (ABN) of the client.
+          example: '12345678901'
+          minLength: 11
+          maxLength: 11
+          pattern: "^\\d+$"
+        australian_company_number:
+          type: string
+          description: The Australian Company Number(ACN) of the client. Corresponding
+            `company_incorporation_date` is required when provided.
+          example: '045678901'
+          minLength: 9
+          maxLength: 9
+          pattern: "^\\d+$"
+        australian_credit_licence:
+          type: string
+          description: The Australian Credit Licence of the client (if applicable).
+          example: '123456'
+        australian_financial_services_licence:
+          type: string
+          description: The Australian Financial Services Licence of the client (if
+            applicable).
+          example: '777888999'
+        business_names:
+          type: array
+          description: The business/trading names registered to the client's legal
+            entity.
+          items:
+            type: string
+          example:
+          - Business Name 1
+          - Business Name 2
+        business_registration_date:
+          type: string
+          description: The business registration date of the client.
+          format: date
+          example: '2025-02-01'
+        company_incorporation_date:
+          type: string
+          description: The company incorporation date of the client, must correspond
+            to ACN registration.
+          format: date
+          example: '2025-02-01'
+        contact_information:
+          type: object
+          description: The contact information of the client. Required if RTP services
+            requested.
+          properties:
+            contact_name:
+              type: string
+              description: 'The contact name for the client. Required if RTP services
+                requested. '
+              example: Contact Name
+            email:
+              type: string
+              description: The contact email address for the client. Required if RTP
+                services requested.
+              example: contact@example.com
+            phone:
+              type: string
+              description: The contact phone number for the client. Required if RTP
+                services requested.
+              example: "+61400123456"
+              pattern: "^[\\d\\s\\-+()]+$"
+        legal_name:
+          type: string
+          description: The legal name of the client.
+          example: Legal Name Pty Ltd
+        merchant_category_code:
+          type: string
+          description: The Merchant Category Code (MCC) of the client.
+          enum:
+          - '0742'
+          - '0763'
+          - '0780'
+          - '1520'
+          - '1711'
+          - '1731'
+          - '1740'
+          - '1750'
+          - '1761'
+          - '1771'
+          - '1799'
+          - '2741'
+          - '2791'
+          - '2842'
+          - '4011'
+          - '4111'
+          - '4112'
+          - '4119'
+          - '4121'
+          - '4131'
+          - '4214'
+          - '4215'
+          - '4225'
+          - '4411'
+          - '4457'
+          - '4468'
+          - '4511'
+          - '4582'
+          - '4722'
+          - '4723'
+          - '4784'
+          - '4789'
+          - '4812'
+          - '4814'
+          - '4816'
+          - '4821'
+          - '4829'
+          - '4899'
+          - '4900'
+          - '5013'
+          - '5021'
+          - '5039'
+          - '5044'
+          - '5045'
+          - '5046'
+          - '5047'
+          - '5051'
+          - '5065'
+          - '5072'
+          - '5074'
+          - '5085'
+          - '5094'
+          - '5099'
+          - '5111'
+          - '5122'
+          - '5131'
+          - '5137'
+          - '5139'
+          - '5169'
+          - '5172'
+          - '5192'
+          - '5193'
+          - '5198'
+          - '5199'
+          - '5200'
+          - '5211'
+          - '5231'
+          - '5251'
+          - '5261'
+          - '5262'
+          - '5271'
+          - '5300'
+          - '5309'
+          - '5310'
+          - '5311'
+          - '5331'
+          - '5399'
+          - '5411'
+          - '5422'
+          - '5441'
+          - '5451'
+          - '5462'
+          - '5499'
+          - '5511'
+          - '5521'
+          - '5531'
+          - '5532'
+          - '5533'
+          - '5541'
+          - '5542'
+          - '5551'
+          - '5552'
+          - '5561'
+          - '5571'
+          - '5592'
+          - '5598'
+          - '5599'
+          - '5611'
+          - '5621'
+          - '5631'
+          - '5641'
+          - '5651'
+          - '5655'
+          - '5661'
+          - '5681'
+          - '5691'
+          - '5697'
+          - '5698'
+          - '5699'
+          - '5712'
+          - '5713'
+          - '5714'
+          - '5718'
+          - '5719'
+          - '5722'
+          - '5732'
+          - '5733'
+          - '5734'
+          - '5735'
+          - '5811'
+          - '5812'
+          - '5813'
+          - '5814'
+          - '5815'
+          - '5816'
+          - '5817'
+          - '5818'
+          - '5912'
+          - '5921'
+          - '5931'
+          - '5932'
+          - '5933'
+          - '5935'
+          - '5937'
+          - '5940'
+          - '5941'
+          - '5942'
+          - '5943'
+          - '5944'
+          - '5945'
+          - '5946'
+          - '5947'
+          - '5948'
+          - '5949'
+          - '5950'
+          - '5960'
+          - '5962'
+          - '5963'
+          - '5964'
+          - '5965'
+          - '5966'
+          - '5967'
+          - '5968'
+          - '5969'
+          - '5970'
+          - '5971'
+          - '5972'
+          - '5973'
+          - '5975'
+          - '5976'
+          - '5977'
+          - '5978'
+          - '5983'
+          - '5992'
+          - '5993'
+          - '5994'
+          - '5995'
+          - '5996'
+          - '5997'
+          - '5998'
+          - '5999'
+          - '6010'
+          - '6011'
+          - '6012'
+          - '6051'
+          - '6052'
+          - '6053'
+          - '6054'
+          - '6055'
+          - '6056'
+          - '6057'
+          - '6058'
+          - '6059'
+          - '6060'
+          - '6061'
+          - '6062'
+          - '6063'
+          - '6064'
+          - '6065'
+          - '6066'
+          - '6211'
+          - '6300'
+          - '6399'
+          - '6513'
+          - '6530'
+          - '6540'
+          - '7011'
+          - '7012'
+          - '7032'
+          - '7033'
+          - '7210'
+          - '7211'
+          - '7216'
+          - '7217'
+          - '7221'
+          - '7230'
+          - '7251'
+          - '7261'
+          - '7273'
+          - '7276'
+          - '7277'
+          - '7278'
+          - '7296'
+          - '7297'
+          - '7298'
+          - '7299'
+          - '7311'
+          - '7321'
+          - '7333'
+          - '7338'
+          - '7339'
+          - '7342'
+          - '7349'
+          - '7361'
+          - '7372'
+          - '7375'
+          - '7379'
+          - '7392'
+          - '7393'
+          - '7394'
+          - '7395'
+          - '7399'
+          - '7511'
+          - '7512'
+          - '7513'
+          - '7519'
+          - '7523'
+          - '7531'
+          - '7534'
+          - '7535'
+          - '7538'
+          - '7542'
+          - '7549'
+          - '7622'
+          - '7623'
+          - '7629'
+          - '7631'
+          - '7641'
+          - '7692'
+          - '7699'
+          - '7800'
+          - '7801'
+          - '7802'
+          - '7829'
+          - '7832'
+          - '7841'
+          - '7911'
+          - '7922'
+          - '7929'
+          - '7932'
+          - '7933'
+          - '7941'
+          - '7991'
+          - '7992'
+          - '7993'
+          - '7994'
+          - '7995'
+          - '7996'
+          - '7997'
+          - '7998'
+          - '7999'
+          - '8011'
+          - '8021'
+          - '8031'
+          - '8041'
+          - '8042'
+          - '8043'
+          - '8049'
+          - '8050'
+          - '8062'
+          - '8071'
+          - '8099'
+          - '8111'
+          - '8211'
+          - '8220'
+          - '8241'
+          - '8244'
+          - '8249'
+          - '8299'
+          - '8351'
+          - '8398'
+          - '8641'
+          - '8651'
+          - '8661'
+          - '8675'
+          - '8699'
+          - '8734'
+          - '8911'
+          - '8931'
+          - '8999'
+          - '9211'
+          - '9222'
+          - '9223'
+          - '9311'
+          - '9399'
+          - '9402'
+          - '9405'
+          - '9406'
+          - '9702'
+          - '9950'
+          example: '6060'
+        primary_bank_account_bban:
+          type: string
+          description: The primary bank account of the client.
+          example: 123456-123123123
+        registered_address:
+          type: string
+          description: The registered address of the client.
+          example: 123 Street, City, Country
+        risk_level:
+          type: string
+          description: The risk level of the client according to agreed KYC/AML policies
+            with Zepto.
+          enum:
+          - low
+          - medium
+          - high
+          example: low
+        type:
+          type: string
+          description: The structure type of the client, either 'business' or 'individual'.
+            This will alter which fields are required.
+          enum:
+          - business
+          - individual
+          example: business
+        website_url:
+          type: string
+          description: The website URL of the client.
+          example: https://example.com
+        services:
+          type: array
+          description: Platform services provided by Zepto that the client requires
+            access to. Sub-clients can only use services enabled on the parent account.<br
+            /> PayTo - Includes PayTo mandates and payments<br /> RTP - Includes PayID
+            payments, payouts and refunds<br /> DE - Includes Direct Debit payment
+            requests and Direct Credit payouts<br />
+          items:
+            type: string
+            enum:
+            - payto
+            - rtp
+            - de
+    clients.client_individual_request:
+      type: object
+      required:
+      - business_names
+      - legal_name
+      - merchant_category_code
+      - registered_address
+      - risk_level
+      - services
+      - type
+      additionalProperties: false
+      properties:
+        business_names:
+          type: array
+          description: For `individual` clients, provide the client's legal name.
+          items:
+            type: string
+          example:
+          - Business Name 1
+          - Business Name 2
+        contact_information:
+          type: object
+          description: The contact information of the client. Required if RTP services
+            requested.
+          properties:
+            contact_name:
+              type: string
+              description: 'The contact name for the client. Required if RTP services
+                requested. '
+              example: Contact Name
+            email:
+              type: string
+              description: The contact email address for the client. Required if RTP
+                services requested.
+              example: contact@example.com
+            phone:
+              type: string
+              description: The contact phone number for the client. Required if RTP
+                services requested.
+              example: "+61400000000"
+              pattern: "^[\\d\\s\\-+()]+$"
+        legal_name:
+          type: string
+          description: The legal name of the client.
+          example: Legal Name Pty Ltd
+        merchant_category_code:
+          type: string
+          description: The Merchant Category Code (MCC) of the client.
+          enum:
+          - '0742'
+          - '0763'
+          - '0780'
+          - '1520'
+          - '1711'
+          - '1731'
+          - '1740'
+          - '1750'
+          - '1761'
+          - '1771'
+          - '1799'
+          - '2741'
+          - '2791'
+          - '2842'
+          - '4011'
+          - '4111'
+          - '4112'
+          - '4119'
+          - '4121'
+          - '4131'
+          - '4214'
+          - '4215'
+          - '4225'
+          - '4411'
+          - '4457'
+          - '4468'
+          - '4511'
+          - '4582'
+          - '4722'
+          - '4723'
+          - '4784'
+          - '4789'
+          - '4812'
+          - '4814'
+          - '4816'
+          - '4821'
+          - '4829'
+          - '4899'
+          - '4900'
+          - '5013'
+          - '5021'
+          - '5039'
+          - '5044'
+          - '5045'
+          - '5046'
+          - '5047'
+          - '5051'
+          - '5065'
+          - '5072'
+          - '5074'
+          - '5085'
+          - '5094'
+          - '5099'
+          - '5111'
+          - '5122'
+          - '5131'
+          - '5137'
+          - '5139'
+          - '5169'
+          - '5172'
+          - '5192'
+          - '5193'
+          - '5198'
+          - '5199'
+          - '5200'
+          - '5211'
+          - '5231'
+          - '5251'
+          - '5261'
+          - '5262'
+          - '5271'
+          - '5300'
+          - '5309'
+          - '5310'
+          - '5311'
+          - '5331'
+          - '5399'
+          - '5411'
+          - '5422'
+          - '5441'
+          - '5451'
+          - '5462'
+          - '5499'
+          - '5511'
+          - '5521'
+          - '5531'
+          - '5532'
+          - '5533'
+          - '5541'
+          - '5542'
+          - '5551'
+          - '5552'
+          - '5561'
+          - '5571'
+          - '5592'
+          - '5598'
+          - '5599'
+          - '5611'
+          - '5621'
+          - '5631'
+          - '5641'
+          - '5651'
+          - '5655'
+          - '5661'
+          - '5681'
+          - '5691'
+          - '5697'
+          - '5698'
+          - '5699'
+          - '5712'
+          - '5713'
+          - '5714'
+          - '5718'
+          - '5719'
+          - '5722'
+          - '5732'
+          - '5733'
+          - '5734'
+          - '5735'
+          - '5811'
+          - '5812'
+          - '5813'
+          - '5814'
+          - '5815'
+          - '5816'
+          - '5817'
+          - '5818'
+          - '5912'
+          - '5921'
+          - '5931'
+          - '5932'
+          - '5933'
+          - '5935'
+          - '5937'
+          - '5940'
+          - '5941'
+          - '5942'
+          - '5943'
+          - '5944'
+          - '5945'
+          - '5946'
+          - '5947'
+          - '5948'
+          - '5949'
+          - '5950'
+          - '5960'
+          - '5962'
+          - '5963'
+          - '5964'
+          - '5965'
+          - '5966'
+          - '5967'
+          - '5968'
+          - '5969'
+          - '5970'
+          - '5971'
+          - '5972'
+          - '5973'
+          - '5975'
+          - '5976'
+          - '5977'
+          - '5978'
+          - '5983'
+          - '5992'
+          - '5993'
+          - '5994'
+          - '5995'
+          - '5996'
+          - '5997'
+          - '5998'
+          - '5999'
+          - '6010'
+          - '6011'
+          - '6012'
+          - '6051'
+          - '6052'
+          - '6053'
+          - '6054'
+          - '6055'
+          - '6056'
+          - '6057'
+          - '6058'
+          - '6059'
+          - '6060'
+          - '6061'
+          - '6062'
+          - '6063'
+          - '6064'
+          - '6065'
+          - '6066'
+          - '6211'
+          - '6300'
+          - '6399'
+          - '6513'
+          - '6530'
+          - '6540'
+          - '7011'
+          - '7012'
+          - '7032'
+          - '7033'
+          - '7210'
+          - '7211'
+          - '7216'
+          - '7217'
+          - '7221'
+          - '7230'
+          - '7251'
+          - '7261'
+          - '7273'
+          - '7276'
+          - '7277'
+          - '7278'
+          - '7296'
+          - '7297'
+          - '7298'
+          - '7299'
+          - '7311'
+          - '7321'
+          - '7333'
+          - '7338'
+          - '7339'
+          - '7342'
+          - '7349'
+          - '7361'
+          - '7372'
+          - '7375'
+          - '7379'
+          - '7392'
+          - '7393'
+          - '7394'
+          - '7395'
+          - '7399'
+          - '7511'
+          - '7512'
+          - '7513'
+          - '7519'
+          - '7523'
+          - '7531'
+          - '7534'
+          - '7535'
+          - '7538'
+          - '7542'
+          - '7549'
+          - '7622'
+          - '7623'
+          - '7629'
+          - '7631'
+          - '7641'
+          - '7692'
+          - '7699'
+          - '7800'
+          - '7801'
+          - '7802'
+          - '7829'
+          - '7832'
+          - '7841'
+          - '7911'
+          - '7922'
+          - '7929'
+          - '7932'
+          - '7933'
+          - '7941'
+          - '7991'
+          - '7992'
+          - '7993'
+          - '7994'
+          - '7995'
+          - '7996'
+          - '7997'
+          - '7998'
+          - '7999'
+          - '8011'
+          - '8021'
+          - '8031'
+          - '8041'
+          - '8042'
+          - '8043'
+          - '8049'
+          - '8050'
+          - '8062'
+          - '8071'
+          - '8099'
+          - '8111'
+          - '8211'
+          - '8220'
+          - '8241'
+          - '8244'
+          - '8249'
+          - '8299'
+          - '8351'
+          - '8398'
+          - '8641'
+          - '8651'
+          - '8661'
+          - '8675'
+          - '8699'
+          - '8734'
+          - '8911'
+          - '8931'
+          - '8999'
+          - '9211'
+          - '9222'
+          - '9223'
+          - '9311'
+          - '9399'
+          - '9402'
+          - '9405'
+          - '9406'
+          - '9702'
+          - '9950'
+          example: '6060'
+        primary_bank_account_bban:
+          type: string
+          description: The primary bank account of the client.
+          example: 123456-123123123
+        registered_address:
+          type: string
+          description: The registered address of the client.
+          example: 123 Street, City, Country
+        risk_level:
+          type: string
+          description: The risk level of the client according to agreed KYC/AML policies
+            with Zepto.
+          enum:
+          - low
+          - medium
+          - high
+          example: low
+        services:
+          type: array
+          description: Platform services provided by Zepto that the client requires
+            access to. Sub-clients can only use services enabled on the parent account.
+            <br /> `rtp` is not available for `individual` types.
+          properties:
+            de:
+              type: string
+              description: The DE service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example:
+              nullable: true
+            payto:
+              type: string
+              description: The PayTo service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example: active
+              nullable: true
+            rtp:
+              type: string
+              description: The RTP service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example: pending
+              nullable: true
+          items:
+            type: string
+            enum:
+            - payto
+            - rtp
+            - de
+        type:
+          type: string
+          description: The structure type of the client, either 'business' or 'individual'.
+            This will alter which fields are required. Type `individual` is restricted
+            by default, please contact Zepto for information on enabling.
+          enum:
+          - business
+          - individual
+          example: business
+    clients.client_request:
+      type: object
+      oneOf:
+      - "$ref": "#/components/schemas/clients.client_business_request"
+      - "$ref": "#/components/schemas/clients.client_individual_request"
+      discriminator:
+        propertyName: type
+        mapping:
+          business: "#/components/schemas/clients.client_business_request"
+          individual: "#/components/schemas/clients.client_individual_request"
+    clients.client_response:
+      type: object
+      additionalProperties: false
+      properties:
+        austrac_number:
+          type: string
+          description: The AUSTRAC number of the client (if applicable).
+          example: '1234567'
+          nullable: true
+        australian_business_number:
+          type: string
+          description: The Australian Business Number (ABN) of the client.
+          example: '12345678901'
+          minLength: 11
+          maxLength: 11
+          pattern: "^\\d+$"
+          nullable: true
+        australian_company_number:
+          type: string
+          description: The Australian Company Number (ACN) of the client.
+          example: '045678901'
+          minLength: 9
+          maxLength: 9
+          pattern: "^\\d+$"
+          nullable: true
+        australian_credit_licence:
+          type: string
+          description: The Australian Credit Licence of the client (if applicable).
+          example: '123456'
+          nullable: true
+        australian_financial_services_licence:
+          type: string
+          description: The Australian Financial Services Licence of the client (if
+            applicable).
+          example: '777888999'
+          nullable: true
+        business_names:
+          type: array
+          description: The business/trading names registered to the client's legal
+            entity. For `individual` clients, this should be the client's legal name.
+          items:
+            type: string
+          example:
+          - Business Name 1
+          - Business Name 2
+        business_registration_date:
+          type: string
+          description: The business registration date of the client.
+          format: date
+          example: '2025-02-01'
+          nullable: true
+        company_incorporation_date:
+          type: string
+          description: The company incorporation date of the client.
+          format: date
+          example: '2025-02-01'
+          nullable: true
+        contact_information:
+          type: object
+          description: The contact information of the client. Required if RTP services
+            requested.
+          properties:
+            contact_name:
+              type: string
+              description: 'The contact name for the client. Required if RTP services
+                requested. '
+              example: Contact Name
+              nullable: true
+            email:
+              type: string
+              description: The contact email address for the client. Required if RTP
+                services requested.
+              example: contact@example.com
+              nullable: true
+            phone:
+              type: string
+              description: The contact phone number for the client. Required if RTP
+                services requested.
+              example: "+61400123456"
+              pattern: "^[\\d\\s\\-+()]+$"
+              nullable: true
+        id:
+          type: string
+          description: The unique identifier of the client (UUIDv7).
+          example: '01955dea-b445-7841-a145-77b4b2c00089'
+        legal_name:
+          type: string
+          description: The legal name of the client.
+          example: Legal Name Pty Ltd
+        merchant_category_code:
+          type: string
+          description: The Merchant Category Code (MCC) of the client.
+          enum:
+          - '0742'
+          - '0763'
+          - '0780'
+          - '1520'
+          - '1711'
+          - '1731'
+          - '1740'
+          - '1750'
+          - '1761'
+          - '1771'
+          - '1799'
+          - '2741'
+          - '2791'
+          - '2842'
+          - '4011'
+          - '4111'
+          - '4112'
+          - '4119'
+          - '4121'
+          - '4131'
+          - '4214'
+          - '4215'
+          - '4225'
+          - '4411'
+          - '4457'
+          - '4468'
+          - '4511'
+          - '4582'
+          - '4722'
+          - '4723'
+          - '4784'
+          - '4789'
+          - '4812'
+          - '4814'
+          - '4816'
+          - '4821'
+          - '4829'
+          - '4899'
+          - '4900'
+          - '5013'
+          - '5021'
+          - '5039'
+          - '5044'
+          - '5045'
+          - '5046'
+          - '5047'
+          - '5051'
+          - '5065'
+          - '5072'
+          - '5074'
+          - '5085'
+          - '5094'
+          - '5099'
+          - '5111'
+          - '5122'
+          - '5131'
+          - '5137'
+          - '5139'
+          - '5169'
+          - '5172'
+          - '5192'
+          - '5193'
+          - '5198'
+          - '5199'
+          - '5200'
+          - '5211'
+          - '5231'
+          - '5251'
+          - '5261'
+          - '5262'
+          - '5271'
+          - '5300'
+          - '5309'
+          - '5310'
+          - '5311'
+          - '5331'
+          - '5399'
+          - '5411'
+          - '5422'
+          - '5441'
+          - '5451'
+          - '5462'
+          - '5499'
+          - '5511'
+          - '5521'
+          - '5531'
+          - '5532'
+          - '5533'
+          - '5541'
+          - '5542'
+          - '5551'
+          - '5552'
+          - '5561'
+          - '5571'
+          - '5592'
+          - '5598'
+          - '5599'
+          - '5611'
+          - '5621'
+          - '5631'
+          - '5641'
+          - '5651'
+          - '5655'
+          - '5661'
+          - '5681'
+          - '5691'
+          - '5697'
+          - '5698'
+          - '5699'
+          - '5712'
+          - '5713'
+          - '5714'
+          - '5718'
+          - '5719'
+          - '5722'
+          - '5732'
+          - '5733'
+          - '5734'
+          - '5735'
+          - '5811'
+          - '5812'
+          - '5813'
+          - '5814'
+          - '5815'
+          - '5816'
+          - '5817'
+          - '5818'
+          - '5912'
+          - '5921'
+          - '5931'
+          - '5932'
+          - '5933'
+          - '5935'
+          - '5937'
+          - '5940'
+          - '5941'
+          - '5942'
+          - '5943'
+          - '5944'
+          - '5945'
+          - '5946'
+          - '5947'
+          - '5948'
+          - '5949'
+          - '5950'
+          - '5960'
+          - '5962'
+          - '5963'
+          - '5964'
+          - '5965'
+          - '5966'
+          - '5967'
+          - '5968'
+          - '5969'
+          - '5970'
+          - '5971'
+          - '5972'
+          - '5973'
+          - '5975'
+          - '5976'
+          - '5977'
+          - '5978'
+          - '5983'
+          - '5992'
+          - '5993'
+          - '5994'
+          - '5995'
+          - '5996'
+          - '5997'
+          - '5998'
+          - '5999'
+          - '6010'
+          - '6011'
+          - '6012'
+          - '6051'
+          - '6052'
+          - '6053'
+          - '6054'
+          - '6055'
+          - '6056'
+          - '6057'
+          - '6058'
+          - '6059'
+          - '6060'
+          - '6061'
+          - '6062'
+          - '6063'
+          - '6064'
+          - '6065'
+          - '6066'
+          - '6211'
+          - '6300'
+          - '6399'
+          - '6513'
+          - '6530'
+          - '6540'
+          - '7011'
+          - '7012'
+          - '7032'
+          - '7033'
+          - '7210'
+          - '7211'
+          - '7216'
+          - '7217'
+          - '7221'
+          - '7230'
+          - '7251'
+          - '7261'
+          - '7273'
+          - '7276'
+          - '7277'
+          - '7278'
+          - '7296'
+          - '7297'
+          - '7298'
+          - '7299'
+          - '7311'
+          - '7321'
+          - '7333'
+          - '7338'
+          - '7339'
+          - '7342'
+          - '7349'
+          - '7361'
+          - '7372'
+          - '7375'
+          - '7379'
+          - '7392'
+          - '7393'
+          - '7394'
+          - '7395'
+          - '7399'
+          - '7511'
+          - '7512'
+          - '7513'
+          - '7519'
+          - '7523'
+          - '7531'
+          - '7534'
+          - '7535'
+          - '7538'
+          - '7542'
+          - '7549'
+          - '7622'
+          - '7623'
+          - '7629'
+          - '7631'
+          - '7641'
+          - '7692'
+          - '7699'
+          - '7800'
+          - '7801'
+          - '7802'
+          - '7829'
+          - '7832'
+          - '7841'
+          - '7911'
+          - '7922'
+          - '7929'
+          - '7932'
+          - '7933'
+          - '7941'
+          - '7991'
+          - '7992'
+          - '7993'
+          - '7994'
+          - '7995'
+          - '7996'
+          - '7997'
+          - '7998'
+          - '7999'
+          - '8011'
+          - '8021'
+          - '8031'
+          - '8041'
+          - '8042'
+          - '8043'
+          - '8049'
+          - '8050'
+          - '8062'
+          - '8071'
+          - '8099'
+          - '8111'
+          - '8211'
+          - '8220'
+          - '8241'
+          - '8244'
+          - '8249'
+          - '8299'
+          - '8351'
+          - '8398'
+          - '8641'
+          - '8651'
+          - '8661'
+          - '8675'
+          - '8699'
+          - '8734'
+          - '8911'
+          - '8931'
+          - '8999'
+          - '9211'
+          - '9222'
+          - '9223'
+          - '9311'
+          - '9399'
+          - '9402'
+          - '9405'
+          - '9406'
+          - '9702'
+          - '9950'
+          example: '6060'
+        primary_bank_account_bban:
+          type: string
+          description: The primary bank account of the client.
+          example: 123456-123123123
+          nullable: true
+        registered_address:
+          type: string
+          description: The registered address of the client.
+          example: 123 Street, City, Country
+        risk_level:
+          type: string
+          description: The risk level of the client according to agreed KYC/AML policies
+            with Zepto.
+          enum:
+          - low
+          - medium
+          - high
+          example: low
+        services:
+          type: object
+          description: The access status of specific platform services provided by
+            Zepto for the client.
+          properties:
+            de:
+              type: string
+              description: The DE service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example:
+              nullable: true
+            payto:
+              type: string
+              description: The PayTo service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example: active
+              nullable: true
+            rtp:
+              type: string
+              description: The RTP service of the client.
+              enum:
+              - pending
+              - active
+              - suspended
+              - off_boarded
+              example: pending
+              nullable: true
+        type:
+          type: string
+          description: The structure type of the client, either 'business' or 'individual'.
+          enum:
+          - business
+          - individual
+          example: business
+        website_url:
+          type: string
+          description: The website URL of the client.
+          example: https://example.com
+          nullable: true
+    clients.client_update_request:
+      type: object
+      additionalProperties: false
+      properties:
+        business_names:
+          type: array
+          description: The business/trading names registered to the client's legal
+            entity. For `individual` clients, this should be the client's legal name.
+          items:
+            type: string
+          example:
+          - Business Name 1
+          - Business Name 2
+        contact_information:
+          type: object
+          description: The contact information of the client. Required if RTP services
+            requested.
+          properties:
+            contact_name:
+              type: string
+              description: 'The contact name for the client. Required if RTP services
+                requested. '
+              example: Contact Name
+            email:
+              type: string
+              description: The contact email address for the client. Required if RTP
+                services requested.
+              example: contact@example.com
+            phone:
+              type: string
+              description: The contact phone number for the client. Required if RTP
+                services requested.
+              example: "+61400123456"
+              pattern: "^[\\d\\s\\-+()]+$"
+        legal_name:
+          type: string
+          description: The legal name of the client.
+          example: Legal Name Pty Ltd
+        registered_address:
+          type: string
+          description: The registered address of the client.
+          example: 123 Street, City, Country
+        website_url:
+          type: string
+          description: The website URL of the client.
+          example: https://example.com
+    clients.errors:
+      type: object
+      properties:
+        errors:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              title:
+                type: string
+                example: Title of error
+              detail:
+                type: string
+                description: A short description of the error
+                example: Description of error
+              links:
+                type: object
+                properties:
+                  about:
+                    type: string
+                    description: An optional link to more information on the error
+                    example: https://docs.zeptopayments.com/docs/zepto-environments
+                required:
+                - about
+                nullable: true
+            required:
+            - title
+            - detail
+      required:
+      - errors
+    clients.list:
+      type: object
+      properties:
+        links:
+          type: object
+          properties:
+            next:
+              type: string
+              description: URL for next page of results. Won't be present if there
+                are no further pages.
+          example: {}
+        data:
+          type: array
+          items:
+            "$ref": "#/components/schemas/clients.client_response"

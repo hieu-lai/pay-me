@@ -40,6 +40,8 @@ type Env = {
   readonly PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION: string;
   readonly PAYMENT_DESTINATION_ENCRYPTION_KEYS: string;
   readonly PAYMENT_DESTINATION_FINGERPRINT_KEY: string;
+  readonly ZEPTO_ENVIRONMENT: "sandbox" | "production" | undefined;
+  readonly ZEPTO_PERSONAL_ACCESS_TOKEN: string | undefined;
 };
 
 /**

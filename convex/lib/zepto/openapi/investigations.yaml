@@ -1,0 +1,851 @@
+---
+openapi: 3.1.0
+info:
+  title: Zepto Investigations API
+  version: '20260101'
+  description: Documentation for the Zepto Investigations API.
+  termsOfService: https://www.zepto.com.au/customer-terms
+  contact:
+    email: support@zepto.com.au
+tags:
+- name: Disputes (Beta)
+  description: The Zepto Disputes API is for managing disputes. Access to this API
+    is limited. Please contact Zepto for more information.
+security:
+- bearerAuth: []
+paths:
+  "/investigations/action_requests/{action_request_id}/accept":
+    post:
+      summary: accept dispute
+      tags:
+      - Disputes (Beta)
+      parameters:
+      - name: action_request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          example: '019708f5-1e6a-28ca-0306-fa0af0104ce4'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  data:
+                    "$ref": "#/components/schemas/investigations.dispute"
+        '404':
+          description: Not Found
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - errors
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - title
+                      - detail
+                      properties:
+                        title:
+                          type: string
+                          description: A short, human-readable summary of the problem
+                        detail:
+                          type: string
+                          description: A human-readable explanation specific to this
+                            occurrence of the problem
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/investigations.action_request.accept_request"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/investigations/action_requests/{action_request_id}/reject":
+    post:
+      summary: reject dispute
+      tags:
+      - Disputes (Beta)
+      parameters:
+      - name: action_request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          example: '019708f5-1e6a-28ca-0306-fa0af0104ce4'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  data:
+                    "$ref": "#/components/schemas/investigations.dispute"
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - errors
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - title
+                      - detail
+                      properties:
+                        title:
+                          type: string
+                          description: A short, human-readable summary of the problem
+                        detail:
+                          type: string
+                          description: A human-readable explanation specific to this
+                            occurrence of the problem
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/investigations.action_request.reject_request"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/investigations/action_requests/{action_request_id}/upload":
+    post:
+      summary: upload evidence
+      tags:
+      - Disputes (Beta)
+      parameters:
+      - name: action_request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          example: '019708f5-1e6a-28ca-0306-fa0af0104ce4'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  data:
+                    "$ref": "#/components/schemas/investigations.upload"
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - errors
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - title
+                      - detail
+                      properties:
+                        title:
+                          type: string
+                          description: A short, human-readable summary of the problem
+                        detail:
+                          type: string
+                          description: A human-readable explanation specific to this
+                            occurrence of the problem
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: string
+              format: binary
+              example: example.pdf
+        required: true
+        description: The file to upload. Must be PDF format.
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/investigations/disputes":
+    get:
+      summary: list disputes
+      tags:
+      - Disputes (Beta)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      "$ref": "#/components/schemas/investigations.dispute"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/investigations/disputes/{dispute_id}":
+    get:
+      summary: show dispute
+      tags:
+      - Disputes (Beta)
+      parameters:
+      - name: dispute_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          example: '0196fb12-c12f-c223-ae0c-9781ee6ce044'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  data:
+                    "$ref": "#/components/schemas/investigations.dispute"
+        '404':
+          description: Not Found
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/investigations/simulate_incoming_message":
+    post:
+      summary: simulate incoming message (sandbox only)
+      tags:
+      - Disputes (Beta)
+      description: Simulate an incoming dispute message in sandbox environment
+      parameters: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  data:
+                    "$ref": "#/components/schemas/investigations.incoming_message_simulation"
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - errors
+                - jsonapi
+                properties:
+                  jsonapi:
+                    type: object
+                    required:
+                    - version
+                    properties:
+                      version:
+                        type: string
+                        enum:
+                        - '1.0'
+                        example: '1.0'
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - title
+                      - detail
+                      properties:
+                        title:
+                          type: string
+                          description: A short, human-readable summary of the problem
+                        detail:
+                          type: string
+                          description: A human-readable explanation specific to this
+                            occurrence of the problem
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/investigations.simulate_incoming_message_request"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+webhooks:
+  investigations.action_requested:
+    post:
+      summary: Investigation Action Requested
+      description: This webhook is triggered when an action is requested for an investigation.
+      tags:
+      - Disputes (Beta)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/investigations.event"
+      responses:
+        '200':
+          description: Successfully received webhook.
+  investigations.message_received:
+    post:
+      summary: Investigation Message Received
+      description: This webhook is triggered when a new message relating to an investigation
+        is received.
+      tags:
+      - Disputes (Beta)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/investigations.message"
+      responses:
+        '200':
+          description: Successfully received webhook.
+  investigations.message_sent:
+    post:
+      summary: Investigation Message Sent
+      description: This webhook is triggered when a new message relating to an investigation
+        is sent.
+      tags:
+      - Disputes (Beta)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/investigations.message"
+      responses:
+        '200':
+          description: Successfully received webhook.
+servers:
+- description: Zepto Sandbox
+  url: https://api.sandbox.zeptopayments.com
+- description: Zepto Production
+  url: https://api.zeptopayments.com
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    ZeptoAPIVersion:
+      name: Zepto-API-Version
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: "^\\d{8}$"
+        default: '20250101'
+        example: '20260101'
+      description: API version in YYYYMMDD format. Defaults to 20250101 (legacy) when
+        omitted.
+  schemas:
+    investigations.action_request.accept_request:
+      type: object
+      required:
+      - amount_returned
+      - return_transaction_identification
+      additionalProperties: false
+      properties:
+        amount_returned:
+          type: object
+          required:
+          - currency
+          - value
+          additionalProperties: false
+          properties:
+            currency:
+              type: string
+              description: The currency of the amount returned.
+              enum:
+              - AUD
+              example: AUD
+            value:
+              type: integer
+              description: The value of the amount returned in cents.
+              example: 100
+        return_transaction_identification:
+          type: string
+          description: The unique identifier for the return transaction.
+          example: lbkmya1jg83uqr9d1ytogr6wpwdzz9bjwgs
+    investigations.action_request.reject_request:
+      type: object
+      required:
+      - reason
+      additionalProperties: false
+      properties:
+        reason:
+          type: object
+          required:
+          - code
+          - description
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              description: The reason code for rejecting the request. It should be
+                a valid value from the [ISO20022 ExternalRejectedReason1Code set](https://www.iso20022.org/catalogue-messages/additional-content-messages/external-code-sets).
+              enum:
+              - ADEA
+              - BDAY
+              - CTRC
+              - DPRG
+              - INDT
+              - MISM
+              - NAUT
+              - NINS
+              - NOAC
+              - TERM
+              - ASBR
+              - AB15
+              - AB26
+              - AB12
+              - DT07
+              - AB13
+              - AB21
+              - ISWS
+              - MISN
+              - NOFR
+              - RC14
+              - RC16
+              - RC15
+              - RC13
+              - SBRN
+              example: NAUT
+            description:
+              type: string
+              description: A description of the reason for rejection.
+              example: Item was delivered (see uploaded evidence)
+    investigations.dispute:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - type
+      properties:
+        id:
+          type: string
+          description: The unique identifier for the dispute
+          format: uuid
+          example: '0196f9a6-c8ba-9b54-2913-5e0a8d42dd40'
+        type:
+          type: string
+          enum:
+          - disputes
+        attributes:
+          type: object
+          required:
+          - raised_at
+          - state
+          properties:
+            raised_at:
+              type: string
+              format: date-time
+              description: The date and time when the dispute was raised
+              example: '2025-05-23T12:00:00Z'
+            state:
+              type: string
+              description: The current state of the dispute
+              enum:
+              - open
+              - awaiting_merchant
+              - closed
+              example: open
+        links:
+          type: object
+          required:
+          - self
+          properties:
+            self:
+              type: string
+              format: uri
+              description: The URL to access the dispute
+              example: "/investigations/disputes/0196f9a6-c8ba-9b54-2913-5e0a8d42dd40"
+        relationships:
+          type: object
+          required:
+          - events
+          - uploads
+          properties:
+            events:
+              type: object
+              properties:
+                data:
+                  type: array
+                  items:
+                    "$ref": "#/components/schemas/investigations.event"
+                meta:
+                  type: object
+                  properties:
+                    included:
+                      type: boolean
+                      description: Indicates if the events are included in the response
+                      example: false
+            uploads:
+              type: object
+              properties:
+                data:
+                  type: array
+                  items:
+                    "$ref": "#/components/schemas/investigations.upload"
+                meta:
+                  type: object
+                  properties:
+                    included:
+                      type: boolean
+                      description: Indicates if the uploads are included in the response
+                      example: false
+    investigations.event:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - type
+      properties:
+        id:
+          type: string
+          description: The unique identifier for the event
+          format: uuid
+          example: '0196f9a7-1aca-54a5-ba76-722e8e70deda'
+        type:
+          type: string
+          enum:
+          - events
+          description: The type of the resource
+        attributes:
+          type: object
+          required:
+          - at
+          - title
+          - detail
+          properties:
+            at:
+              type: string
+              format: date-time
+              description: The date and time when the event occurred
+              example: '2025-05-23T14:30:00Z'
+            title:
+              type: string
+              description: The title of the event
+              enum:
+              - OFI raised dispute
+              - Merchant accepted dispute
+              - Merchant action requested
+              - Merchant rejected dispute
+            detail:
+              type: string
+              description: The detailed description of the event
+              enum:
+              - Payer's bank raised a dispute
+              - Merchant acknowledged dispute was founded and has returned funds
+              - Zepto requested merchant to take action
+              - Merchant rejected dispute with evidence
+    investigations.incoming_message_simulation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          enum:
+          - 00000000-0000-0000-0000-000000000000
+          example: 00000000-0000-0000-0000-000000000000
+        type:
+          type: string
+          enum:
+          - incoming_message_simulations
+          example: incoming_message_simulations
+    investigations.message:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - type
+      properties:
+        id:
+          type: string
+          description: The unique identifier for the event
+          format: uuid
+          example: '0196f9a7-1aca-54a5-ba76-722e8e70deda'
+        type:
+          type: string
+          enum:
+          - messages
+          description: The type of the resource
+        attributes:
+          type: object
+          required:
+          - camt_message
+          - direction
+          properties:
+            camt_message:
+              type: object
+              summary: The CAMT.035 message data.
+            direction:
+              type: string
+              enum:
+              - incoming
+              - outgoing
+              description: The direction of the message ('incoming' or 'outgoing').
+        meta:
+          type: object
+          properties:
+            codes:
+              type: object
+              summary: A map of relevant codes to their meanings.
+              description: The keys of this object are the codes themselves and the
+                values are strings representing their meanings.
+    investigations.simulate_incoming_message_request:
+      discriminator:
+        propertyName: simulate_action_request
+        mapping:
+          'true': "#/components/schemas/investigations.simulate_incoming_message_request_with_action_request"
+          'false': "#/components/schemas/investigations.simulate_incoming_message_request_without_action_request"
+      oneOf:
+      - "$ref": "#/components/schemas/investigations.simulate_incoming_message_request_with_action_request"
+      - "$ref": "#/components/schemas/investigations.simulate_incoming_message_request_without_action_request"
+    investigations.simulate_incoming_message_request_with_action_request:
+      type: object
+      required:
+      - simulate_action_request
+      - investigation_type_code
+      - investigation_reason_code
+      - original_transaction_identification
+      - narrative
+      additionalProperties: false
+      properties:
+        simulate_action_request:
+          type: boolean
+          description: Flag to trigger the `action_requested` webhook. When enabled,
+            `investigation_type_code` must be `INV13` or `INV14`.
+          example: true
+        investigation_type_code:
+          type: string
+          description: The type of investigation to be simulated.
+          enum:
+          - INV13
+          - INV14
+          example: INV13
+        investigation_reason_code:
+          type: string
+          description: The reason code for the investigation (eg from the [ISO20022
+            ExternalReturnReason1Code set](https://www.iso20022.org/catalogue-messages/additional-content-messages/external-code-sets)).
+          example: CUST
+        original_transaction_identification:
+          type: string
+          description: The original transaction identification related to the investigation.
+            It must relate to a PayTo payment submission for a mandate owned by the
+            merchant.
+          example: '0196fb4e-3611-8c42-fffc-7f6852dddbc4'
+        narrative:
+          type: string
+          description: The narrative for the investigation (freeform text, slash-delimited).
+            It is omitted from the `message_received` webhook but is included in `action_requested`
+            webhook.
+          example: "/SomeKey1/SomeValue1//SomeKey2/SomeValue2/"
+    investigations.simulate_incoming_message_request_without_action_request:
+      type: object
+      required:
+      - simulate_action_request
+      - investigation_type_code
+      - investigation_reason_code
+      - original_transaction_identification
+      - narrative
+      additionalProperties: false
+      properties:
+        simulate_action_request:
+          type: boolean
+          description: Flag to trigger the `action_requested` webhook. When enabled,
+            `investigation_type_code` must be `INV13` or `INV14`.
+          example: true
+        investigation_type_code:
+          type: string
+          description: The type of investigation to be simulated.
+          enum:
+          - INV1
+          - INV2
+          - INV3
+          - INV4
+          - INV5
+          - INV6
+          - INV7
+          - INV8
+          - INV9
+          - INV10
+          - INV11
+          - INV12
+          - INV13
+          - INV14
+          - INV15
+          - INV16
+          - INV17
+          - INV18
+          example: INV13
+        investigation_reason_code:
+          type: string
+          description: The reason code for the investigation (eg from the [ISO20022
+            ExternalReturnReason1Code set](https://www.iso20022.org/catalogue-messages/additional-content-messages/external-code-sets)).
+          example: CUST
+        original_transaction_identification:
+          type: string
+          description: The original transaction identification related to the investigation.
+            It must relate to a PayTo payment submission for a mandate owned by the
+            merchant.
+          example: '0196fb4e-3611-8c42-fffc-7f6852dddbc4'
+        narrative:
+          type: string
+          description: The narrative for the investigation (freeform text, slash-delimited).
+            It is omitted from the `message_received` webhook but is included in `action_requested`
+            webhook.
+          example: "/SomeKey1/SomeValue1//SomeKey2/SomeValue2/"
+    investigations.upload:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - type
+      properties:
+        id:
+          type: string
+          description: The unique identifier for the upload
+          format: uuid
+          example: '0196f9a7-3465-ae88-7cc8-6fabacb573bc'
+        type:
+          type: string
+          enum:
+          - uploads
+          description: The type of the resource
+        attributes:
+          type: object
+          required:
+          - urn
+          properties:
+            urn:
+              type: string
+              description: The URN of the upload
+              example: urn:example:0196f9a7-3465-ae88-7cc8-6fabacb573bc
+        relationships:
+          type: object
+          required:
+          - dispute
+          properties:
+            dispute:
+              type: object
+              properties:
+                data:
+                  "$ref": "#/components/schemas/investigations.dispute"

@@ -1,0 +1,4954 @@
+---
+openapi: 3.1.0
+info:
+  title: Zepto API
+  contact:
+    email: support@zepto.com.au
+  description: Zepto allows you to make, get and manage payments using nothing but
+    bank accounts.
+  version: '1.0'
+servers:
+- url: https://api.sandbox.zeptopayments.com
+  description: Sandbox API server
+- url: https://api.zeptopayments.com
+  description: Production API server
+tags:
+- name: Agreements
+  description: |
+    An Agreement is an arrangement between two parties that allows them to agree on terms for which future Payment Requests will be auto-approved.
+
+    Zepto Agreements are managed on a per Contact basis, and if a Payment Request is sent for an amount that exceeds the terms of the agreement, it will not be created.
+    Please refer to the [What is an Agreement](https://help.zepto.money/articles/3094575-what-is-an-agreement) article in our knowledge base for an overview.
+    <div class="middle-header">Direction</div>
+
+    Agreements are therefore broken up by direction:
+
+    1. **Outgoing:** Agreement sent to one of your Contacts
+    2. **Outgoing:** Agreement sent to another Zepto account [Deprecated]
+    3. **Incoming:** Agreement received from another Zepto account [Deprecated]
+
+    ##Lifecycle
+
+    An Agreement can have the following statuses:
+
+    | Status | Description |
+    |-------|-------------|
+    | `proposed` | Waiting for the Agreement to be accepted or declined. |
+    | `accepted` | The Agreement has been accepted and is active. |
+    | `cancelled` | The Agreement has been cancelled (The initiator or authoriser can cancel an Agreement). |
+    | `declined` | The Agreement has been declined. |
+    | `expended` | The Agreement has been expended (Only for [single_use Unassigned Agreements](/#Zepto-API-Unassigned-Agreements)). |
+- name: Bank Accounts
+  description: 'Your currently linked up bank accounts.
+
+    '
+- name: Contacts
+  description: |
+    Your Contacts form an address book of parties with whom you can interact. In order to initiate any type of transaction you must first have the party in your Contact list.
+
+    <aside class="notice">In the case of Open Agreements, the authorising party will be automatically added to your Contacts list.</aside>
+- name: Bank Connections
+  description: |
+    Bank connections are read-only connections to your contacts' banking data. This allows Zepto (and yourself) to make intelligent transactional decisions leading to better outcomes.
+
+    Use these endpoints to:
+
+      * List your bank connections and check their status
+      * Retrieve a link that you can share with your contact to update their invalidated bank connection (e.g Their online banking credentials have changed)
+
+    <aside class="notice">To access these endpoints on behalf of another account via OAuth2, your application must request (and the user must authorise) <a href="#configuration">the bank_connections scope</a>.</aside>
+    <aside class="notice">Looking to add a new bank connection to a contact? See the <a href="#get-a-contact">get a contact endpoint</a></aside>
+- name: Payments
+  description: |
+    A Payment is used to disburse funds to your Contacts.
+
+    Supported payment rails:
+
+    * **NPP**: New Payments Platform (Real-time)
+    * **DE / BECS**: Direct Entry / Bulk Electronic Clearing System (Slower)
+
+    ##Lifecycle
+    > Example payout reversal response
+
+    ```json
+    {
+      "data": [
+      {
+        "ref": "C.3",
+        "parent_ref": "PB.1",
+        "type": "credit",
+        "category": "payout_reversal",
+        "created_at": "2021-04-07T23:15:00Z",
+        "matures_at": "2021-04-07T23:15:00Z",
+        "cleared_at": null,
+        "bank_ref": null,
+        "status": "maturing",
+        "status_changed_at": "2016-12-08T23:15:00Z",
+        "party_contact_id": "26297f44-c5e1-40a1-9864-3e0b0754c32a",
+        "party_name": "Sanford-Rees",
+        "party_nickname": "sanford-rees-8",
+        "description": "Payout reversal of D.1 for Sanford-Rees due to no account or incorrect account number"
+          "amount": 1,
+        "reversal_details": {
+          "source_debit_ref": "D.1",
+          "source_credit_failure": {
+            "code": "E105",
+            "title": "Account Not Found",
+            "detail": "The target account number is incorrect."
+          }
+        }
+      }
+      ]
+    }
+    ```
+    A Payment is simply a group of Payouts, therefore it does not have a particular status. Its Payouts however have their status regularly updated. For a list of possible Payout statuses check out the [Transactions](/#Zepto-API-Transactions).
+
+      <aside class="notice">
+        Zepto no longer supports multiple Payouts within a single Payment request. A Payment request must only contain 1 Payout object.
+      </aside>
+
+
+    ### Payout Reversal
+    When Zepto is unable to credit funds to a recipient, we will automatically create a payout reversal credit back to the payer. Furthermore, within the payout reversal credit, Zepto will include details in the `description` and under the `reversal_details` key as to why the original credit to the recipient failed.
+- name: Payouts
+  description: |
+    This endpoint gives you some control over a transaction:
+
+    * After it has been created; and
+    * Before it has been submitted to the banks.
+
+    <aside class="notice">
+      Payments and Payment Requests are made up of individual Debits and Credits. These debits and credits
+      were once referred to as Payouts [Legacy naming].
+    </aside>
+- name: Payment Requests
+  description: |
+    A Payment Request (PR) is used to collect funds, via direct debit, from one of your Contacts (as long as there is an accepted Agreement in place).
+
+    <div class="middle-header">Applicable scenarios</div>
+
+    1. **You send a Payment Request to a [Contact](/#Zepto-API-Contacts) in order to collect funds:**
+        1. Given there is an Agreement in place and the Payment Request is within the terms of the Agreement, then it will be automatically approved; **or**
+        1. Given the Payment Request is **not** within the terms of the Agreement, then it will not be created; **or**
+        1. There is no Agreement in place, then it will not be created.
+    1. **Your customer sends funds to you as a [Receivable Contact](/#add-a-receivable-contact):**
+        1. A *receivable* Payment Request will be automatically created and approved to identify the movement of funds from your customer to your chosen Zepto float account.
+
+
+    ##Lifecycle
+
+    <aside class="notice">Payment Requests generated from a customer sending you funds will always be <code>approved</code></aside>
+
+    A Payment Request can have the following statuses:
+
+    | Status | Description |
+    |-------|-------------|
+    | `approved` | The debtor has approved the Payment Request. |
+    | `cancelled` | The creditor has cancelled the Payment Request. |
+
+    <div class="middle-header">Prechecking</div>
+
+    When using Payment Requests to collect payments from your customer, Zepto will automatically check for available funds before **attempting to debit** the debtor. This check is only performed for contacts with an active [bank connection](/#Zepto-API-Bank-Connections).
+- name: Refunds
+  description: |2
+
+    Refunds can be issued for any successfully completed Payment Request transaction. This includes:
+
+    1. Payment Requests for direct debit payments **(Collections)**:
+    2. Payment Requests for funds received via DE/NPP **(Receivables)**:
+
+    This allows you to return any funds that were previously collected or received into one of your bank/float accounts.
+- name: Transactions
+  description: |
+    By default, the transactions endpoint provides a detailed look at all past, current and future debits & credits related to your account.
+
+    <aside class="notice">Want to also know about the debits & credits applied to the other party? No problem! Use the <code>both_parties=true</code> query string.</aside>
+
+    ##Lifecycle
+
+    A transaction (debit or credit) can have the following statuses:
+
+    | Status | Description |
+    |--------|-------------|
+    | `maturing` | The maturation date has not yet been reached. |
+    | `matured` | The maturation date has been reached and the transaction is eligible for processing. |
+    | `preprocessing` | The transaction is undergoing pre-checks before being sent to the bank. |
+    | `processing` | The transaction has been submitted to the bank. |
+    | `clearing` | Waiting for confirmation from the bank that the transaction has succeeded. |
+    | `cleared` | The transaction is complete. |
+    | `rejected` | The bank has rejected the transaction due to incorrect bank account details. |
+    | `returned` | The transaction did not successfully clear. |
+    | `voided` | The transaction has been cancelled and is no longer eligible for processing. |
+    | `pending_verification` | The bank account must be verified before the transaction can proceed. |
+    | `paused` | The transaction has temporary been paused by Zepto pending internal review. |
+    | `channel_switched` | The initial payment channel has failed and the credit has automatically switched to attempt the payment using the next available channel. |
+    ## Failure codes
+    > Example response
+
+    ```json
+    {
+      "data": [
+        {
+          "ref": "D.3",
+          "parent_ref": null,
+          "type": "debit",
+          "category": "payout_refund",
+          "created_at": "2021-04-07T23:15:00Z",
+          "matures_at": "2021-04-10T23:15:00Z",
+          "cleared_at": null,
+          "bank_ref": null,
+          "status": "returned",
+          "status_changed_at": "2021-04-08T23:15:00Z",
+          "failure" : {
+            "code": "E251",
+            "title": "Voided By Initiator",
+            "detail": "The transaction was voided by its initiator.",
+          },
+          "failure_details": "Wrong amount - approved by Stacey"
+          "party_contact_id": "26297f44-c5e1-40a1-9864-3e0b0754c32a",
+          "party_name": "Sanford-Rees",
+          "party_nickname": "sanford-rees-8",
+          "description": null,
+          "amount": 1,
+          "bank_account_id": "56df206a-aaff-471a-b075-11882bc8906a"
+          "channels": ["float_account"]
+          "current_channel": "float_account"
+        }
+      ]
+    }
+    ```
+    The rejected, returned & voided statuses are always accompanied by a failure code, title and detail as listed below.
+    ### DE credit failures
+    | Code | Title | Detail |
+    | ------------ | ------------- | -------------- |
+    | E101 | Invalid BSB Number | The BSB is not valid or is no longer active. |
+    | E102 | Payment Stopped | The target institution has blocked transactions to this account. Please refer to customer. |
+    | E103 | Account Closed | The target account is closed. |
+    | E104 | Customer Deceased | The target account's owner has been listed as deceased. |
+    | E105 | Account Not Found | The target account number cannot be found by the financial institution. |
+    | E106 | Refer to Customer | Usually means that there is an issue with the account receiving a credit that only the customer and their financial institution can resolve. Please refer to customer. |
+    | E107 | Account Deleted | The target account is deleted. |
+    | E108 | Invalid UserID | Please contact Zepto for further information. |
+    | E109 | Technically Invalid | Usually means that the account is not creditable or that the reason for failure cannot be categorised within the standard BECS return codes. Please refer to customer. |
+    | E150 | Voided By Admin | The transaction was voided by an administrator. |
+    | E151 | Voided By Initiator | The transaction was voided by its initiator. |
+    | E152 | Insufficient Funds | There were insufficient funds to complete the transaction. |
+    | E153 | System Error | The transaction was unable to complete. Please contact Zepto for assistance. |
+    | E154 | Account Blocked | The target account is blocked and cannot receive funds. |
+    | E199 | Unknown DE Error | An unknown DE error occurred. Please contact Zepto for assistance. |
+    ### DE debit failures
+    | Code | Title | Detail |
+    | ------------ | ------------- | -------------- |
+    | E201 | Invalid BSB Number | The BSB is not valid or is no longer active. |
+    | E202 | Payment Stopped | The target institution has blocked transactions to this account. Please refer to customer. |
+    | E203 | Account Closed | The target account is closed. |
+    | E204 | Customer Deceased | The target account's owner has been listed as deceased. |
+    | E205 | Account Not Found | The target account number cannot be found by the financial institution. |
+    | E206 | Refer to Customer | Usually means insufficient funds or that the target account has breached their transaction limits. |
+    | E207 | Account Deleted | The target account is deleted. |
+    | E208 | Invalid UserID | Please contact Zepto for further information. |
+    | E209 | Technically Invalid | Usually means that the account is not debitable or that the reason for failure can not be categorised within the standard BECS return codes. Please refer to customer. |
+    | E250 | Voided By Admin | The transaction was voided by an administrator. |
+    | E251 | Voided By Initiator | The transaction was voided by its initiator. |
+    | E252 | Insufficient Funds | There were insufficient funds to complete the transaction. |
+    | E253 | System Error | The transaction was unable to complete. Please contact Zepto for assistance. |
+    | E299 | Unknown DE Error | An unknown DE error occurred. Please contact Zepto for assistance. |
+    ### NPP credit failures
+    | Code | Title | Detail |
+    | ------------ | ------------- | -------------- |
+    | E301 | Upstream Network Outage | An upstream network issue occurred. Please try again later. |
+    | E302 | BSB Not NPP Enabled | The target BSB is not NPP enabled. Please try another channel. |
+    | E303 | Account Not NPP Enabled | The target account exists but cannot accept funds via the NPP. Please try another channel. |
+    | E304 | Account Not Found | The target account number cannot be found. |
+    | E305 | Intermittent Outage At Target Institution | The target financial institution is experiencing technical difficulties. Please try again later. |
+    | E306 | Account Closed | The target account is closed. |
+    | E307 | Target Institution Offline | The target financial institution is undergoing maintenance or experiencing an outage. Please try again later. |
+    | E308 | Account Blocked | The target account is blocked and cannot receive funds. |
+    | E399 | Unknown NPP Error | An unknown NPP error occurred. Please contact Zepto for assistance. |
+- name: Transfers
+  description: |2
+
+    This endpoint lets you Transfer funds between any bank & float accounts registered under your Zepto account:
+
+    1. **From**: Bank Account **To**: Float Account:
+      * Topping up a float account via Direct Debit
+      * Up to 2 days
+    2. **From**: Float Account **To**: Bank Account:
+      * Withdrawing from a float account
+      * Will attempt NPP first and channel switch to DE if required
+    3. **From**: Float Account **To**: Float Account:
+      * Transfer between two float accounts
+      * Within seconds
+- name: Unassigned Agreements
+  description: |
+    An agreement with no preset authoriser that can only be accepted once and must be accepted within a predefined time period.
+
+    Unassigned Agreements are shared using the generated link available in the response body. You can then include it in an email, text message, embed it in an iFrame, etc...
+
+    Please refer to the [Unassigned Agreement](https://help.zepto.money/agreements/unassigned-agreement) article in our knowledge base for more information.
+- name: Ping
+  description: Test your connectivity and authentication.
+- name: Users
+  description: 'All about the currently authenticated user.
+
+    '
+- name: Sandbox Only
+  description: Special testing endpoints that only exist in the sandbox environment.
+paths:
+  "/agreements/outgoing":
+    get:
+      tags:
+      - Agreements
+      summary: List Agreements
+      description: By default, all outgoing Agreements will be returned. You can apply
+        filters to your query to customise the returned Agreements.
+      operationId: ListOutgoingAgreements
+      parameters:
+      - name: page
+        in: query
+        description: Page of results to return, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '1'
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '100'
+      - name: authoriser_id
+        in: query
+        description: Authoriser ID (`Contact.data.account.id`), single value, exact
+          match
+        style: form
+        schema:
+          type: string
+        example: 2c4dec90-8a4c-4685-b620-bd1d7ca05a60
+      - name: contact_id
+        in: query
+        description: Contact ID (`Contact.data.id`), single value, exact match
+        style: form
+        schema:
+          type: string
+        example: e5edc264-1771-4809-9cf5-b40baaee15f7
+      - name: status
+        in: query
+        description: Exact match
+        style: form
+        explode: false
+        schema:
+          type: array
+          items:
+            type: string
+          enum:
+          - proposed
+          - accepted
+          - declined
+          - cancelled
+        example:
+        - proposed
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListOutgoingAgreementsResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/agreements/{agreement_ref}":
+    get:
+      tags:
+      - Agreements
+      summary: Get an Agreement
+      description: Get a single Agreement by its reference
+      operationId: GetAgreement
+      parameters:
+      - name: agreement_ref
+        in: path
+        description: Single value, exact match
+        required: true
+        style: simple
+        schema:
+          type: string
+          pattern: "^[ -~]+$"
+        example: A.2
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetAgreementResponse"
+    delete:
+      tags:
+      - Agreements
+      summary: Cancel an Agreement
+      description: An Agreement can be cancelled by the initiator at any time whilst
+        the authoriser (Agreement recipient) can only cancel a previously accepted
+        Agreement.
+      operationId: CancelAgreement
+      parameters:
+      - name: agreement_ref
+        in: path
+        description: Single value, exact match.
+        required: true
+        style: simple
+        schema:
+          type: string
+          pattern: "^[ -~]+$"
+        example: A.2
+      responses:
+        '204':
+          description: No Content
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/bank_accounts":
+    get:
+      tags:
+      - Bank Accounts
+      summary: List all Bank Accounts
+      description: 'By default, all Bank Accounts will be returned.
+
+        '
+      operationId: ListAllBankAccounts
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListAllBankAccountsResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/bank_accounts/{id}":
+    get:
+      tags:
+      - Bank Accounts
+      summary: Get a Bank Account
+      description: Returns a specified Bank or Float Account owned by your account.
+        For a Float Account, the response includes its current `available_balance`.
+      operationId: GetABankAccount
+      parameters:
+      - name: id
+        in: path
+        description: Bank Account ID (`BankAccount.data.id`), single value, exact
+          match
+        required: true
+        style: simple
+        schema:
+          type: string
+          format: uuid
+        example: ab3de19b-709b-4a41-82a5-3b43b3dc58c9
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetABankAccountResponse"
+        '403':
+          description: Forbidden - the access token does not have the `bank_accounts`
+            scope
+        '404':
+          description: Not Found - the Bank Account is unavailable or is not owned
+            by the authenticated account
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/bank_accounts/{bank_account_id}/entries":
+    get:
+      tags:
+      - Bank Accounts
+      summary: List Float Account entries
+      description: |-
+        Lists the settled ledger entries applied to a Float Account. Transactions and Transfers describe business operations; entries describe what was posted to this Float Account and changed its available balance. An entry may result from a payment, transfer, refund, recovery, return, fee, or manual adjustment, making this endpoint the complete account-level record within the availability window for reconciliation.
+
+        Float Account entries are available through this API for a rolling 24-month period, calculated from the time of the request. Entries created before the start of that window are not returned. Requests with either created-at filter before the start of the window return `422 Unprocessable Entity`.
+
+        Entries are returned in descending order by `created_at` and then `id`. The ID is a deterministic tie-breaker; entries with the same timestamp are not guaranteed to be returned in their original balance-application order.
+
+        `amount` is expressed in cents. Positive values credit the Float Account and negative values debit it.
+      operationId: ListFloatAccountEntries
+      parameters:
+      - name: bank_account_id
+        in: path
+        description: Bank Account ID (`BankAccount.data.id`), single value, exact
+          match
+        required: true
+        style: simple
+        schema:
+          type: string
+          format: uuid
+        example: ab3de19b-709b-4a41-82a5-3b43b3dc58c9
+      - name: min_created_date
+        in: query
+        description: Filter by minimum `created_at`. The value must not be earlier
+          than the start of the rolling 24-month availability window. Date/time UTC
+          ISO 8601 format, single value, exact match.
+        required: false
+        schema:
+          type: string
+          format: date-time
+        example: '2026-07-01T00:00:00Z'
+      - name: max_created_date
+        in: query
+        description: Filter by maximum `created_at`. The value must not be earlier
+          than the start of the rolling 24-month availability window. Date/time UTC
+          ISO 8601 format, single value, exact match.
+        required: false
+        schema:
+          type: string
+          format: date-time
+        example: '2026-07-31T23:59:59Z'
+      - name: per_page
+        in: query
+        description: Number of entries to return. Defaults to 20 and is constrained
+          to 1–100.
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+        example: 20
+      - name: starting_after
+        in: query
+        description: ID of the final entry from the previous page. Return the value
+          from the `Link` header unchanged.
+        required: false
+        schema:
+          type: string
+          format: uuid
+        example: '019c8814-c767-753c-82f7-3daac44d8662'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              schema:
+                type: string
+              description: Contains the next-page URL when another page exists
+              example: </bank_accounts/ab3de19b-709b-4a41-82a5-3b43b3dc58c9/entries?per_page=20&starting_after=019c8814-c767-753c-82f7-3daac44d8662>;
+                rel="next"
+            Per-Page:
+              schema:
+                type: integer
+              description: Contains the maximum number of entries requested for this
+                page. Defaults to 20.
+              example: 20
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListFloatAccountEntriesResponse"
+        '400':
+          description: Bad Request - `per_page` is not an integer
+        '403':
+          description: Forbidden - the access token does not have the `bank_accounts`
+            scope
+        '404':
+          description: Not Found - the Bank Account is unavailable or is not a Float
+            Account
+        '422':
+          description: Unprocessable Entity - `starting_after` is not an available
+            entry in this Float Account, or a `created_at` filter is invalid or outside
+            the rolling 24-month availability window
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - errors
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - title
+                      - detail
+                      properties:
+                        title:
+                          type: string
+                        detail:
+                          type: string
+              examples:
+                Minimum created date outside availability window:
+                  value:
+                    errors:
+                    - title: Validation Failed
+                      detail: min_created_date must not be earlier than the start
+                        of the 24-month availability window
+                Maximum created date outside availability window:
+                  value:
+                    errors:
+                    - title: Validation Failed
+                      detail: max_created_date must not be earlier than the start
+                        of the 24-month availability window
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/bank_accounts/{bank_account_id}/entries/{entry_id}":
+    get:
+      tags:
+      - Bank Accounts
+      summary: Get a Float Account entry
+      description: |-
+        Gets one settled entry applied to a Float Account.
+
+        Float Account entries are available through this API for a rolling 24-month period, calculated from the time of the request.
+      operationId: GetFloatAccountEntry
+      parameters:
+      - name: bank_account_id
+        in: path
+        description: Bank Account ID (`BankAccount.data.id`), single value, exact
+          match
+        required: true
+        style: simple
+        schema:
+          type: string
+          format: uuid
+        example: ab3de19b-709b-4a41-82a5-3b43b3dc58c9
+      - name: entry_id
+        in: path
+        description: Float Account entry ID (`FloatAccountEntry.data.id`), single
+          value, exact match
+        required: true
+        style: simple
+        schema:
+          type: string
+          format: uuid
+        example: '019c8814-c767-753c-82f7-3daac44d8662'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetFloatAccountEntryResponse"
+        '403':
+          description: Forbidden - the access token does not have the `bank_accounts`
+            scope
+        '404':
+          description: Not Found - the Bank Account or entry is unavailable, the entry
+            is outside the rolling 24-month availability window, or the Bank Account
+            is not a Float Account
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/contacts/anyone":
+    post:
+      tags:
+      - Contacts
+      summary: Add a Contact
+      description: |
+        Use this endpoint when you want to pay somebody.
+
+        <aside class="notice">
+          A Contact added this way cannot be debited.
+        </aside>
+      operationId: AddAnAnyoneContact
+      parameters: []
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/AddAnAnyoneContactRequest"
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/AddAnAnyoneContactResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/contacts/receivable":
+    post:
+      tags:
+      - Contacts (Receivable)
+      summary: Add a Receivable Contact
+      description: |
+        Receive funds from a Contact by allowing them to pay to a personalised PayID or account number. Perfect for reconciling incoming funds to a customer, receiving funds instantly, eliminating human error & improving your customer's experience.
+
+
+        <aside class="notice">
+          To enable this feature, please contact our support team with the following information:
+            <li>Your full legal business name</li>
+            <li>A legally owned domain name: for your PayID email addresses</li>
+            <li><strong>alias_name</strong>: the business name that will be displayed to your customers upon PayID resolution. We suggest using a shortened name appropriate for mobile displays</li>
+        </aside>
+        <aside class="notice">
+          There are two strategies supported for PayID assignment when creating this type of Contact:
+          <li><strong>On-demand PayID</strong>: provide a <code>payid_email</code> and we'll create a contact and register a PayID with the given email address. The PayID registration process happens when the request is received. The initial response for <code>payid_details.state</code> will always be <code>pending</code>. It will transition to <code>active</code> when the PayID registration process is complete. This can take up to a few seconds. You can use webhooks to be informed of this state change.</li>
+          <li><strong>Pooled PayID</strong>: provide your <code>payid_email_domain</code> and we'll create a contact and assign them a PayID from your pool. Pooled PayIDs are pre-registered. The PayID email value is generated using a random value and the email domain from your PayID pool configuration. Providing both <code>payid_email</code> and <code>payid_email_domain</code> will ignore your pool and use the "On-demand PayID" strategy instead.</li>
+        </aside>
+        <aside class="notice">
+          While unlikely, it is possible that we will be unable to register the given PayID. In this case <code>payid_details.state</code> will transition to <code>failed</code>.
+
+          You can simulate this path in sandbox by adding <code>+failure</code> to your <code>payid_email</code> e.g <code>test+failure@zeptopayments.com</code>
+        </aside>
+        <aside class="notice">
+          You can test receiving payments to a Receivable Contact in our sandbox environment using the <a href="https://docs.zeptopayments.com/reference/simulateincomingpayidpayment">PayID simulation endpoint</a>.
+        </aside>
+      operationId: AddAReceivableContact
+      parameters: []
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/AddAReceivableContactRequest"
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/AddAReceivableContactResponse"
+        '404':
+          description: Not Found
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/contacts/{contact_id}/receivable/disable":
+    post:
+      tags:
+      - Contacts (Receivable)
+      summary: Disable a Receivable Contact
+      description: |
+        This endpoint should be used to Disable a Receivable Contact.
+
+        This will reject all payments made to the relevant Account number or PayID and return them to your customer. Payments made via DE and NPP will be rejected.
+      operationId: DisableAReceivableContact
+      parameters:
+      - name: contact_id
+        in: path
+        description: Receivable Contact ID (`ReceivableContact.data.id`)
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          format: UUID
+        example: 2d2429c2-b868-455e-80ef-915df7c115a7
+      responses:
+        '204':
+          description: No Content (success)
+        '400':
+          description: Bad Request (errors)
+        '404':
+          description: Not Found
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/contacts/{contact_id}/receivable/activate":
+    post:
+      tags:
+      - Contacts (Receivable)
+      summary: Reactivate a Receivable Contact
+      description: |
+        This endpoint should be used to Reactivate a Receivable Contact that has been previously Disabled.
+
+        This will once again allow you to receive funds from your customer via both DE and NPP channels.
+      operationId: ActivateAReceivableContact
+      parameters:
+      - name: contact_id
+        in: path
+        description: Receivable Contact ID (`ReceivableContact.data.id`)
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          format: UUID
+        example: 2d2429c2-b868-455e-80ef-915df7c115a7
+      responses:
+        '204':
+          description: No Content (success)
+        '400':
+          description: Bad Request (errors)
+          content:
+            application/json:
+              schema:
+                properties:
+                  errors:
+                    type: string
+              examples:
+                Contact is not receivable:
+                  summary: Contact is not receivable
+                  value:
+                    errors: Contact is not receivable
+                PayID is not disabled:
+                  summary: PayID is not disabled
+                  value:
+                    errors: Contact must be 'disabled' but is '{status}'.
+                Contact blocked by a Zepto admin:
+                  summary: Contact blocked by a Zepto admin
+                  value:
+                    errors: This receivable contact can only be enabled by Zepto support.
+                      Please contact Zepto for further information
+                Bank account not blocked:
+                  summary: Bank account not blocked
+                  value:
+                    errors: Bank account must be blocked.
+                Bank account already unblocked:
+                  summary: Bank account already unblocked
+                  value:
+                    errors: Bank account is already unblocked
+                Bank account already unblocked for credits:
+                  summary: Bank account already unblocked for credits
+                  value:
+                    errors: Bank account is already unblocked for credits
+                Bank account already unblocked for debits:
+                  summary: Bank account already unblocked for debits
+                  value:
+                    errors: Bank account is already unblocked for debits
+        '404':
+          description: Not Found
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/contacts/{contact_id}/receivable":
+    patch:
+      tags:
+      - Contacts (Receivable)
+      summary: Update a Receivable Contact
+      description: |
+        You can update the PayID name of a Receivable Contact.
+
+        <aside class="notice">
+          The Receivable Contact you are updating must be active.
+        </aside>
+      operationId: UpdateAReceivableContact
+      parameters:
+      - name: contact_id
+        in: path
+        description: Receivable Contact ID (`ReceivableContact.data.id`)
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          format: UUID
+        example: 2d2429c2-b868-455e-80ef-915df7c115a7
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/UpdateAReceivableContactRequest"
+        required: true
+      responses:
+        '202':
+          description: Accepted
+        '400':
+          description: Bad Request (errors)
+        '404':
+          description: Not Found
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/contacts":
+    get:
+      tags:
+      - Contacts
+      summary: List all Contacts
+      description: 'By default, all Contacts will be returned. You can apply filters
+        to your query to customise the returned Contact list.
+
+        '
+      operationId: ListAllContacts
+      parameters:
+      - name: page
+        in: query
+        description: Page of results to return, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '1'
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '100'
+      - name: name
+        in: query
+        description: Single value, string search
+        style: form
+        schema:
+          type: string
+        example: Some name
+      - name: nickname
+        in: query
+        description: Single value, string search
+        style: form
+        schema:
+          type: string
+        example: Some_nickname
+      - name: email
+        in: query
+        description: Single value, string search
+        style: form
+        schema:
+          type: string
+        example: george@gmail.com
+      - name: bank_account_id
+        in: query
+        description: Single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '095c5ab7-7fa8-40fd-b317-cddbbf4c8fbc'
+      - name: bank_account_branch_code
+        in: query
+        description: Single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '068231'
+      - name: bank_account_account_number
+        in: query
+        description: Single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '4395959'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListAllContactsResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/contacts/{id}":
+    get:
+      tags:
+      - Contacts
+      summary: Get a Contact
+      description: Get a single Contact by its ID
+      operationId: GetAContact
+      parameters:
+      - name: id
+        in: path
+        description: Contact ID (`Contact.data.id`)
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          format: UUID
+        example: 55afddde-4296-4daf-8e49-7ba481ef9608
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetAContactResponse"
+        '404':
+          description: Not Found
+    delete:
+      tags:
+      - Contacts
+      summary: Remove a Contact
+      description: |
+        <aside class="notice">
+          <ul>
+            <li>Removing a Contact will not affect your transaction history.</li>
+            <li>Removing a Receivable Contact will deactivate any associated PayIDs.</li>
+          </ul>
+        </aside>
+      operationId: RemoveAContact
+      parameters:
+      - name: id
+        in: path
+        description: Contact ID (`Contact.data.id`)
+        required: true
+        style: simple
+        schema:
+          type: string
+          format: UUID
+        example: 55afddde-4296-4daf-8e49-7ba481ef9608
+      responses:
+        '204':
+          description: ''
+    patch:
+      tags:
+      - Contacts
+      summary: Update a Contact
+      description: |
+        You can update the name, email, bank account and metadata of any Contact.
+        <aside class="notice">
+          <ul>
+            <li>Previous transactions to this Contact will retain the name and bank account that was used at the time.</li>
+            <li>You cannot update a Contact's bank account details if they currently have an accepted agreement.</li>
+            <li>Any active Bank Connections will be lost if you change the Contact's bank account.</li>
+            <li>See our <a href="https://help.zepto.money/en/articles/3829211-how-do-i-change-my-customers-bank-account-details">Help Article</a> for more information about the nuances and implications of changing a contacts Bank Account.</li>
+          </ul>
+        </aside>
+      operationId: UpdateAContact
+      parameters:
+      - name: id
+        in: path
+        description: Contact ID (`Contact.data.id`)
+        required: true
+        style: simple
+        schema:
+          type: string
+        example: 55afddde-4296-4daf-8e49-7ba481ef9608
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/UpdateAContactRequest"
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/UpdateAContactResponse"
+        '404':
+          description: Not Found
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/payments":
+    post:
+      tags:
+      - Payments
+      summary: Make a Payment
+      description: |
+        To enable custom payment flows, the required payment channel can be selected by setting the _channel_ attribute to one of the following combinations:
+
+        <ul>
+          <li>["new_payments_platform"] - for faster payments 24/7/365</li>
+          <li>["direct_entry"] - for slower traditional payments</li>
+          <li>["new_payments_platform", "direct_entry"] - enables automatic channel switching if a payment fails on the NPP</li>
+        </ul>
+        <aside class="notice">We now require supplying an <code>Idempotency-Key</code> header when performing this request to ensure you can safely retry the action in case of an issue. If the header value is different to one provided previously, we will be treating a request as a new operation which may lead to duplicate payments. To understand more on how to make idempotent requests, please refer to our <a href="https://docs.zeptopayments.com/v20260101/reference/idempotent-requests">Idempotent requests guide</a>.</aside>
+      operationId: MakeAPayment
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        description: Idempotency key to support safe retries for 24h
+        required: true
+        schema:
+          type: string
+        example: "{unique-uuid-per-payment}"
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/MakeAPaymentRequest"
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/MakeAPaymentResponse"
+        '400':
+          description: Bad Request (errors)
+          content:
+            application/json:
+              schema:
+                properties:
+                  errors:
+                    type: string
+              examples:
+                Invalid channel:
+                  summary: Invalid channel
+                  value:
+                    errors: 'Channels must be one of: new_payments_platform, direct_entry'
+                Channel not supported by bank account:
+                  summary: Channel not supported by bank account
+                  value:
+                    errors: Channels {channel} is not supported by your bank account.
+                      Please contact us for assistance
+                Transaction limit exceeded:
+                  summary: Transaction limit exceeded
+                  value:
+                    errors: The requested amount exceeds the {amount} limit per transaction.
+                      Please contact Zepto customer support.
+                Limit exceeded:
+                  summary: Limit exceeded
+                  value:
+                    errors: Amount must be less than or equal to 1000000000
+                Invalid description format:
+                  summary: Invalid description format
+                  value:
+                    errors: Description is in invalid format
+                Mature date in the past:
+                  summary: Mature date in the past
+                  value:
+                    errors: Matures at must not be in the past
+                Not found bank account:
+                  summary: Not found bank account
+                  value:
+                    errors: Your bank account not found
+                Bank account not configured:
+                  summary: Bank account not configured
+                  value:
+                    errors: Your bank account is not configured for payments
+                Bank account removed:
+                  summary: Bank account removed
+                  value:
+                    errors: Recipient contact (#{recipient_contact.id}) bank account
+                      has been removed
+                Recipient bank account blocked:
+                  summary: Recipient bank account blocked
+                  value:
+                    errors: Recipient contact (#{recipient_contact.id}) is blocked
+                      (reason)
+                Different float accounts:
+                  summary: Different float accounts
+                  value:
+                    errors: Recipient contact (#{recipient_contact.id}) must share
+                      the same control account
+                Insufficient funds:
+                  summary: Insufficient funds
+                  value:
+                    errors: Your bank account has insufficient funds
+                Blocked bank account:
+                  summary: Blocked bank account
+                  value:
+                    errors: Your bank account is blocked (reason)
+                Inactive bank account:
+                  summary: Inactive bank account
+                  value:
+                    errors: Your bank account not active
+                Invalid purpose category:
+                  summary: Invalid purpose category
+                  value:
+                    errors: 'Category purpose code must be one of: PENS, SALA, TAXS'
+                Exceeded payout size:
+                  summary: Exceeded payout size
+                  value:
+                    errors: Payouts size cannot be greater than 50
+                Not filled end to end:
+                  summary: Not filled end to end
+                  value:
+                    errors: End to end can't be blank
+    get:
+      tags:
+      - Payments
+      summary: List all Payments
+      description: ''
+      operationId: ListAllPayments
+      parameters:
+      - name: page
+        in: query
+        description: Page of results to return, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '1'
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '100'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListAllPaymentsResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/payments/{payment_ref}":
+    get:
+      tags:
+      - Payments
+      summary: Get a Payment
+      description: Get a single payment by its reference
+      operationId: GetAPayment
+      parameters:
+      - name: payment_ref
+        in: path
+        description: Payment reference
+        required: true
+        style: simple
+        schema:
+          type: string
+        example: PB.1
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetAPaymentResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/payouts/{ref}":
+    delete:
+      tags:
+      - Payouts
+      summary: Void a Payment
+      description: 'You can void any Payment from your account that has not yet matured.
+
+        '
+      operationId: VoidAPayment
+      parameters:
+      - name: ref
+        in: path
+        description: Payment debit reference number e.g D.48
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+        example: D.48
+      responses:
+        '204':
+          description: No Content
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/payment_requests":
+    post:
+      tags:
+      - Payment Requests
+      summary: Request Payment
+      description: '<aside class="notice">We now require supplying an <code>Idempotency-Key</code>
+        header when performing this request to ensure you can safely retry the action
+        in case of an issue. If the header value is different to one provided previously,
+        we will be treating a request as a new operation which may lead to a duplicate
+        funds collection. To understand more on how to make idempotent requests, please
+        refer to our <a href="https://docs.zeptopayments.com/v20260101/reference/idempotent-requests">Idempotent
+        requests guide</a>.</aside>
+
+        '
+      operationId: MakeAPaymentRequest
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        description: Idempotency key to support safe retries for 24h
+        required: true
+        schema:
+          type: string
+        example: "{unique-uuid-per-payment-request}"
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/MakeAPaymentRequestRequest"
+        required: true
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/MakeAPaymentRequestResponse"
+        '422':
+          description: When a payment is requested from an Anyone Contact with no
+            valid Agreement
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/MakeAPaymentRequestWithNoAgreementResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/payment_requests/{payment_request_ref}":
+    get:
+      tags:
+      - Payment Requests
+      summary: Get a Payment Request
+      description: ''
+      operationId: GetAPaymentRequest
+      parameters:
+      - name: payment_request_ref
+        in: path
+        description: Single value, exact match
+        required: true
+        style: simple
+        schema:
+          type: string
+        example: PR.3
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetAPaymentRequestResponse"
+    delete:
+      tags:
+      - Payment Requests
+      summary: Cancel a Payment Request
+      description: A Payment Request can be cancelled as long as the associated transaction's
+        state is <strong>maturing</strong> or <strong>matured</strong>.
+      operationId: CancelAPaymentRequest
+      parameters:
+      - name: payment_request_ref
+        in: path
+        description: Single value, exact match
+        required: true
+        style: simple
+        schema:
+          type: string
+        example: PR.3
+      responses:
+        '204':
+          description: No Content
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/payment_requests/collections":
+    get:
+      tags:
+      - Payment Requests
+      summary: List Collections
+      description: Payment Requests where you are the creditor and are collecting
+        funds from your debtor using traditional direct-debit.
+      operationId: ListPaymentRequestCollections
+      parameters:
+      - name: page
+        in: query
+        description: Page of results to return, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '1'
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '100'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListPaymentRequestCollectionsResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/payment_requests/receivables":
+    get:
+      tags:
+      - Payment Requests
+      summary: List Receivables
+      description: Payment Requests where the debtor is sending you funds ([Receivable
+        Contacts](https://docs.zeptopayments.com/reference/addareceivablecontact)).
+        This endpoint exposes all received payments.
+      operationId: ListPaymentRequestReceivables
+      parameters:
+      - name: page
+        in: query
+        description: Page of results to return, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '1'
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '100'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListPaymentRequestReceivablesResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/credits/{credit_ref}/refunds":
+    post:
+      tags:
+      - Refunds
+      summary: Issue a Refund
+      description: |
+        Certain rules apply to the issuance of a refund:
+        <ul>
+          <li>Must be applied against a successfully cleared Payment Request (Collections or Receivables)</li>
+          <li>Many refunds may be created against the original Payment Request</li>
+          <li>The total refunded amount must not exceed the original value</li>
+        </ul>
+        <aside class="notice">We now require supplying an <code>Idempotency-Key</code> header when performing this request to ensure you can safely retry the action in case of an issue. If the header value is different to one provided previously, we will be treating a request as a new operation which may lead to duplicate refunds. To understand more on how to make idempotent requests, please refer to our <a href="https://docs.zeptopayments.com/v20260101/reference/idempotent-requests">Idempotent requests guide</a>.</aside>
+      operationId: IssueARefund
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        description: Idempotency key to support safe retries for 24h
+        required: true
+        schema:
+          type: string
+        example: "{unique-uuid-per-refund}"
+      - name: credit_ref
+        in: path
+        description: The credit reference number e.g C.625v
+        required: true
+        style: simple
+        schema:
+          type: string
+        example: C.625v
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/IssueARefundRequest"
+        required: true
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/IssueARefundResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/refunds/outgoing":
+    get:
+      tags:
+      - Refunds
+      summary: List Refunds
+      description: ''
+      operationId: ListOutgoingRefunds
+      parameters:
+      - name: page
+        in: query
+        description: Page of results to return, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '1'
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '100'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListOutgoingRefundsResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/refunds/{refund_ref}":
+    get:
+      tags:
+      - Refunds
+      summary: Retrieve a Refund
+      description: Get a single Refund by its reference
+      operationId: RetrieveARefund
+      parameters:
+      - name: refund_ref
+        in: path
+        description: Single value, exact match
+        required: true
+        style: simple
+        schema:
+          type: string
+        example: PRF.75f
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/RetrieveARefundResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/transactions":
+    get:
+      tags:
+      - Transactions
+      summary: List all transactions
+      description: <aside class="notice">By default, Zepto will search and return
+        all transactions created in the <strong>last 30 days</strong>. You can adjust
+        this up to <strong>1 year</strong> by defining the <code>min_created_date</code>
+        query string parameter defined below.</aside>
+      operationId: ListAllTransactions
+      parameters:
+      - name: page
+        in: query
+        description: Page of results to return, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '1'
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '100'
+      - name: ref (debit or credit)
+        in: query
+        description: Single value, exact match
+        style: form
+        schema:
+          type: string
+        example: D.1i
+      - name: parent_ref
+        in: query
+        description: Single value, exact match
+        style: form
+        schema:
+          type: string
+        example: PRF.92a
+      - name: bank_ref
+        in: query
+        description: Single value, exact match
+        style: form
+        schema:
+          type: string
+        example: DT.12
+      - name: both_parties
+        in: query
+        description: Single value, exact match. Will also list debits & credits applied
+          to the other party
+        style: form
+        schema:
+          type: boolean
+        example: true
+      - name: status
+        in: query
+        description: Multiple values, exact match
+        style: form
+        explode: false
+        schema:
+          type: array
+          items:
+            type: string
+          enum:
+          - maturing
+          - matured
+          - preprocessing
+          - processing
+          - clearing
+          - cleared
+          - rejected
+          - returned
+          - voided
+          - pending_verification
+          - paused
+        example:
+        - maturing
+      - name: category
+        in: query
+        description: Multiple values, exact match
+        style: form
+        explode: false
+        schema:
+          type: array
+          items:
+            type: string
+          enum:
+          - payout
+          - payout_refund
+          - invoice
+        example:
+        - payout
+      - name: type
+        in: query
+        description: Multiple values, exact match
+        style: form
+        explode: false
+        schema:
+          type: array
+          items:
+            type: string
+          enum:
+          - debit
+          - credit
+        example:
+        - debit
+      - name: other_party
+        in: query
+        description: Single value, string search. Cannot be combine with <code>both_parties</code>
+          query string
+        style: form
+        schema:
+          type: string
+        example: party people
+      - name: other_party_bank_ref
+        in: query
+        description: Single value, exact match
+        style: form
+        schema:
+          type: string
+        example: CT.3a
+      - name: party_contact_id
+        in: query
+        description: Single value, exact match. Cannot be combine with <code>both_parties</code>
+          query string
+        style: form
+        schema:
+          type: string
+        example: a67036fc-217e-437a-83f4-89e90724bea0
+      - name: description
+        in: query
+        description: Single value, string search
+        style: form
+        schema:
+          type: string
+        example: some description
+      - name: min_amount
+        in: query
+        description: Cents, single value, exact match
+        style: form
+        schema:
+          type: integer
+        example: 500
+      - name: max_amount
+        in: query
+        description: Cents, single value, exact match
+        style: form
+        schema:
+          type: integer
+        example: 1000
+      - name: min_created_date
+        in: query
+        description: Date/time UTC ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-05-10T00:00:00Z'
+      - name: max_created_date
+        in: query
+        description: Date/time UTC ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-06-10T00:00:00Z'
+      - name: min_matured_date
+        in: query
+        description: Date/time UTC ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-05-10T00:00:00Z'
+      - name: max_matured_date
+        in: query
+        description: Date/time UTC ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-06-10T00:00:00Z'
+      - name: min_cleared_date
+        in: query
+        description: Date/time UTC ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-05-10T00:00:00Z'
+      - name: max_cleared_date
+        in: query
+        description: Date/time UTC ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-06-10T00:00:00Z'
+      - name: min_status_changed_date
+        in: query
+        description: Date/time UTC ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-05-10T00:00:00Z'
+      - name: max_status_changed_date
+        in: query
+        description: Date/time UTC ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-06-10T00:00:00Z'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListAllTransactionsResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/transfers":
+    post:
+      tags:
+      - Transfers
+      summary: Add a Transfer
+      description: |
+        Use this endpoint when you want to create a Transfer between any 2 of your float/bank accounts.
+        <aside class="notice">We now require supplying an <code>Idempotency-Key</code> header when performing this request to ensure you can safely retry the action in case of an issue. If the header value is different to one provided previously, we will be treating a request as a new operation which may lead to duplicate payments. To understand more on how to make idempotent requests, please refer to our <a href="https://docs.zeptopayments.com/v20260101/reference/idempotent-requests">Idempotent requests guide</a>.</aside>
+      operationId: AddATransfer
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        description: Idempotency key to support safe retries for 24h
+        required: true
+        schema:
+          type: string
+        example: "{unique-uuid-per-transfer}"
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/AddATransferRequest"
+        required: true
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/AddATransferResponse"
+    get:
+      tags:
+      - Transfers
+      summary: List all Transfers (Available soon)
+      description: ''
+      operationId: ListAllTransfers
+      parameters:
+      - name: page
+        in: query
+        description: Page of results to return, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '1'
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '100'
+      - name: from_bank_account_id
+        in: query
+        description: Source bank/float account UUID, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: a79423b2-3827-4cf5-9eda-dc02a298d005
+      - name: to_bank_account_id
+        in: query
+        description: Target bank/float account UUID, single value, exact match
+        style: form
+        schema:
+          type: string
+        example: '0921a719-c79d-4ffb-91b6-1b30ab77d14d'
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListAllTransfersResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/transfers/{transfer_ref}":
+    get:
+      tags:
+      - Transfers
+      summary: Get a Transfer (Available soon)
+      description: Get a single transfer by its reference
+      operationId: GetATransfer
+      parameters:
+      - name: transfer_ref
+        in: path
+        description: Transfer reference
+        required: true
+        style: simple
+        schema:
+          type: string
+        example: T.11ub
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetATransferResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/ping":
+    get:
+      tags:
+      - Ping
+      summary: Ping
+      description: A simple endpoint to test your connectivity and authentication.
+      operationId: Ping
+      parameters: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/PingResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/user":
+    get:
+      tags:
+      - Users
+      summary: Get user details
+      description: ''
+      operationId: GetUserDetails
+      parameters: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetUserDetailsResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/webhooks":
+    get:
+      tags:
+      - Webhooks
+      summary: List all webhooks
+      description: List all your application's webhook configurations.
+      operationId: GetWebhooks
+      parameters: []
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ListAllWebhooksResponse"
+        '404':
+          description: Not Found
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/webhooks/{webhook_id}/deliveries":
+    get:
+      tags:
+      - Webhooks
+      summary: List deliveries for a webhook
+      description: 'NOTE: Webhook deliveries are retained for 7 days after the last
+        delivery attempt.'
+      operationId: GetWebhookDeliveries
+      parameters:
+      - name: webhook_id
+        in: path
+        description: Single value, exact match
+        required: true
+        style: simple
+        schema:
+          type: string
+        example: 31918dce-2dc3-405b-8d3c-fd3901b17e9f
+      - name: ref
+        in: query
+        description: Filter deliveries by ref (`WebhookDelivery.data.ref`), single
+          value, exact match
+        required: false
+        schema:
+          type: string
+      - name: per_page
+        in: query
+        description: Number of results per page, single value, exact match
+        required: false
+        schema:
+          type: integer
+        example: 20
+      - name: starting_after
+        in: query
+        description: Display all webhook deliveries after this webhook delivery offset
+          UUID, single value, exact match
+        required: false
+        schema:
+          type: string
+          format: uuid
+        example: 31918dce-2dc3-405b-8d3c-fd3901b17e9f
+      - name: event_type
+        in: query
+        description: See ([Data schemas](/#data-schemas)) for a list of possible values,
+          single value, exact match
+        required: false
+        style: form
+        explode: false
+        schema:
+          type: string
+          enum:
+          - See ([Data schemas](/#data-schemas))
+        example: agreement.accepted
+      - name: since
+        in: query
+        required: false
+        description: Display all webhook deliveries after this date. Date/time UTC
+          ISO 8601 format, single value, exact match
+        style: form
+        schema:
+          type: string
+          format: date-time
+        example: '2017-05-10T00:00:00Z'
+      - name: response_status_code
+        in: query
+        description: |-
+          Filter deliveries by HTTP response status code. Values may be exact codes,
+          inclusive ranges, or literal `null`, separated by commas. For example,
+          `200,400-499,null`.
+
+          The literal `null` filters for delivery attempts that received no HTTP
+          response.
+        required: false
+        style: form
+        explode: false
+        schema:
+          type: array
+          items:
+            type: string
+            pattern: "^(?:null|[1-5]\\d{2}(?:-[1-5]\\d{2})?)$"
+        example:
+        - '200'
+        - 400-499
+        - 'null'
+      - name: state
+        in: query
+        description: Filter deliveries by state, single value / multiple values separated
+          by commas. See [Our delivery promise](#our-delivery-promises)
+        required: false
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+            - pending
+            - completed
+            - retrying
+            - failed
+        example:
+        - completed
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              "$ref": "#/components/headers/Link"
+            Per-Page:
+              "$ref": "#/components/headers/Per-Page"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetWebhookDeliveriesResponse"
+        '404':
+          description: Not Found
+        '422':
+          description: Unprocessable Entity - `response_status_code` is invalid
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - errors
+                properties:
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - title
+                      - detail
+                      properties:
+                        title:
+                          type: string
+                        detail:
+                          type: string
+              example:
+                errors:
+                - title: Invalid request parameters
+                  detail: The `response_status_code` param must contain HTTP status
+                    codes from 100 to 599, inclusive ranges such as `400-499`, or
+                    literal `null`, separated by commas.
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/webhook_deliveries/{id}":
+    get:
+      tags:
+      - Webhooks
+      summary: Get a Webhook Delivery
+      description: Get a single webhook delivery by ID.
+      operationId: GetAWebhookDelivery
+      parameters:
+      - name: id
+        in: path
+        description: WebhookDelivery ID (`WebhookDelivery.data.id`)
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          format: UUID
+        example: 31918dce-2dc3-405b-8d3c-fd3901b17e9f
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GetAWebhookDeliveryResponse"
+        '404':
+          description: Not Found
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/webhook_deliveries/{id}/redeliver":
+    post:
+      tags:
+      - Webhooks
+      summary: Resend a Webhook Delivery
+      description: 'Use this endpoint to resend a failed webhook delivery.
+
+        '
+      operationId: ResendAWebhookDelivery
+      parameters:
+      - name: id
+        in: path
+        description: WebhookDelivery ID (`WebhookDelivery.data.id`)
+        required: true
+        style: simple
+        explode: false
+        schema:
+          type: string
+          format: UUID
+        example: 31918dce-2dc3-405b-8d3c-fd3901b17e9f
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/RedeliverAWebhookDeliveryResponse"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/simulate/incoming_npp_payid_payment":
+    post:
+      tags:
+      - Sandbox Only
+      summary: Simulate incoming PayID payment
+      description: Simulate receiving a real-time PayID payment from one of your Receivable
+        Contacts.
+      operationId: SimulateIncomingPayIDPayment
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/SimulateIncomingPayIDPaymentRequest"
+        required: true
+      responses:
+        '201':
+          description: Success
+        '400':
+          description: Invalid parameters
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/simulate/incoming_npp_bban_payment":
+    post:
+      tags:
+      - Sandbox Only
+      summary: Simulate an incoming real-time payment
+      description: 'Simulate receiving a real-time payment to either a Receivable
+        Contact or one of your float accounts, made using a BSB and account number
+        (i.e. not via PayID).
+
+        '
+      operationId: SimulateIncomingNPPBBANPayment
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/SimulateIncomingNPPBBANPaymentRequest"
+        required: true
+      responses:
+        '201':
+          description: Success
+        '400':
+          description: Invalid parameters
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+  "/simulate/incoming_de_payment":
+    post:
+      tags:
+      - Sandbox Only
+      summary: Simulate an incoming DE payment
+      description: 'Simulate receiving a Direct Entry payment (i.e. not a real-time
+        payment) to either a Receivable Contact or one of your float accounts.
+
+        '
+      operationId: SimulateIncomingDEPayment
+      requestBody:
+        description: ''
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/SimulateIncomingDEPaymentRequest"
+        required: true
+      responses:
+        '201':
+          description: Success
+        '400':
+          description: Invalid parameters
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+components:
+  parameters:
+    ZeptoAPIVersion:
+      name: Zepto-API-Version
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: "^\\d{8}$"
+        default: '20250101'
+        example: '20260101'
+      description: API version in YYYYMMDD format. Defaults to 20250101 (legacy) when
+        omitted.
+  securitySchemes:
+    bearerAuth:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: "/oauth/authorize"
+          tokenUrl: "/oauth/token"
+          refreshUrl: "/oauth/token"
+          scopes:
+            public: Access your public information
+            contacts: Manage your contacts
+            payments: Manage your payments
+            payment_requests: Manage your payment requests
+            refunds: Manage your refunds
+            agreements: Manage your agreements
+            transactions: Access your transaction history
+            open_agreements: Manage your open agreements
+            transfers: Manage your Transfers
+  schemas:
+    GetAgreementResponse:
+      title: Get an Agreement (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+          required:
+          - ref
+          - initiator_id
+          - authoriser_id
+          - contact_id
+          - bank_account_id
+          - status
+          - status_reason
+          - responded_at
+          - created_at
+          - terms
+          properties:
+            ref:
+              type: string
+              minLength: 3
+              maxLength: 18
+              description: 'The Agreement reference (Min: 3 - Max: 18)'
+            initiator_id:
+              type: string
+              format: uuid
+              description: Your Zepto account ID
+            authoriser_id:
+              type: string
+              format: uuid
+              description: The authoriser's account ID (AnyoneAccount)
+            contact_id:
+              type: string
+              format: uuid
+              description: The contact ID representing the authoriser within Zepto
+            bank_account_id:
+              type: string
+              format: uuid
+              description: The authoriser's bank account ID
+            status:
+              type: string
+              description: The status of the Agreement
+              enum:
+              - proposed
+              - accepted
+              - cancelled
+              - declined
+              - expended
+            status_reason:
+              type: string
+              description: The reason the agreement was cancelled. This is a free
+                text field.
+            responded_at:
+              type: string
+              format: date-time
+              description: The date-time when the Agreement status changed
+            created_at:
+              type: string
+              format: date-time
+              description: The date-time when the Agreement was created
+            terms:
+              "$ref": "#/components/schemas/Terms"
+            metadata:
+              type: object
+              description: Your custom keyed data
+      example:
+        data:
+          ref: A.2
+          initiator_id: 4e2728cc-b4ba-42c2-a6c3-26a7758de58d
+          authoriser_id: 8df89c16-330f-462b-8891-808d7bdceb7f
+          contact_id: 0d290763-bd5a-4b4d-a8ce-06c64c4a697b
+          bank_account_id: fb9381ec-22af-47fd-8998-804f947aaca3
+          status: accepted
+          status_reason: reason
+          responded_at: '2017-03-20T02:13:11Z'
+          created_at: '2017-03-20T00:53:27Z'
+          terms:
+            per_payout:
+              max_amount: 10000
+              min_amount: 1
+            per_frequency:
+              days: 7
+              max_amount: 1000000
+    ListOutgoingAgreementsResponse:
+      title: List outgoing Agreements (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+          description: ''
+      example:
+        data:
+        - ref: A.4
+          initiator_id: 4e2728cc-b4ba-42c2-a6c3-26a7758de58d
+          authoriser_id: 8df89c16-330f-462b-8891-808d7bdceb7f
+          contact_id: a80ac411-c8fb-45c0-9557-607c54649907
+          bank_account_id: fa80ac411-c8fb-45c0-9557-607c54649907
+          status: proposed
+          status_reason:
+          responded_at:
+          created_at: '2017-03-20T00:53:27Z'
+          terms:
+            per_payout:
+              max_amount: 10000
+              min_amount: 1
+            per_frequency:
+              days: 7
+              max_amount: 1000000
+        - ref: A.3
+          initiator_id: 4e2728cc-b4ba-42c2-a6c3-26a7758de58d
+          authoriser_id: 56df206a-aaff-471a-b075-11882bc8906a
+          contact_id: a80ac411-c8fb-45c0-9557-607c54649907
+          bank_account_id: fa80ac411-c8fb-45c0-9557-607c54649907
+          status: proposed
+          status_reason:
+          responded_at:
+          created_at: '2017-03-16T22:51:48Z'
+          terms:
+            per_payout:
+              max_amount: 5000
+              min_amount: 0
+            per_frequency:
+              days: '1'
+              max_amount: 10000
+    BankAccount:
+      title: Bank Account
+      type: object
+      required:
+      - account_type
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique Bank Account ID
+        account_type:
+          type: string
+          description: Distinguishes Float Accounts from other Bank Accounts
+          enum:
+          - bank_account
+          - float_account
+        branch_code:
+          type: string
+          description: Bank State Branch code
+        bank_name:
+          type: string
+          description: Name of the financial institution
+        account_number:
+          type: string
+          description: Bank account number
+        status:
+          type: string
+          description: Current Bank Account status
+          enum:
+          - active
+          - removed
+        title:
+          type: string
+          description: Display title for the Bank Account
+        available_balance:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: Current available balance in cents for a Float Account; null
+            for other Bank Accounts
+        payid_configs:
+          type: array
+          description: PayID pooling configurations associated with the Float Account
+          items:
+            type: object
+            properties:
+              email_domain:
+                type: string
+              pooling_state:
+                type: string
+                enum:
+                - disabled
+                - enabled
+                - paused
+              max_pool_size:
+                type: integer
+              current_pool_size:
+                type: integer
+    ListAllBankAccountsResponse:
+      title: List all Bank Accounts (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            "$ref": "#/components/schemas/BankAccount"
+          description: ''
+      example:
+        data:
+        - id: 6a7ed958-f1e8-42dc-8c02-3901d7057357
+          account_type: bank_account
+          branch_code: '493192'
+          bank_name: National Australia Bank
+          account_number: '3993013'
+          status: active
+          title: AU.493192.3993013
+          available_balance:
+        - id: 56df206a-aaff-471a-b075-11882bc8906a
+          account_type: bank_account
+          branch_code: '302193'
+          bank_name: National Australia Bank
+          account_number: '119302'
+          status: active
+          title: Trust Account
+          available_balance:
+        - id: ab3de19b-709b-4a41-82a5-3b43b3dc58c9
+          account_type: float_account
+          branch_code: '802919'
+          bank_name: Zepto Float Account
+          account_number: '1748212'
+          status: active
+          title: Float Account
+          available_balance: 10000
+          payid_configs:
+          - email_domain: pay.zepto.com.au
+            pooling_state: disabled
+            max_pool_size: 10
+            current_pool_size: 1
+    GetABankAccountResponse:
+      title: Get a Bank Account (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          "$ref": "#/components/schemas/BankAccount"
+      example:
+        data:
+          id: ab3de19b-709b-4a41-82a5-3b43b3dc58c9
+          account_type: float_account
+          branch_code: '802919'
+          bank_name: Zepto Float Account
+          account_number: '1748212'
+          status: active
+          title: Float Account
+          available_balance: 10000
+          payid_configs:
+          - email_domain: pay.zepto.com.au
+            pooling_state: disabled
+            max_pool_size: 10
+            current_pool_size: 1
+    FloatAccountEntry:
+      title: Float Account entry
+      type: object
+      required:
+      - id
+      - created_at
+      - description
+      - amount
+      - available_balance_after
+      - links
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique ID of the entry
+        created_at:
+          type: string
+          format: date-time
+          description: Date and time in UTC when the entry was applied to the Float
+            Account
+        description:
+          type: string
+          description: Description recorded for the entry
+        amount:
+          type: integer
+          format: int64
+          description: Signed amount in cents. Positive values are credits and negative
+            values are debits.
+        available_balance_after:
+          type: integer
+          format: int64
+          description: Available balance in cents immediately after this entry was
+            applied
+        links:
+          type: object
+          required:
+          - self
+          properties:
+            self:
+              type: string
+              format: uri
+              description: Canonical URL for this entry
+      example:
+        id: '019c8814-c767-753c-82f7-3daac44d8662'
+        created_at: '2026-07-21T01:27:50Z'
+        description: CT.1uou2c
+        amount: -1250
+        available_balance_after: 84750
+        links:
+          self: https://api.sandbox.zeptopayments.com/bank_accounts/ab3de19b-709b-4a41-82a5-3b43b3dc58c9/entries/019c8814-c767-753c-82f7-3daac44d8662
+    ListFloatAccountEntriesResponse:
+      title: List Float Account entries (response)
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          type: array
+          items:
+            "$ref": "#/components/schemas/FloatAccountEntry"
+    GetFloatAccountEntryResponse:
+      title: Get a Float Account entry (response)
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          "$ref": "#/components/schemas/FloatAccountEntry"
+    Terms:
+      title: Agreement terms
+      required:
+      - per_payout
+      - per_frequency
+      type: object
+      description: Terms
+      properties:
+        per_payout:
+          "$ref": "#/components/schemas/PerPayout"
+        per_frequency:
+          "$ref": "#/components/schemas/PerFrequency"
+    PerPayout:
+      title: Per payout terms
+      required:
+      - min_amount
+      - max_amount
+      type: object
+      properties:
+        min_amount:
+          type:
+          - integer
+          - 'null'
+          minimum: 1
+          description: Minimum amount in cents a Payment Request can be in order to
+            be auto-approved. Specify <code>null</code> for no limit.
+          example: 1
+        max_amount:
+          type: integer
+          minimum: 1
+          description: Maximum amount in cents a Payment Request can be in order to
+            be auto-approved. Specify <code>null</code> for no limit.
+          example: 10000
+    PerFrequency:
+      title: Per frequency terms
+      required:
+      - days
+      - max_amount
+      type: object
+      properties:
+        days:
+          type: integer
+          description: Amount of days to apply against the frequency. Specify <code>null</code>
+            for no limit.
+          example: 7
+        max_amount:
+          type: integer
+          description: Maximum amount in cents the total of all PRs can be for the
+            duration of the frequency. Specify <code>null</code> for no limit.
+          example: 1000000
+    AddAReceivableContactRequest:
+      title: Add a Receivable Contact (request)
+      required:
+      - name
+      - email
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 140
+          pattern: "^[ -~]+$"
+          description: 'Contact name (Min: 3 - Max: 140)'
+        email:
+          type: string
+          minLength: 6
+          maxLength: 256
+          description: 'Contact email (Min: 6 - Max: 256)'
+        payid_email:
+          type: string
+          minLength: 6
+          maxLength: 256
+          description: 'Contact PayID email (Min: 6 - Max: 256)'
+        payid_email_domain:
+          type: string
+          minLength: 3
+          maxLength: 254
+          description: 'PayID pool email domain (Min: 3 - Max: 254)'
+        metadata:
+          "$ref": "#/components/schemas/Metadata"
+      example:
+        name: Delphine Jestin
+        email: delphine@gmail.com
+        payid_email: delphine_123@merchant.com.au
+        metadata:
+          custom_key: Custom string
+          another_custom_key: Maybe a URL
+    AddAReceivableContactResponse:
+      title: Add a Receivable Contact (response)
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              minLength: 3
+              maxLength: 140
+              description: 'Contact name (Min: 3 - Max: 140)'
+            email:
+              type: string
+              minLength: 6
+              maxLength: 256
+              description: 'Contact email (Min: 6 - Max: 256)'
+            type:
+              type: string
+              description: Fixed to 'anyone'
+            metadata:
+              "$ref": "#/components/schemas/Metadata"
+            bank_account:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                account_number:
+                  type: string
+                  minLength: 5
+                  maxLength: 9
+                  description: 'Zepto generated account number (Min: 5 - Max: 9)'
+                branch_code:
+                  type: string
+                  minLength: 6
+                  maxLength: 6
+                  description: 'Zepto branch code (Min: 6 - Max: 6)'
+                bank_name:
+                  type: string
+                  description: Fixed to 'Zepto Float Acount'
+                state:
+                  type: string
+                  description: Fixed to 'Active'
+                  enum:
+                  - active
+                  - removed
+                iav_provider:
+                  type:
+                  - string
+                  - 'null'
+                  description: Always null
+                iav_status:
+                  type:
+                  - string
+                  - 'null'
+                  description: Always null
+                blocks:
+                  type: object
+                  properties:
+                    debits_blocked:
+                      type: boolean
+                      description: Used by Zepto admins. Defines whether the bank
+                        account is blocked from being debited
+                    credits_blocked:
+                      type: boolean
+                      description: Used by Zepto admins. Defined Whether this bank
+                        account is blocked from being credited
+            anyone_account:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+            payid_details:
+              type: object
+              properties:
+                alias_value:
+                  type: string
+                  format: email
+                  minLength: 6
+                  maxLength: 256
+                  description: The PayID email
+                alias_type:
+                  type: string
+                  description: Type of PayID. Fixed to `email`
+                alias_name:
+                  type: string
+                  minLength: 3
+                  maxLength: 140
+                  description: Your merchant's alias_name
+                state:
+                  type: string
+                  description: Pending -> Active or Failed -> Deregistered (Contact
+                    removed)
+                  enum:
+                  - pending
+                  - active
+                  - failed
+                  - deregistered
+      example:
+        data:
+          id: 6a7ed958-f1e8-42dc-8c02-3901d7057357
+          name: Delphine Jestin
+          email: delphine@gmail.com
+          type: anyone
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+          bank_account:
+            id: 55afddde-4296-4daf-8e49-7ba481ef9608
+            account_number: '1408281'
+            branch_code: '802919'
+            bank_name: Zepto Float Account
+            state: active
+            iav_provider:
+            iav_status:
+            blocks:
+              debits_blocked: false
+              credits_blocked: false
+          anyone_account:
+            id: 77be6ecc-5fa7-454b-86d6-02a5f147878d
+          payid_details:
+            alias_value: delphine_123@merchant.com.au
+            alias_type: email
+            alias_name: your merchant's alias_name
+            state: pending
+    ListAllContactsResponse:
+      title: List all Contacts (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+          description: ''
+      example:
+        data:
+        - id: 6a7ed958-f1e8-42dc-8c02-3901d7057357
+          name: Outstanding Tours Pty Ltd
+          email: accounts@outstandingtours.com.au
+          type: Zepto account
+          bank_account:
+            id: '095c5ab7-7fa8-40fd-b317-cddbbf4c8fbc'
+            account_number: '494307'
+            branch_code: '435434'
+            bank_name: National Australia Bank
+            state: active
+            iav_provider: split
+            iav_status: active
+            blocks:
+              debits_blocked: false
+              credits_blocked: false
+          bank_connection:
+            id: c397645b-bd4f-4fc6-b1fe-4993fef6c3c7
+        - id: 49935c67-c5df-4f00-99f4-1413c18a89a0
+          name: Adventure Dudes Pty Ltd
+          email: accounts@adventuredudes.com.au
+          type: Zepto account
+          bank_account:
+            id: 861ff8e4-7acf-4897-9e53-e7c5ae5f7cc0
+            account_number: '4395959'
+            branch_code: '068231'
+            bank_name: National Australia Bank
+            state: active
+            iav_provider: split
+            iav_status: credentials_invalid
+            blocks:
+              debits_blocked: false
+              credits_blocked: false
+          bank_connection:
+            id: c397645b-bd4f-4fc6-b1fe-4993fef6c3c7
+        - id: eb3266f9-e172-4b6c-b802-fe5ac4d3250a
+          name: Surfing World Pty Ltd
+          email: accounts@surfingworld.com.au
+          type: Zepto account
+          bank_account:
+            id:
+            account_number:
+            branch_code:
+            bank_name:
+            state: disabled
+            iav_provider:
+            iav_status:
+            blocks:
+              debits_blocked: false
+              credits_blocked: false
+          links:
+            add_bank_connection: https://go.sandbox.zeptopayments.com/invite_contact/thomas-morgan-1/1030bfef-cef5-4938-b10b-5841cafafc80
+        - id: 6a7ed958-f1e8-42dc-8c02-3901d7057357
+          name: Hunter Thompson
+          email: hunter@batcountry.com
+          type: anyone
+          bank_account:
+            id: 55afddde-4296-4daf-8e49-7ba481ef9608
+            account_number: '13048322'
+            branch_code: '123456'
+            bank_name: National Australia Bank
+            state: pending_verification
+            iav_provider:
+            iav_status:
+            blocks:
+              debits_blocked: false
+              credits_blocked: false
+          links:
+            add_bank_connection: https://go.sandbox.zeptopayments.com/invite_contact/thomas-morgan-1/1030bfef-cef5-4938-b10b-5841cafafc80
+    AddAnAnyoneContactRequest:
+      title: Add a Contact (request)
+      required:
+      - name
+      - email
+      - branch_code
+      - account_number
+      type: object
+      properties:
+        name:
+          type: string
+          pattern: "^[ -~]+$"
+          maxLength: 140
+          description: The name of the Contact (140 max. characters, ASCII characters
+            only)
+        email:
+          type: string
+          maxLength: 256
+          description: The email of the Contact (256 max. characters)
+        branch_code:
+          type: string
+          description: The bank account BSB of the Contact
+        account_number:
+          type: string
+          description: The bank account number of the Contact
+        metadata:
+          "$ref": "#/components/schemas/Metadata"
+      example:
+        name: Hunter Thompson
+        email: hunter@batcountry.com
+        branch_code: '123456'
+        account_number: '13048322'
+        metadata:
+          custom_key: Custom string
+          another_custom_key: Maybe a URL
+    AddAnAnyoneContactResponse:
+      title: Add a Contact (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+      example:
+        data:
+          id: 6a7ed958-f1e8-42dc-8c02-3901d7057357
+          name: Hunter Thompson
+          email: hunter@batcountry.com
+          type: anyone
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+          bank_account:
+            id: 55afddde-4296-4daf-8e49-7ba481ef9608
+            account_number: '13048322'
+            branch_code: '123456'
+            bank_name: National Australia Bank
+            state: active
+            iav_provider:
+            iav_status:
+            blocks:
+              debits_blocked: false
+              credits_blocked: false
+          links:
+            add_bank_connection: https://go.sandbox.zeptopayments.com/invite_contact/thomas-morgan-1/1030bfef-cef5-4938-b10b-5841cafafc80
+    GetABankConnectionResponse:
+      title: Get a BankConnection (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+      example:
+        data:
+          id: c397645b-bd4f-4fc6-b1fe-4993fef6c3c7
+          provider_name: split
+          state: credentials_invalid
+          refreshed_at: '2020-02-13T09:01:00Z'
+          removed_at:
+          failure_reason:
+          institution:
+            short_name: CBA
+            full_name: Commonwealth Bank of Australia
+          contact:
+            id: 72e37667-6364-440f-b1bd-56df5654e258
+            name: Joel Boyle
+            email: travis@hermanntorp.net
+          links:
+            update_bank_connection: https://go.sandbox.zeptopayments.com/authorise_bank_connections/thomas-morgan-1/c397645b-bd4f-4fc6-b1fe-4993fef6c3c7
+    GetAContactResponse:
+      title: Get a Contact (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+          required:
+          - id
+          - ref
+          - name
+          - email
+          - type
+          - metadata
+          - bank_account
+          - anyone_account
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: The Contact ID
+            ref:
+              type: string
+              format: string
+              description: The Contact ref
+            name:
+              type: string
+              minLength: 3
+              maxLength: 140
+              description: 'The Contact name (Min: 3 - Max: 140)'
+            email:
+              type: string
+              minLength: 6
+              maxLength: 256
+              format: email
+              description: 'The Contact email (Min: 6 - Max: 256)'
+            type:
+              type: string
+              description: "(Deprecated) The Contact account type"
+              enum:
+              - Zepto account
+              - anyone
+            metadata:
+              "$ref": "#/components/schemas/Metadata"
+            bank_account:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                  description: The Bank Account ID
+                account_number:
+                  type: string
+                  minLength: 5
+                  maxLength: 9
+                  description: 'The Bank Account number (Min: 5 - Max: 9)'
+                branch_code:
+                  type: string
+                  minLength: 6
+                  maxLength: 6
+                  description: 'The BSB number (Min: 6 - Max: 6)'
+                state:
+                  type: string
+                  description: The bank account state
+                  enum:
+                  - active
+                  - removed
+                iav_provider:
+                  type:
+                  - string
+                  - 'null'
+                  description: The instant account verification provider
+                  enum:
+                  - split
+                  - proviso
+                  - basiq
+                  - credit_sense
+                  -
+                iav_status:
+                  type:
+                  - string
+                  - 'null'
+                  description: The instant account verification bank connection status
+                  enum:
+                  - active
+                  - removed
+                  - credentials_invalid
+                  -
+                blocks:
+                  type: object
+                  properties:
+                    debits_blocked:
+                      type: boolean
+                      description: Used by Zepto admins. Defines whether the bank
+                        account is blocked from being debited
+                    credits_blocked:
+                      type: boolean
+                      description: Used by Zepto admins. Defined Whether this bank
+                        account is blocked from being credited
+            anyone_account:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                  description: "(Deprecated) The Anyone Account ID"
+            bank_connection:
+              type: object
+              properties:
+                id:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+                  description: The bank connection ID
+            links:
+              type: object
+              properties:
+                add_bank_connection:
+                  type: string
+                  format: url
+                  description: A unique URL to share with the Contact in order to
+                    establish a new bank connection to their bank account
+            payid_details:
+              type: object
+              properties:
+                alias_value:
+                  type: string
+                  format: email
+                  minLength: 6
+                  maxLength: 256
+                  description: The PayID email
+                alias_type:
+                  type: string
+                  description: Type of PayID. Fixed to `email`
+                alias_name:
+                  type: string
+                  minLength: 3
+                  maxLength: 140
+                  description: Your merchant's alias_name
+                state:
+                  type: string
+                  description: Pending -> Active or Failed -> Deregistered (Contact
+                    removed)
+                  enum:
+                  - pending
+                  - active
+                  - failed
+                  - deregistered
+      example:
+        data:
+          id: 55afddde-4296-4daf-8e49-7ba481ef9608
+          ref: CNT.123
+          name: Outstanding Tours Pty Ltd
+          email: accounts@outstandingtours.com.au
+          type: anyone
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+          bank_account:
+            id: fcabeacb-2ef6-4b27-ba19-4f6fa0d57dcb
+            account_number: '947434694'
+            branch_code: '304304'
+            bank_name: National Australia Bank
+            state: active
+            iav_provider:
+            iav_status:
+            blocks:
+              debits_blocked: false
+              credits_blocked: false
+          anyone_account:
+            id: 31a05f81-25a2-4085-92ef-0d16d0263bff
+          bank_connection:
+            id:
+          links:
+            add_bank_connection: https://go.sandbox.zeptopayments.com/invite_contact/thomas-morgan-1/1030bfef-cef5-4938-b10b-5841cafafc80
+          payid_details:
+            alias_value: otp@pay.travel.com.au
+            alias_type: email
+            alias_name: your merchant's alias_name
+            state: active
+    UpdateAReceivableContactRequest:
+      title: Update a Receivable Contact (request)
+      type: object
+      required:
+      - payid_name
+      properties:
+        payid_name:
+          type: string
+          pattern: "^[ -~]+$"
+          description: The PayID name of the Receivable Contact. Only available to
+            integrators with extended KYC permissions. Contact Zepto for more information
+            if you would like this feature enabled for your account.
+      example:
+        payid_name: Bob Smith
+    UpdateAContactRequest:
+      title: Update a Contact (request)
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 140
+          pattern: "^[ -~]+$"
+          description: The name of the Contact
+        email:
+          type: string
+          description: The email of the Contact
+        branch_code:
+          type: string
+          description: The bank account BSB of the Contact
+        account_number:
+          type: string
+          description: The bank account number of the Contact
+        metadata:
+          "$ref": "#/components/schemas/Metadata"
+      example:
+        name: My very own alias
+        email: updated@email.com
+        branch_code: '123456'
+        account_number: '99887766'
+        metadata:
+          custom_key: Custom string
+          another_custom_key: Maybe a URL
+    UpdateAContactResponse:
+      title: Update a Contact (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+      example:
+        data:
+          id: fcabeacb-2ef6-4b27-ba19-4f6fa0d57dcb
+          name: My very own alias
+          email: updated@email.com
+          type: anyone
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+          bank_account:
+            id: 55afddde-4296-4daf-8e49-7ba481ef9608
+            account_number: '99887766'
+            branch_code: '123456'
+            bank_name: Zepto SANDBOX Bank
+            state: active
+            iav_provider:
+            iav_status:
+            blocks:
+              debits_blocked: false
+              credits_blocked: false
+          anyone_account:
+            id: 63232c0a-a783-4ae9-ae73-f0974fe1e345
+          links:
+            add_bank_connection: https://go.sandbox.zeptopayments.com/invite_contact/dog-bones-inc/fcabeacb-2ef6-4b27-ba19-4f6fa0d57dcb
+    MakeAPaymentRequest:
+      title: Make a Payment (request)
+      required:
+      - description
+      - matures_at
+      - payouts
+      - your_bank_account_id
+      - channels
+      type: object
+      properties:
+        description:
+          type: string
+          description: User description. Only visible to the payer. ASCII-printable
+            characters and unicode emojis are accepted.
+          pattern: "^[ -~\\p{Emoji}]+$"
+          example: The SuperPackage
+        matures_at:
+          type: string
+          format: date-time
+          description: Date & time in UTC ISO8601 the Payment should be processed.
+            (Can not be earlier than the start of current day in Sydney AEST/AEDT)
+          example: '2016-09-13T00:00:00Z'
+        your_bank_account_id:
+          type: string
+          description: Specify where we should take the funds for this transaction.
+            If omitted, your primary bank account will be used.
+          example: 83623359-e86e-440c-9780-432a3bc3626f
+        channels:
+          type: array
+          description: Specify the payment channel to be used, in order. (new_payments_platform,
+            direct_entry, or both)
+        payouts:
+          type: array
+          maxItems: 1
+          items:
+            "$ref": "#/components/schemas/Payout"
+          description: One Payout object only
+        metadata:
+          "$ref": "#/components/schemas/Metadata"
+      example:
+        description: The SuperPackage
+        matures_at: '2021-06-13T00:00:00Z'
+        your_bank_account_id: 83623359-e86e-440c-9780-432a3bc3626f
+        channels:
+        - new_payments_platform
+        payouts:
+        - amount: 30000
+          description: A tandem skydive jump SB23094
+          recipient_contact_id: 48b89364-1577-4c81-ba02-96705895d457
+          metadata:
+            invoice_ref: BILL-0001
+            invoice_id: c80a9958-e805-47c0-ac2a-c947d7fd778d
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+        metadata:
+          custom_key: Custom string
+          another_custom_key: Maybe a URL
+    Payout:
+      title: Payout
+      required:
+      - amount
+      - description
+      - recipient_contact_id
+      description: The actual Payout
+      type: object
+      properties:
+        amount:
+          type: integer
+          description: Amount in cents to pay the recipient
+          example: 30000
+        description:
+          type: string
+          description: Description that both the payer and recipient can see. For
+            Direct Entry payments, the payout recipient will see the first 9 characters
+            of this description. For NPP payments, the payout recipient will see the
+            first 280 characters of this description. ASCII-printable characters and
+            unicode emojis are accepted.
+          pattern: "^[ -~\\p{Emoji}]+$"
+          example: A tandem skydive jump SB23094
+        recipient_contact_id:
+          type: string
+          description: Contact to pay (`Contact.data.id`)
+          example: 48b89364-1577-4c81-ba02-96705895d457
+        category_purpose_code:
+          type: string
+          description: ISO 20022 code for payment category purpose (see supported
+            values below).
+          enum:
+          - PENS
+          - SALA
+          - TAXS
+          example: PENS
+        end_to_end_id:
+          type: string
+          maxLength: 35
+          description: 'End-To-End ID (35 max. characters). Required when a category
+            purpose code is present. For superannuation or tax payments, set this
+            to the Payment Reference Number (PRN). For salary payments, set this to
+            the Employee Reference.
+
+            '
+          example: FFC6D34847134E4D8BF4B9B41BDC94C8
+        metadata:
+          type: object
+          description: Use for your custom data and certain Zepto customisations.
+            Stored against generated transactions and included in associated webhook
+            payloads.
+    VoidAPayoutRequest:
+      title: Void a Payout (request)
+      type: object
+      properties:
+        details:
+          type: string
+          description: Optional details about why the payout has been voided
+          example: Incorrect recipient
+    Metadata:
+      title: Metadata
+      type: object
+      description: Use for your custom data and certain Zepto customisations.
+      properties: {}
+      example:
+        custom_key: Custom string
+        another_custom_key: Maybe a URL
+    MakeAPaymentResponse:
+      title: Make a Payment (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+      example:
+        data:
+          ref: PB.1
+          your_bank_account_id: 83623359-e86e-440c-9780-432a3bc3626f
+          channels:
+          - new_payments_platform
+          payouts:
+          - ref: D.1
+            recipient_contact_id: 48b89364-1577-4c81-ba02-96705895d457
+            batch_description: The SuperPackage
+            matures_at: '2016-09-13T23:50:44Z'
+            created_at: '2016-09-10T23:50:44Z'
+            status: maturing
+            amount: 30000
+            description: A tandem skydive jump SB23094
+            from_id: 83623359-e86e-440c-9780-432a3bc3626f
+            to_id: 21066764-c103-4e7f-b436-4cee7db5f400
+            category_purpose_code: PENS
+            end_to_end_id: FFC6D34847134E4D8BF4B9B41BDC94C8
+            metadata:
+              invoice_ref: BILL-0001
+              invoice_id: c80a9958-e805-47c0-ac2a-c947d7fd778d
+              custom_key: Custom string
+              another_custom_key: Maybe a URL
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+    ListAllPaymentsResponse:
+      title: List all Payments (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+          description: ''
+      example:
+        data:
+        - ref: PB.1
+          your_bank_account_id: 83623359-e86e-440c-9780-432a3bc3626f
+          channels:
+          - new_payments_platform
+          - direct_entry
+          payouts:
+          - ref: D.1
+            recipient_contact_id: 48b89364-1577-4c81-ba02-96705895d457
+            batch_description: This description is only available to the payer
+            matures_at: '2016-09-13T23:50:44Z'
+            created_at: '2016-09-10T23:50:44Z'
+            status: maturing
+            amount: 30000
+            description: The recipient will see this description
+            from_id: 83623359-e86e-440c-9780-432a3bc3626f
+            to_id: 21066764-c103-4e7f-b436-4cee7db5f400
+            metadata:
+              invoice_ref: BILL-0001
+              invoice_id: c80a9958-e805-47c0-ac2a-c947d7fd778d
+              custom_key: Custom string
+              another_custom_key: Maybe a URL
+          - ref: D.2
+            recipient_contact_id: dc6f1e60-3803-43ca-a200-7d641816f57f
+            batch_description: This description is only available to the payer
+            matures_at: '2016-09-13T23:50:44Z'
+            created_at: '2016-09-10T23:50:44Z'
+            status: maturing
+            amount: 30000
+            description: The recipient will see this description
+            from_id: 48b89364-1577-4c81-ba02-96705895d457
+            to_id: f989d9cd-87fc-4c73-b0a4-1eb0e8768d3b
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+    VoidAPayment:
+      title: Void a Payment
+    GetAPaymentResponse:
+      title: Get a Payment (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+      example:
+        data:
+          ref: PB.1
+          your_bank_account_id: 83623359-e86e-440c-9780-432a3bc3626f
+          channels:
+          - direct_entry
+          payouts:
+          - ref: D.1
+            recipient_contact_id: 48b89364-1577-4c81-ba02-96705895d457
+            batch_description: The SuperPackage
+            matures_at: '2016-09-13T23:50:44Z'
+            created_at: '2016-09-10T23:50:44'
+            status: maturing
+            amount: 30000
+            description: A tandem skydive jump SB23094
+            from_id: 83623359-e86e-440c-9780-432a3bc3626f
+            to_id: 21066764-c103-4e7f-b436-4cee7db5f400
+            metadata:
+              invoice_ref: BILL-0001
+              invoice_id: c80a9958-e805-47c0-ac2a-c947d7fd778d
+              custom_key: Custom string
+              another_custom_key: Maybe a URL
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+    MakeAPaymentRequestRequest:
+      title: Make a Payment Request (request)
+      required:
+      - authoriser_contact_id
+      - description
+      - matures_at
+      - amount
+      type: object
+      properties:
+        description:
+          type: string
+          description: Description visible to the initiator (payee). The first 9 characters
+            supplied will be visible to the authoriser (payer)
+          example: Visible to both initiator and authoriser
+        matures_at:
+          type: string
+          format: date-time
+          description: Date & time in UTC ISO8601 that the Payment will be processed
+            if the request is approved. (If the request is approved after this point
+            in time, it will be processed straight away)
+          example: '2016-12-19T02:10:56Z'
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 99999999999
+          description: 'Amount in cents to pay the initiator (Min: 1 - Max: 99999999999)'
+          example: 99000
+        authoriser_contact_id:
+          type: string
+          description: The Contact the payment will be requested from (`Contact.data.id`)
+          example: de86472c-c027-4735-a6a7-234366a27fc7
+        your_bank_account_id:
+          type: string
+          format: uuid
+          description: Specify where we should settle the funds for this transaction.
+            If omitted, your primary bank account will be used.
+          example: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+        metadata:
+          type: object
+          description: Use for your custom data and certain Zepto customisations.
+            Stored against generated transactions and included in associated webhook
+            payloads.
+      example:
+        description: Visible to both initiator and authoriser
+        matures_at: 2016-12-19 02:10:56 UTC
+        amount: 99000
+        authoriser_contact_id: de86472c-c027-4735-a6a7-234366a27fc7
+        your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+        metadata:
+          custom_key: Custom string
+          another_custom_key: Maybe a URL
+    MakeAPaymentRequestResponse:
+      title: Make a Payment Request (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+          required:
+          - ref
+          - initiator_id
+          - your_bank_account_id
+          - authoriser_id
+          - authoriser_contact_id
+          - contact_initiated
+          - schedule_ref
+          - status
+          - status_reason
+          - matures_at
+          - responded_at
+          - created_at
+          - credit_ref
+          - payout
+          properties:
+            ref:
+              type: string
+              description: 'The Payment Request reference (PR.*) (Min: 4 - Max: 8)'
+            initiator_id:
+              type: string
+              format: uuid
+              description: 'Your bank account ID where the funds will settle (Min:
+                36 - Max: 36)'
+            your_bank_account_id:
+              type: string
+              format: uuid
+              description: 'Your bank account ID where the funds will settle (alias
+                of `initiator_id`) (Min: 36 - Max: 36)'
+            authoriser_id:
+              type: string
+              format: uuid
+              description: 'The debtor''s bank account ID (Min: 36 - Max: 36)'
+            authoriser_contact_id:
+              type: string
+              format: uuid
+              description: 'The contact ID representing the debtor within Zepto (Min:
+                36 - Max: 36)'
+            contact_initiated:
+              type: boolean
+              description: Initiated by Contact or Merchant
+            schedule_ref:
+              type:
+              - string
+              - 'null'
+              description: 'The schedule that generated the Payment request if applicable
+                (Min: 0 - Max: 8)'
+            status:
+              type: string
+              description: The status of the Payment Request
+              enum:
+              - approved
+              - cancelled
+            status_reason:
+              type:
+              - 'null'
+              description: "(Deprecated) Only used when the `status` is `declined`
+                due to prechecking."
+              enum:
+              -
+            matures_at:
+              type: string
+              format: date-time
+              description: 'The date-time when the Payment Request is up for processing
+                (Min: 20 - Max: 20)'
+            responded_at:
+              type:
+              - string
+              - 'null'
+              format: date-time
+              description: 'The date-time when the Payment Request status changed
+                (Min: 0 - Max: 20)'
+            created_at:
+              type: string
+              format: date-time
+              description: 'The date-time when the Payment Request was created (Min:
+                20 - Max: 20)'
+            credit_ref:
+              type:
+              - string
+              - 'null'
+              description: 'The resulting credit entry reference (available once approved)
+                (Min: 4 - Max: 8)'
+            payout:
+              type: object
+              properties:
+                amount:
+                  type: integer
+                  minimum: 1
+                  maximum: 99999999999
+                  description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+                description:
+                  type: string
+                  description: 'Payment Request description (Min: 1 - Max: 280)'
+                matures_at:
+                  type: string
+                  format: date-time
+                  description: 'The date-time when the Payment Request is up for processing
+                    (Min: 20 - Max: 20)'
+              required:
+              - amount
+              - description
+              - matures_at
+            metadata:
+              type: object
+              description: Your custom keyed data
+      example:
+        data:
+          ref: PR.39p1
+          initiator_id: ca7bc5b3-e47f-4153-96fb-bbe326b42772
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          authoriser_id: 970e4526-67d9-4ed9-b554-f5cf390ab775
+          authoriser_contact_id: de86472c-c027-4735-a6a7-234366a27fc7
+          contact_initiated: false
+          schedule_ref:
+          status: approved
+          status_reason:
+          matures_at: '2021-12-25T00:00:00Z'
+          responded_at:
+          created_at: '2021-12-19T02:10:56Z'
+          credit_ref:
+          payout:
+            amount: 99000
+            description: Premium Package for 4
+            matures_at: '2021-12-25T00:00:00Z'
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+    MakeAPaymentRequestWithNoAgreementResponse:
+      title: Make a Payment Request to an Anyone Contact with no valid Agreement (response)
+      required:
+      - errors
+      type: object
+      properties:
+        errors:
+          type: string
+      example:
+        errors: Authoriser contact (de86472c-c027-4735-a6a7-234366a27fc7) is not a
+          Zepto account holder and therefore must have a valid agreement in place
+          before a Payment Request can be issued.
+    GetAPaymentRequestResponse:
+      title: Get a Payment Request (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+          required:
+          - ref
+          - initiator_id
+          - your_bank_account_id
+          - authoriser_id
+          - authoriser_contact_id
+          - schedule_ref
+          - status
+          - status_reason
+          - matures_at
+          - responded_at
+          - created_at
+          - payout
+          properties:
+            ref:
+              type: string
+              description: 'The Payment Request reference (PR.*) (Min: 4 - Max: 8)'
+            initiator_id:
+              type: string
+              format: uuid
+              description: 'Your bank account ID where the funds will settle (Min:
+                36 - Max: 36)'
+            your_bank_account_id:
+              type: string
+              format: uuid
+              description: 'Your bank account ID where the funds will settle (alias
+                of `initiator_id`) (Min: 36 - Max: 36)'
+            authoriser_id:
+              type: string
+              format: uuid
+              description: 'The debtor''s bank account ID (Min: 36 - Max: 36)'
+            authoriser_contact_id:
+              type: string
+              format: uuid
+              description: 'The contact ID representing the debtor within Zepto (Min:
+                36 - Max: 36)'
+            schedule_ref:
+              type:
+              - string
+              - 'null'
+              description: 'The schedule that generated the Payment request if applicable
+                (Min: 0 - Max: 8)'
+            status:
+              type: string
+              description: The status of the Payment Request
+              enum:
+              - approved
+              - cancelled
+            status_reason:
+              type:
+              - string
+              - 'null'
+              description: 'Only used when the `status` is `declined` due to prechecking.
+                (Min: 0 - Max: 280)'
+              enum:
+              - The balance of the nominated bank account for this Payment Request
+                is not available.
+              - The nominated bank account for this Payment Request has insufficient
+                funds.
+              -
+            matures_at:
+              type: string
+              format: date-time
+              description: 'The date-time when the Payment Request is up for processing
+                (Min: 20 - Max: 20)'
+            responded_at:
+              type: string
+              format: date-time
+              description: 'The date-time when the Payment Request status changed
+                (Min: 0 - Max: 20)'
+            created_at:
+              type: string
+              format: date-time
+              description: 'The date-time when the Payment Request was created (Min:
+                20 - Max: 20)'
+            credit_ref:
+              type: string
+              description: 'The resulting credit entry reference (available once approved)
+                (Min: 4 - Max: 8)'
+            payout:
+              type: object
+              properties:
+                amount:
+                  type: integer
+                  minimum: 1
+                  maximum: 99999999999
+                  description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+                description:
+                  type: string
+                  description: 'Payment Request description (Min: 1 - Max: 280)'
+                matures_at:
+                  type: string
+                  format: date-time
+                  description: 'The date-time when the Payment Request is up for processing
+                    (Min: 20 - Max: 20)'
+              required:
+              - amount
+              - description
+              - matures_at
+            metadata:
+              type: object
+              description: Your custom keyed data
+      example:
+        data:
+          ref: PR.88me
+          initiator_id: ca7bc5b3-e47f-4153-96fb-bbe326b42772
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          authoriser_id: 970e4526-67d9-4ed9-b554-f5cf390ab775
+          authoriser_contact_id: de86472c-c027-4735-a6a7-234366a27fc7
+          contact_initiated: false
+          schedule_ref:
+          status: approved
+          status_reason:
+          matures_at: '2021-11-25T00:00:00Z'
+          responded_at: '2021-11-19T02:38:04Z'
+          created_at: '2021-11-19T02:10:56Z'
+          credit_ref: C.b6tf
+          payout:
+            amount: 1200
+            description: Xbox Live subscription
+            matures_at: '2021-11-25T00:00:00Z'
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+    ListPaymentRequestCollectionsResponse:
+      title: List Collections (response)
+      required:
+      - data
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required:
+            - ref
+            - initiator_id
+            - your_bank_account_id
+            - authoriser_id
+            - authoriser_contact_id
+            - contact_initiated
+            - schedule_ref
+            - status
+            - status_reason
+            - matures_at
+            - responded_at
+            - created_at
+            - credit_ref
+            - payout
+            properties:
+              ref:
+                type: string
+                description: The Payment Reference reference (PR.*)
+              initiator_id:
+                type: string
+                format: uuid
+                description: Your bank account ID where the funds will settle
+              your_bank_account_id:
+                type: string
+                format: uuid
+                description: Your bank account ID where the funds will settle (alias
+                  of `initiator_id`)
+              authoriser_id:
+                type: string
+                format: uuid
+                description: The debtor's bank account ID
+              authoriser_contact_id:
+                type: string
+                format: uuid
+                description: The contact ID representing the debtor within Zepto
+              contact_initiated:
+                type: boolean
+                description: Initiated by Contact or Merchant
+              schedule_ref:
+                type:
+                - string
+                - 'null'
+                description: The schedule that generated the Payment request if applicable
+              status:
+                type: string
+                description: The status of the Payment Request
+                enum:
+                - approved
+                - cancelled
+              status_reason:
+                type:
+                - 'null'
+                description: "(Deprecated) Only used when the `status` is `declined`
+                  due to prechecking."
+                enum:
+                -
+              matures_at:
+                type: string
+                format: date-time
+                description: The date-time when the Payment Request is up for processing
+              responded_at:
+                type:
+                - string
+                - 'null'
+                format: date-time
+                description: The date-time when the Payment Request status changed
+              created_at:
+                type: string
+                format: date-time
+                description: The date-time when the Payment Request was created
+              credit_ref:
+                type:
+                - string
+                - 'null'
+                description: The resulting credit entry reference (available once
+                  approved)
+              payout:
+                type: object
+                properties:
+                  amount:
+                    type: integer
+                    minimum: 1
+                    maximum: 99999999999
+                    description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+                  description:
+                    type: string
+                    description: Payment Request description
+                  matures_at:
+                    type: string
+                    format: date-time
+                    description: The date-time when the Payment Request is up for
+                      processing
+                required:
+                - amount
+                - description
+                - matures_at
+              metadata:
+                type: array
+                description: Your custom keyed data
+                items:
+                  type: object
+      example:
+        data:
+        - ref: PR.84t6
+          initiator_id: ca7bc5b3-e47f-4153-96fb-bbe326b42772
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          authoriser_id: de86472c-c027-4735-a6a7-234366a27fc7
+          authoriser_contact_id: fb6a9252-3818-44dc-b5aa-2195391a746f
+          contact_initiated: false
+          schedule_ref: PRS.89t3
+          status: approved
+          status_reason:
+          matures_at: '2021-07-18T02:10:00Z'
+          responded_at: '2021-07-18T02:10:00Z'
+          created_at: '2021-07-18T02:10:00Z'
+          credit_ref: C.6gr7
+          payout:
+            amount: 4999
+            description: Subscription Payment
+            matures_at: '2021-07-18T02:10:00Z'
+        - ref: PR.45h7
+          initiator_id: ca7bc5b3-e47f-4153-96fb-bbe326b42772
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          authoriser_id: de86472c-c027-4735-a6a7-234366a27fc7
+          authoriser_contact_id: fb6a9252-3818-44dc-b5aa-2195391a746f
+          contact_initiated: false
+          schedule_ref:
+          status: approved
+          status_reason:
+          matures_at: '2021-03-09T16:58:00Z'
+          responded_at:
+          created_at: '2021-03-09T16:58:00Z'
+          credit_ref:
+          payout:
+            amount: 3000
+            description: Membership fees
+            matures_at: '2021-03-09T16:58:00Z'
+    ListPaymentRequestReceivablesResponse:
+      title: List Receivables (response)
+      required:
+      - data
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required:
+            - ref
+            - initiator_id
+            - your_bank_account_id
+            - authoriser_id
+            - authoriser_contact_id
+            - contact_initiated
+            - schedule_ref
+            - status
+            - status_reason
+            - matures_at
+            - responded_at
+            - created_at
+            - credit_ref
+            - payout
+            properties:
+              ref:
+                type: string
+                description: The Payment Reference reference (PR.*)
+              initiator_id:
+                type: string
+                format: uuid
+                description: Your bank account ID where the funds will settle
+              your_bank_account_id:
+                type: string
+                format: uuid
+                description: Your bank account ID where the funds will settle (alias
+                  of `initiator_id`)
+              authoriser_id:
+                type: string
+                format: uuid
+                description: The debtor's bank account ID
+              authoriser_contact_id:
+                type: string
+                format: uuid
+                description: The contact ID representing the debtor within Zepto
+              contact_initiated:
+                type: boolean
+                description: Initiated by Contact or Merchant
+              schedule_ref:
+                type:
+                - string
+                - 'null'
+                description: The schedule that generated the Payment request if applicable
+              status:
+                type: string
+                description: The status of the Payment Request. For Receivables, this
+                  will always be *approved*
+              status_reason:
+                type:
+                - 'null'
+                description: "(Deprecated) Only used when the `status` is `declined`
+                  due to prechecking."
+              matures_at:
+                type: string
+                format: date-time
+                description: The date-time when the Payment Request is up for processing
+              responded_at:
+                type:
+                - string
+                - 'null'
+                format: date-time
+                description: The date-time when the Payment Request status changed
+              created_at:
+                type: string
+                format: date-time
+                description: The date-time when the Payment Request was created
+              credit_ref:
+                type: string
+                description: The resulting credit entry reference (available once
+                  approved)
+              payout:
+                type: object
+                properties:
+                  amount:
+                    type: integer
+                    minimum: 1
+                    maximum: 99999999999
+                    description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+                  description:
+                    type: string
+                    description: Payment Request description
+                  matures_at:
+                    type: string
+                    format: date-time
+                    description: The date-time when the Payment Request is up for
+                      processing
+                required:
+                - amount
+                - description
+                - matures_at
+              metadata:
+                type: array
+                description: Your custom keyed data
+                items:
+                  type: object
+      example:
+        data:
+        - ref: PR.2t65
+          initiator_id: ca7bc5b3-e47f-4153-96fb-bbe326b42772
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          authoriser_id: de86472c-c027-4735-a6a7-234366a27fc7
+          authoriser_contact_id: fb6a9252-3818-44dc-b5aa-2195391a746f
+          contact_initiated: true
+          schedule_ref:
+          status: approved
+          status_reason:
+          matures_at: '2021-05-12T13:43:12Z'
+          responded_at: '2021-05-12T13:43:12Z'
+          created_at: '2021-05-12T13:43:12Z'
+          credit_ref: C.77b1
+          payout:
+            amount: 50000
+            description: Deposit to my Trading account
+            matures_at: '2021-05-12T13:43:12Z'
+        - ref: PR.1n644
+          initiator_id: ca7bc5b3-e47f-4153-96fb-bbe326b42772
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          authoriser_id: de86472c-c027-4735-a6a7-234366a27fc7
+          authoriser_contact_id: fb6a9252-3818-44dc-b5aa-2195391a746f
+          contact_initiated: true
+          schedule_ref:
+          status: approved
+          status_reason:
+          matures_at: '2021-06-01T04:34:50Z'
+          responded_at:
+          created_at: '2021-06-01T04:34:56Z'
+          credit_ref: c.54r3
+          payout:
+            amount: 5000
+            description: Punting account top-up
+            matures_at: '2021-06-01T04:34:56Z'
+    IssueARefundRequest:
+      title: Issue a Refund (request)
+      required:
+      - amount
+      type: object
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 99999999999
+          description: 'Amount in cents refund (Min: 1 - Max: 99999999999)'
+          example: 500
+        channels:
+          description: Specify the payment channel to be used, in order. (new_payments_platform,
+            direct_entry, or both)
+          type: array
+        reason:
+          type: string
+          pattern: "^[ -~]+$"
+          description: The first 8 characters are visible if funds are sent via direct
+            credit / BECS, and up to 270 characters if sent via NPP
+          example: Because reason
+        your_bank_account_id:
+          type: string
+          format: uuid
+          description: Specify where we should take the funds for this transaction.
+            If omitted, your primary bank account will be used.
+        metadata:
+          "$ref": "#/components/schemas/Metadata"
+      example:
+        amount: 500
+        channels:
+        - direct_entry
+        reason: Because reason
+        your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+        metadata:
+          custom_key: Custom string
+          another_custom_key: Maybe a URL
+    IssueARefundResponse:
+      title: Issue a Refund (response)
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          type: object
+          required:
+          - ref
+          - for_ref
+          - debit_ref
+          - your_bank_account_id
+          - created_at
+          - amount
+          - reason
+          properties:
+            ref:
+              type: string
+              description: 'The Refund request reference (PRF.*) (Min: 5 - Max: 9)'
+            for_ref:
+              type: string
+              description: The associated credit reference (C.*)
+            debit_ref:
+              type: string
+              description: The associated debit reference (C.*)
+            your_bank_account_id:
+              type: string
+              format: uuid
+              description: The source bank/float account (UUID)
+            created_at:
+              type: string
+              format: date-time
+              description: The date-time when the Payment Request was created
+              example: '2021-06-01T08:30:12Z'
+            amount:
+              type: integer
+              description: 'The amount value provided (Min: 1 - Max: 99999999999)'
+            channels:
+              type: array
+              description: The requested payment channel(s) to be used, in order.
+                (new_payments_platform, direct_entry, or both)
+            reason:
+              type: string
+              description: Reason for the refund
+            contacts:
+              type: object
+              properties:
+                source_contact_id:
+                  type: string
+                  description: The original 'Receivable Contact' ID (only visible
+                    when refunding Receivables)
+                target_contact_id:
+                  type: string
+                  description: The new Contact ID receiving the funds (only visible
+                    when refunding Receivables)
+      example:
+        data:
+          ref: PRF.7f4
+          for_ref: C.1gf22
+          debit_ref: D.63hgf
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          created_at: '2021-06-01T07:20:24Z'
+          amount: 500
+          channels:
+          - direct_entry
+          reason: Subscription refund
+          contacts:
+            source_contact_id: 194b0237-6c2c-4705-b4fb-308274b14eda
+            target_contact_id: 3694ff53-32ea-40ae-8392-821e48d7bd5a
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+    ListOutgoingRefundsResponse:
+      title: List outgoing Refunds (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+          description: ''
+      example:
+        data:
+        - ref: PRF.2
+          for_ref: C.5
+          debit_ref: D.5a
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          created_at: '2017-05-09T04:45:26Z'
+          amount: 5
+          reason: Because reason
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+    RetrieveARefundResponse:
+      title: Retrieve a Refund (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+      example:
+        data:
+          ref: PRF.1
+          for_ref: C.59
+          debit_ref: D.hi
+          your_bank_account_id: 9c70871d-8e36-4c3e-8a9c-c0ee20e7c679
+          created_at: '2017-05-08T07:20:24Z'
+          amount: 500
+          reason: Because reason
+          metadata:
+            custom_key: Custom string
+            another_custom_key: Maybe a URL
+    RetryPayoutResponse:
+      title: Retry a payout (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+          description: ''
+      example:
+        data:
+        - ref: C.2
+          parent_ref: PR.039a
+          type: credit
+          category: payout
+          created_at: '2016-12-05T23:15:00Z'
+          matures_at: '2016-12-06T23:15:00Z'
+          cleared_at:
+          bank_ref:
+          status: maturing
+          status_changed_at: '2016-12-05T23:15:00Z'
+          party_contact_id: 33c6e31d3-1dc1-448b-9512-0320bc44fdcf
+          party_name: Price and Sons
+          party_nickname: price-and-sons-2
+          party_bank_ref:
+          description: Money for jam
+          amount: 1
+    ListAllTransactionsResponse:
+      title: List all transactions (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            "$ref": "#/components/schemas/TransactionResponse"
+      example:
+        data:
+        - ref: D.3
+          parent_ref:
+          type: debit
+          category: payout_refund
+          created_at: '2021-04-07T23:15:00Z'
+          matured_at: '2021-04-07T23:15:00Z'
+          cleared_at: '2021-04-10T23:15:00Z'
+          bank_ref: DT.9a
+          status: cleared
+          status_changed_at: '2021-04-10T23:15:00Z'
+          party_contact_id: 31354923-b1e9-4d65-b03c-415ead89cbf3
+          party_name: Sanford-Rees
+          party_nickname:
+          party_bank_ref: CT.11
+          description:
+          amount: 20000
+          bank_account_id: 56df206a-aaff-471a-b075-11882bc8906a
+          channels:
+          - float account
+          current_channel: float_account
+        - ref: D.2
+          parent_ref: PB.2
+          type: debit
+          category: payout
+          created_at: '2016-12-06T23:15:00Z'
+          matured_at: '2016-12-09T23:15:00Z'
+          cleared_at:
+          bank_ref:
+          status: maturing
+          status_changed_at: '2016-12-06T23:15:00Z'
+          party_contact_id: 3c6e31d3-1dc1-448b-9512-0320bc44fdcf
+          party_name: Gutmann-Schmidt
+          party_nickname:
+          party_bank_ref:
+          description: Batteries for hire
+          amount: 2949299
+          bank_account_id: 56df206a-aaff-471a-b075-11882bc8906a
+          channels:
+          - float_account
+          current_channel: float_account
+        - ref: C.2
+          parent_ref: PB.s0z
+          type: credit
+          category: payout
+          created_at: '2016-12-05T23:15:00Z'
+          matured_at: '2016-12-06T23:15:00Z'
+          cleared_at: '2016-12-09T23:15:00Z'
+          bank_ref: CT.1
+          status: cleared
+          status_changed_at: '2016-12-09T23:15:00Z'
+          party_contact_id: 33c6e31d-1dc1-448b-9512-0320bc44fdcf
+          party_name: Price and Sons
+          party_nickname: price-and-sons-2
+          party_bank_ref:
+          description: Online purchase
+          amount: 19999
+          bank_account_id: c2e329ae-606f-4311-a9ab-a751baa1915c
+          channels:
+          - new_payments_platform
+          - direct_entry
+          current_channel: direct_entry
+          metadata:
+            customer_id: xur4492
+            product_ref: TSXL392110x
+    TransactionResponse:
+      title: A transaction (response)
+      required:
+      - ref
+      - parent_ref
+      - type
+      - category
+      - created_at
+      - matured_at
+      - cleared_at
+      - bank_ref
+      - status
+      - status_changed_at
+      - party_contact_id
+      - party_name
+      - party_nickname
+      - party_bank_ref
+      - description
+      - amount
+      - bank_account_id
+      - channels
+      - current_channel
+      type: object
+      properties:
+        ref:
+          type: string
+          description: The ref of the transaction (`C.*` or `D.*`)
+        parent_ref:
+          type:
+          - string
+          - 'null'
+          description: The ref of the parent of this transaction
+        type:
+          type: string
+          description: The type of the transaction
+          enum:
+          - credit
+          - debit
+        category:
+          type: string
+          description: The category of the transaction
+          enum:
+          - payout
+          - payout_refund
+          - invoice
+          - payout_reversal
+          - transfer
+          - recovery
+        created_at:
+          type: string
+          format: date-time
+          description: When the transaction was created
+        matures_at:
+          type: string
+          format: date-time
+          description: When the transaction was processed
+        cleared_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When the transaction was cleared
+        bank_ref:
+          type:
+          - string
+          - 'null'
+          description: The ref that is sent to the bank
+        status:
+          type: string
+          description: The status of the transaction (see [Transactions/Lifecycle](#lifecycle-4)
+            for more info)
+          enum:
+          - maturing
+          - matured
+          - preprocessing
+          - processing
+          - clearing
+          - cleared
+          - rejected
+          - returned
+          - voided
+          - pending_verification
+          - paused
+          - channel_switched
+        status_changed_at:
+          type: string
+          description: When the status was last changed
+        failure_details:
+          type: string
+          description: Details if a failure occured
+        failure:
+          "$ref": "#/components/schemas/Failure"
+        party_contact_id:
+          type: string
+          format: uuid
+          description: The transaction party's contact ID
+        party_name:
+          type: string
+          description: The transaction party's name
+        party_nickname:
+          type:
+          - string
+          - 'null'
+          description: The transaction party's nickname
+        party_bank_ref:
+          type:
+          - string
+          - 'null'
+          description: The transaction party's bank ref
+        description:
+          type:
+          - string
+          - 'null'
+          description: The transaction's description
+        amount:
+          type: integer
+          description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+        bank_account_id:
+          type: string
+          format: uuid
+          description: The bank account ID of this transaction
+        channels:
+          type: array
+          description: Which payment channels this transaction can use (see [Payments/Make
+            a payment](#make-a-payment) for more info)
+        current_channel:
+          type: string
+          description: The current payment channel in use for this transaction
+          enum:
+          - direct_entry
+          - float_account
+          - new_payments_platform
+        reversal_details:
+          type: object
+          description: Reversal details (see [Payments/Lifecyle](#lifecycle-3) for
+            more info)
+          properties:
+            source_debit_ref:
+              type: string
+              description: The source debit ref of the reversal
+            source_credit_failure:
+              "$ref": "#/components/schemas/Failure"
+        metadata:
+          "$ref": "#/components/schemas/Metadata"
+      example:
+        ref: C.2
+        parent_ref: PB.s0z
+        type: credit
+        category: payout
+        created_at: '2016-12-05T23:15:00Z'
+        matured_at: '2016-12-06T23:15:00Z'
+        cleared_at: '2016-12-09T23:15:00Z'
+        bank_ref: CT.1
+        status: cleared
+        status_changed_at: '2016-12-09T23:15:00Z'
+        party_contact_id: 33c6e31d-1dc1-448b-9512-0320bc44fdcf
+        party_name: Price and Sons
+        party_nickname: price-and-sons-2
+        party_bank_ref:
+        description: Online purchase
+        amount: 19999
+        bank_account_id: c2e329ae-606f-4311-a9ab-a751baa1915c
+        channels:
+        - direct_entry
+        current_channel: direct_entry
+        metadata:
+          customer_id: xur4492
+          product_ref: TSXL392110x
+    Failure:
+      title: Failure object (see [Transaction/Failure codes](#failure-codes) for more
+        info)
+      required:
+      - code
+      - title
+      - detail
+      type: object
+      properties:
+        code:
+          type: string
+        title:
+          type: string
+        detail:
+          type: string
+      example:
+        code: E205
+        title: Account Not Found
+        detail: The target account number cannot be found by the financial institution.
+    PingResponse:
+      title: Ping (response)
+      required:
+      - ping
+      type: object
+      properties:
+        ping:
+          type: string
+      example:
+        ping: pong
+    GetUserDetailsResponse:
+      title: Get User details (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+      example:
+        data:
+          first_name: Bear
+          last_name: Dog
+          mobile_phone: '0456945832'
+          email: bear@dog.com
+          account:
+            name: Dog Bones Inc
+            nickname: dog-bones-inc
+            abn: '129959040'
+            phone: '0418495033'
+            street_address: 98 Acme Avenue
+            suburb: Lead
+            state: NSW
+            postcode: '2478'
+    SimulateIncomingPayIDPaymentRequest:
+      required:
+      - payid_email
+      - amount
+      type: object
+      properties:
+        payid_email:
+          type: string
+          minLength: 6
+          maxLength: 256
+          description: 'Receivable Contact PayID email (Min: 6 - Max: 256)'
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 99999999999
+          description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+        payment_description:
+          type: string
+          description: 'Default:  "Simulated PayID payment"'
+        payment_reference:
+          type: string
+          description: 'Default:  "simulated-payid-payment"'
+        from_bsb:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: 'Default: "014209"'
+        from_account_number:
+          type: string
+          minLength: 1
+          maxLength: 9
+          description: 'Default: "12345678"'
+        debtor_name:
+          type: string
+          pattern: "^[ -~]+$"
+          minLength: 1
+          description: 'Default:  "Simulated Debtor"'
+        debtor_legal_name:
+          type: string
+          minLength: 1
+          pattern: "^[ -~]+$"
+          description: 'Default:  "Simulated Debtor Pty Ltd"'
+      example:
+        payid_email: incoming@zeptopayments.com
+        amount: 10000
+    SimulateIncomingNPPBBANPaymentRequest:
+      required:
+      - to_bsb
+      - to_account_number
+      - amount
+      type: object
+      properties:
+        to_bsb:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: Zepto float account BSB (usually 802919)
+        to_account_number:
+          type: string
+          minLength: 1
+          maxLength: 9
+          description: Zepto float account number
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 99999999999
+          description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+        payment_description:
+          type: string
+          description: 'Default: "Simulated NPP payment"'
+        payment_reference:
+          type: string
+          description: 'Default: "simulated-npp-payment"'
+        from_bsb:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: 'Default: "014209"'
+        from_account_number:
+          type: string
+          minLength: 1
+          maxLength: 9
+          description: 'Default: "12345678"'
+        debtor_name:
+          type: string
+          minLength: 1
+          pattern: "^[ -~]+$"
+          description: 'Default: "Simulated Debtor"'
+        debtor_legal_name:
+          type: string
+          minLength: 1
+          pattern: "^[ -~]+$"
+          description: 'Default: "Simulated Debtor Pty Ltd"'
+      example:
+        to_bsb: '802919'
+        to_account_number: '88888888'
+        amount: 10000
+    SimulateIncomingDEPaymentRequest:
+      required:
+      - to_bsb
+      - to_account_number
+      - amount
+      type: object
+      properties:
+        to_bsb:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: Zepto float account BSB (usually 802919)
+        to_account_number:
+          type: string
+          minLength: 1
+          maxLength: 9
+          description: Zepto float account number
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 99999999999
+          description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+        payment_reference:
+          type: string
+          maxLength: 18
+          description: 'Max 18 characters. Default: "simulated-de-pymt"'
+        from_bsb:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: 'Default: "014209"'
+        from_account_number:
+          type: string
+          minLength: 1
+          maxLength: 9
+          description: 'Default: "12345678"'
+        debtor_name:
+          type: string
+          minLength: 1
+          maxLength: 16
+          pattern: "^[ -~]+$"
+          description: 'Max 16 characters. Default: "Simulated Debtor"'
+      example:
+        to_bsb: '802919'
+        to_account_number: '88888888'
+        amount: 10000
+    AddATransferRequest:
+      required:
+      - from_bank_account_id
+      - to_bank_account_id
+      - amount
+      - description
+      - matures_at
+      type: object
+      properties:
+        from_bank_account_id:
+          type: string
+          description: The source float/bank account (UUID)
+        to_bank_account_id:
+          type: string
+          description: The destination float/bank account (UUID)
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 99999999999
+          description: 'Amount in cents (Min: 1 - Max: 99999999999)'
+        description:
+          type: string
+          pattern: "^[ -~\\p{Emoji}]+$"
+          description: Description for the Transfer. ASCII-printable characters and
+            unicode emojis are accepted.
+        matures_at:
+          type: string
+          format: date-time
+          description: Date & time in UTC ISO8601 the Transfer should be processed.
+            (Can not be earlier than the start of current day in Sydney AEST/AEDT)
+          example: '2021-06-01T02:10:56Z'
+      example:
+        from_bank_account_id: a79423b2-3827-4cf5-9eda-dc02a298d005
+        to_bank_account_id: '0921a719-c79d-4ffb-91b6-1b30ab77d14d'
+        amount: 100000
+        description: Float account balance adjustment
+        matures_at: '2021-06-06T00:00:00Z'
+    AddATransferResponse:
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+          required:
+          - ref
+          - from_bank_account_id
+          - to_bank_account_id
+          - amount
+          - description
+          - matures_at
+          properties:
+            ref:
+              type: string
+              description: 'The Transfer request reference (T.*) (Min: 4 - Max: 8)'
+            from_bank_account_id:
+              type: string
+              description: The source bank/float account (UUID)
+            to_bank_account_id:
+              type: string
+              description: The destination bank/float account (UUID
+            amount:
+              type: integer
+              minimum: 1
+              maximum: 99999999999
+              description: 'The amount value provided (Min: 1 - Max: 99999999999)'
+            description:
+              type: string
+              description: Description for the Transfer
+            matures_at:
+              type: string
+              format: date-time
+              description: Date & time in UTC ISO8601 the Transfer should be processed.
+                (Can not be earlier than the start of current day in Sydney AEST/AEDT)
+              example: '2021-06-01T02:10:56Z'
+      example:
+        data:
+          ref: T.11ub
+          from_bank_account_id: a79423b2-3827-4cf5-9eda-dc02a298d005
+          to_bank_account_id: '0921a719-c79d-4ffb-91b6-1b30ab77d14d'
+          amount: 100000
+          description: Float account balance adjustment
+          matures_at: '2021-06-06T00:00:00Z'
+    GetATransferResponse:
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+          required:
+          - ref
+          - from_bank_account_id
+          - to_bank_account_id
+          - amount
+          - description
+          - matures_at
+          properties:
+            ref:
+              type: string
+              description: 'The Transfer request reference (T.*) (Min: 4 - Max: 8)'
+            initiator_id:
+              type: string
+              description: Initiating Zepto Account
+            from_bank_account_id:
+              type: string
+              description: The source bank/float account (UUID)
+            to_bank_account_id:
+              type: string
+              description: The destination bank/float account (UUID
+            amount:
+              type: integer
+              minimum: 1
+              maximum: 99999999999
+              description: 'The amount value provided (Min: 1 - Max: 99999999999)'
+            description:
+              type: string
+              description: Description for the Transfer
+            matures_at:
+              type: string
+              format: date-time
+              description: Date & time in UTC ISO8601 the Transfer should be processed.
+                (Can not be earlier than the start of current day in Sydney AEST/AEDT)
+              example: '2021-06-01T02:10:56Z'
+      example:
+        data:
+          ref: T.87xp
+          from_bank_account_id: a79423b2-3827-4cf5-9eda-dc02a298d005
+          to_bank_account_id: '0921a719-c79d-4ffb-91b6-1b30ab77d14d'
+          amount: 47000
+          description: Deposit from my bank account
+          matures_at: '2021-06-03T00:00:00Z'
+    ListAllTransfersResponse:
+      title: List all Transfers (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+      example:
+        data:
+        - ref: T.62xl
+          from_bank_account_id: a79423b2-3827-4cf5-9eda-dc02a298d005
+          to_bank_account_id: '0921a719-c79d-4ffb-91b6-1b30ab77d14d'
+          amount: 47000
+          description: Deposit from my bank account
+          matures_at: '2021-06-03T00:00:00Z'
+        - ref: T.87xp
+          from_bank_account_id: a79423b2-3827-4cf5-9eda-dc02a298d005
+          to_bank_account_id: '0921a719-c79d-4ffb-91b6-1b30ab77d14d'
+          amount: 9700
+          description: Withdrawal June 2021
+          matures_at: '2021-05-28T00:00:00Z'
+        - ref: T.87s4
+          from_bank_account_id: a79423b2-3827-4cf5-9eda-dc02a298d005
+          to_bank_account_id: '0921a719-c79d-4ffb-91b6-1b30ab77d14d'
+          amount: 230
+          description: Transfer to my other Float account
+          matures_at: '2021-05-03T00:00:00Z'
+    ListAllWebhooksResponse:
+      title: List all Webhooks (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+      example:
+        data:
+        - id: 13bd760e-447f-4225-b801-0777a15da131
+          url: https://webhook.site/a9a3033b-90eb-44af-9ba3-29972435d10e
+          signature_secret: 8fad2f5570e6bf0351728f727c5a8c770dda646adde049b866a7800d59
+          events:
+          - debit.cleared
+          - credit.cleared
+    GetWebhookDeliveriesResponse:
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+      example:
+        data:
+        - id: 957d40a4-80f5-4dd2-8ada-8242d5ad66c1
+          event_type: payout_request.added
+          state: completed
+          response_status_code: 200
+          created_at: 2021-09-02 02:24:50 UTC
+          payload_data_summary:
+          - ref: PR.ct5b
+        - id: 29bb9835-7c69-4ecb-bf96-197d089d0ec3
+          event_type: creditor_debit.scheduled
+          state: completed
+          response_status_code: 200
+          created_at: 2021-09-02 02:24:50 UTC
+          payload_data_summary:
+          - ref: D.hyy9
+          - ref: D.6st93
+    GetAWebhookDeliveryResponse:
+      title: Get a WebhookDelivery (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: The Webhook Delivery ID
+            webhook_id:
+              type: string
+              format: uuid
+              description: The Webhook ID
+            state:
+              type: string
+              description: The state of the webhook delivery.
+              enum:
+              - pending
+              - completed
+              - retrying
+              - failed
+            payload:
+              type: object
+              description: Could be anything
+            response_status_code:
+              type:
+              - integer
+              - 'null'
+              description: For an attempted delivery, `null` means no HTTP response
+                was received from your endpoint.
+            created_at:
+              type: string
+              format: date-time
+              description: When the webhook delivery was created
+      example:
+        data:
+          id: 957d40a4-80f5-4dd2-8ada-8242d5ad66c1
+          webhook_id: 13bd760e-447f-4225-b801-0777a15da131
+          event_type: payout_request.added
+          state: completed
+          payload:
+            data:
+            - ref: PR.ct5b
+              payout:
+                amount: 1501
+                matures_at: 2021-09-02 02:24:49 UTC
+                description: Payment from Incoming Test Payment Contact 014209 12345678
+                  (Test Payment)
+              status: approved
+              created_at: 2021-09-02 02:24:49 UTC
+              credit_ref: C.p2rt
+              matures_at: 2021-09-02 02:24:49 UTC
+              initiator_id: b50a6e92-a5e1-4175-b560-9e4c9a9bb4b9
+              responded_at: 2021-09-02 02:24:49 UTC
+              schedule_ref:
+              authoriser_id: 780f186c-80fd-42b9-97d5-650d99a0bc99
+              status_reason:
+              your_bank_account_id: b50a6e92-a5e1-4175-b560-9e4c9a9bb4b9
+              authoriser_contact_id: 590be205-6bae-4070-a9af-eb50d514cec5
+              authoriser_contact_initiated: true
+            - event:
+                at: 2021-09-02 02:24:49 UTC
+                who:
+                  account_id: 20f4e3f8-2efc-48a9-920b-541515f1c9e3
+                  account_type: Account
+                  bank_account_id: b50a6e92-a5e1-4175-b560-9e4c9a9bb4b9
+                  bank_account_type: BankAccount
+                type: payment_request.added
+          response_status_code: 200
+          created_at: '2021-09-02T02:24:50Z'
+    RedeliverAWebhookDeliveryResponse:
+      title: Resend a WebhookDelivery (response)
+      required:
+      - data
+      type: object
+      properties:
+        data:
+          type: object
+      example:
+        data:
+          id: 957d40a4-80f5-4dd2-8ada-8242d5ad66c1
+          webhook_id: 13bd760e-447f-4225-b801-0777a15da131
+          state: pending
+  headers:
+    Link:
+      schema:
+        type: string
+      description: Contains pagination link for next page of collection, if next page
+        exists.
+      example: <https://api.sandbox.zeptopayments.com/contacts?page=2>; rel="next"
+    Per-Page:
+      schema:
+        type: integer
+      description: Contains the current maximum items in collection. Defaults to 25
+      example: 25
+security:
+- bearerAuth: []

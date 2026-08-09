@@ -1,0 +1,506 @@
+---
+openapi: 3.0.1
+info:
+  title: Zepto Validate API (Confirmation of Payee)
+  version: '20260101'
+  description: The Zepto Validate API (Confirmation of Payee) endpoints. Access to
+    this API is limited. Please contact Zepto for more information.
+paths:
+  "/cop/account/validate":
+    post:
+      summary: account name validation
+      tags:
+      - CoP Account Validations
+      description: Validates a given name matches a given account.
+      parameters: []
+      responses:
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              examples:
+                Forbidden:
+                  summary: Forbidden
+                  value:
+                    errors:
+                    - title: Unauthorised
+                      detail: This user is not permitted to perform the requested
+                        action.
+              schema:
+                "$ref": "#/components/schemas/cop.account_validations.errors.forbidden"
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              examples:
+                Unauthorised access token:
+                  summary: Unauthorised access token
+                  value:
+                    errors:
+                    - title: Unauthorised access token
+                      detail: Access token is expired or not valid
+                      links:
+                        about: https://docs.zeptopayments.com/docs/zepto-api#authentication-and-authorisation
+              schema:
+                "$ref": "#/components/schemas/cop.account_validations.errors.unauthorised"
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/cop.account_validations.success"
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              examples:
+                No account found:
+                  summary: No account found
+                  value:
+                    errors:
+                    - code: ZCOPR02
+                      title: No account found
+                      detail: No record of the account can be found.
+                      retryable: false
+                    data:
+                      uid: biz_cop_request_123456
+              schema:
+                "$ref": "#/components/schemas/cop.account_validations.errors.not_found"
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              examples:
+                Generic error response:
+                  summary: Generic error response
+                  value:
+                    errors:
+                    - code: ZCOPR00
+                      title: Unable to confirm
+                      detail: We could not confirm the account name match.
+                      retryable: false
+                Invalid account identifier type:
+                  summary: Invalid account identifier type
+                  value:
+                    errors:
+                    - title: Validation Failed
+                      detail: 'params.account_identifier.type must be one of: bban'
+                Invalid account identifier value:
+                  summary: Invalid account identifier value
+                  value:
+                    errors:
+                    - title: Validation Failed
+                      detail: params.account_identifier.value must be filled
+                Invalid requester ID:
+                  summary: Invalid requester ID
+                  value:
+                    errors:
+                    - title: Validation Failed
+                      detail: params.requester.id must be filled
+                Invalid party name:
+                  summary: Invalid party name
+                  value:
+                    errors:
+                    - title: Validation Failed
+                      detail: params.party_name must be filled
+                BBAN Lookup Failed:
+                  summary: BBAN Lookup Failed
+                  value:
+                    errors:
+                    - code: ZCOPR01
+                      title: BBAN Lookup Failed
+                      detail: Zepto was unable to validate the branch code for the
+                        given BBAN.
+                      retryable: false
+                Unexpected response:
+                  summary: Unexpected response
+                  value:
+                    errors:
+                    - code: ZCOPR00
+                      title: Unable to confirm
+                      detail: We could not confirm the account name match.
+                      retryable: false
+                Account no match limit exceeded:
+                  summary: Account no match limit exceeded
+                  value:
+                    errors:
+                    - code: ZCOPR04
+                      title: Daily account no match limit reached
+                      detail: The daily no match limit has been reached for the account.
+                      retryable: true
+                Requester no match limit exceeded:
+                  summary: Requester no match limit exceeded
+                  value:
+                    errors:
+                    - code: ZCOPR05
+                      title: Daily requester no match limit reached
+                      detail: The daily no match limit has been reached for the requester.
+                      retryable: true
+                Account request limit exceeded:
+                  summary: Account request limit exceeded
+                  value:
+                    errors:
+                    - code: ZCOPR06
+                      title: Daily account limit reached
+                      detail: The daily request limit has been reached for the account.
+                      retryable: true
+                Requester request limit exceeded:
+                  summary: Requester request limit exceeded
+                  value:
+                    errors:
+                    - code: ZCOPR07
+                      title: Daily requester limit reached
+                      detail: The daily request limit has been reached for the requester.
+                      retryable: true
+              schema:
+                "$ref": "#/components/schemas/cop.account_validations.errors.unprocessable"
+        '429':
+          description: Too Many Requests
+          content:
+            application/json:
+              examples:
+                Rate limited:
+                  summary: Rate limited
+                  value: ''
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/cop.account_validations.request"
+    parameters:
+    - "$ref": "#/components/parameters/ZeptoAPIVersion"
+servers:
+- description: Zepto Sandbox
+  url: https://api.sandbox.zeptopayments.com
+- description: Zepto Production
+  url: https://api.zeptopayments.com
+components:
+  schemas:
+    cop.account_validations.errors.forbidden:
+      type: object
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: object
+            required:
+            - title
+            - detail
+            properties:
+              code:
+                type: string
+                description: A code assigned to the type of error received
+                example: ZCOPR00
+              title:
+                type: string
+                description: A short summary of the error
+                example: Unauthorised
+              detail:
+                type: string
+                description: A detailed explanation of the error
+                example: This user is not permitted to perform the requested action.
+      description: Unsuccessful validation response due to forbidden access
+    cop.account_validations.errors.not_found:
+      type: object
+      required:
+      - errors
+      - data
+      properties:
+        data:
+          type: object
+          required:
+          - uid
+          properties:
+            uid:
+              type: string
+              description: Supplied unique identifier for CoP lookup, maximum 64 characters
+                containing only unreserved characters as defined in RFC3986. This
+                identifier ensures CoP lookup uniqueness between integrator systems
+                and Zepto.
+              example: biz_cop_request_123456
+              minLength: 1
+              maxLength: 64
+        errors:
+          type: array
+          items:
+            type: object
+            required:
+            - title
+            - detail
+            properties:
+              code:
+                type: string
+                description: A code assigned to the type of error received
+                example: ZCOPR02
+              title:
+                type: string
+                description: A short summary of the error
+                example: No account found
+              detail:
+                type: string
+                description: A detailed explanation of the error
+                example: No record of the account can be found.
+              retryable:
+                type: boolean
+                description: A boolean value indicating whether or not this lookup
+                  may be retried. When retrying, a new unique UID must be supplied
+                  for each attempt.
+                example: false
+      description: Account not found error response
+    cop.account_validations.errors.unauthorised:
+      type: object
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: object
+            required:
+            - title
+            - detail
+            properties:
+              title:
+                type: string
+                description: A short summary of the error
+                example: Unauthorised access token
+              detail:
+                type: string
+                description: A detailed explanation of the error
+                example: Access token is expired or not valid
+              links:
+                type: object
+                properties:
+                  about:
+                    type: string
+                    description: A link to more information about the error
+                    example: https://example.com
+      description: Unsuccessful validation response due to unauthorised access
+    cop.account_validations.errors.unprocessable:
+      type: object
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: object
+            required:
+            - title
+            - detail
+            properties:
+              code:
+                type: string
+                description: A code assigned to the type of error received
+                example: ZCOPR00
+              title:
+                type: string
+                description: A short summary of the error
+                example: Unable to confirm
+              detail:
+                type: string
+                description: A detailed explanation of the error
+                example: We could not confirm the account name match.
+              retryable:
+                type: boolean
+                description: A boolean value indicating whether or not this lookup
+                  may be retried. When retrying, a new unique UID must be supplied
+                  for each attempt.
+                example: false
+      description: Unsuccessful validation response
+    cop.account_validations.request:
+      type: object
+      properties:
+        uid:
+          type: string
+          description: Supplied unique identifier for CoP lookup, maximum 64 characters
+            containing only unreserved characters as defined in RFC3986. This identifier
+            ensures CoP lookup uniqueness between integrator systems and Zepto.
+          example: biz_cop_request_123456
+          minLength: 1
+          maxLength: 64
+        account_identifier:
+          type: object
+          properties:
+            type:
+              type: string
+              enum:
+              - bban
+              description: The type of account identifier
+              example: bban
+            value:
+              type: string
+              description: The branch code (BSB) and account number to validate, can
+                be concatenated or separated with a hyphen.
+              example: 062000-11111111
+          required:
+          - type
+          - value
+        party_name:
+          type: string
+          description: The party name to validate against the account
+          example: John Doe
+        requester:
+          type: object
+          properties:
+            id:
+              type: string
+              description: Merchant provided customer ID for uniquely identifying
+                end user of CoP. Maximum 64 characters containing only unreserved
+                characters as defined in RFC3986.
+              example: AdminUser1234
+              minLength: 1
+              maxLength: 64
+          required:
+          - id
+        sandbox:
+          type: object
+          description: 'SANDBOX ONLY: Parameter that allows you to simulate the confirmation
+            of payee API responses for certain scenarios to aid integrators while
+            testing their control flows. Defaults to `match` if not given.'
+          properties:
+            simulate:
+              type: string
+              enum:
+              - match
+              - close_match
+              - individual_no_match
+              - non_individual_no_match
+              - account_closed
+              - no_account_found
+              - bic_lookup_failed
+              - account_daily_no_match_limit_exceeded
+              - requester_daily_no_match_limit_exceeded
+              - account_daily_request_limit_exceeded
+              - requester_daily_request_limit_exceeded
+              - unable_to_confirm
+              - rate_limited
+              example: match
+          required:
+          - simulate
+      required:
+      - uid
+      - account_identifier
+      - party_name
+      - requester
+    cop.account_validations.success:
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          type: object
+          required:
+          - outcome
+          properties:
+            outcome:
+              type: object
+              required:
+              - result
+              properties:
+                result:
+                  type: string
+                  enum:
+                  - match
+                  - close_match
+                  - no_match
+                  - account_closed
+                  description: The matching result, 'match' indicates high confidence,
+                    'close_match' indicates reasonable confidence but with potential
+                    variance, 'no_match' indicates the party name could not be confirmed,
+                    'account_closed' indicates the bank account is closed.
+                match_name:
+                  type: string
+                  description: |
+                    The name matched from the Data Holder. This field returns the
+                    closest matching name registered for the bank account. This may be an individual
+                    name, AKA name, trading name, or a formatted representation.
+
+                    For successful matches on joint accounts, returns in the format "{Name} and others"
+                    instead of revealing all account holders when names don't equally match.
+
+                    For privacy reasons, this field is included only for:
+                      - Individual accounts: With 'match' and 'close_match' results
+                      - Business accounts: With 'match', 'close_match', and 'no_match' results
+                  example: John Doe and others
+                message:
+                  type: string
+                  description: |
+                    Human-readable message with the lookup result.
+                    For successful matches, returns in the format "The account is in the name of {match_name}".
+                    For privacy reasons, this field is included only for:
+                      - Individual accounts: With 'match' and 'close_match' results
+                      - Business accounts: With 'match', 'close_match', and 'no_match' results
+                  example: The account is in the name of John Doe and others
+              description: The Confirmation of Payee account validation outcome
+            insights:
+              type: object
+              properties:
+                risk_score:
+                  type: integer
+                  description: "**(Alpha)** Proprietary risk score from 0 to 100,
+                    where 100 indicates the highest risk. The score is calculated
+                    based on account age, and other factors. This field is only present
+                    for 'match' and 'close_match' results."
+                is_joint:
+                  type: boolean
+                  description: Indicates whether the account is held jointly by multiple
+                    parties.
+                suggested_payment_channels:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                    - npp.sct
+                    - de.dc
+                  description: Recommended payment channels for this account based
+                    on its capabilities. 'npp.sct' indicates NPP support, 'de.dc'
+                    indicates Direct Entry support.
+              description: |
+                Additional insights about the account and payment recommendations.
+                For privacy reasons, insights is included only for:
+                  - Individual accounts: With 'match' and 'close_match' results
+                  - Business accounts: With 'match', 'close_match', and 'no_match' results
+            uid:
+              type: string
+              description: Supplied unique identifier for CoP lookup, maximum 64 characters
+                containing only unreserved characters as defined in RFC3986. This
+                identifier ensures CoP lookup uniqueness between integrator systems
+                and Zepto.
+              example: biz_cop_request_123456
+              minLength: 1
+              maxLength: 64
+      example:
+        data:
+          outcome:
+            result: match
+            match_name: John Doe and others
+            message: The account is in the name of John Doe and others
+          insights:
+            risk_score: 25
+            is_joint: true
+            suggested_payment_channels:
+            - npp.sct
+            - de.dc
+          uid: biz_cop_request_123456
+      description: Successful validation response
+  parameters:
+    ZeptoAPIVersion:
+      name: Zepto-API-Version
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: "^\\d{8}$"
+        default: '20250101'
+        example: '20260101'
+      description: API version in YYYYMMDD format. Defaults to 20250101 (legacy) when
+        omitted.
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+security:
+- bearerAuth: []

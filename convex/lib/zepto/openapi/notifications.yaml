@@ -1,0 +1,223 @@
+---
+openapi: 3.1.0
+info:
+  title: Notifications
+  version: '20260101'
+  description: Documentation for component notifications.
+  termsOfService: https://www.zepto.com.au/customer-terms
+  contact:
+    email: support@zepto.com.au
+tags:
+- name: Float Accounts
+  description: Webhooks relating to out of band activity on float bank accounts
+security:
+- bearerAuth: []
+paths: {}
+webhooks:
+  float_accounts.unmatched_credit.received:
+    post:
+      summary: Unmatched Float Credit Received
+      description: This webhook is triggered when a float account receives an unmatched
+        credit.
+      tags:
+      - Float Accounts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/notifications.float_accounts.unmatched_credit.event"
+      responses:
+        '200':
+          description: Successfully received webhook.
+servers:
+- description: Zepto Sandbox
+  url: https://api.sandbox.zeptopayments.com
+- description: Zepto Production
+  url: https://api.zeptopayments.com
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    ZeptoAPIVersion:
+      name: Zepto-API-Version
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: "^\\d{8}$"
+        default: '20250101'
+        example: '20260101'
+      description: API version in YYYYMMDD format. Defaults to 20250101 (legacy) when
+        omitted.
+  schemas:
+    notifications.float_accounts.unmatched_credit.account_identifier:
+      type: object
+      required:
+      - type
+      - value
+      properties:
+        type:
+          type: string
+          enum:
+          - bban
+          description: Account identifier type
+        value:
+          type: string
+          description: Bank account identifier in BSB-account format
+          example: 840001-8151167
+    notifications.float_accounts.unmatched_credit.event:
+      type: object
+      required:
+      - data
+      - event
+      properties:
+        data:
+          type: object
+          required:
+          - id
+          - type
+          - received_at
+          - amount
+          - channel
+          - creditor
+          - debtor
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: The unique identifier of the float bank transaction
+              example: '019c8814-c767-753c-82f7-3daac44d8668'
+            type:
+              type: string
+              enum:
+              - FloatBankTransaction
+              description: The resource type
+            received_at:
+              type: string
+              format: date-time
+              description: When the credit was received
+              example: '2026-02-23T12:19:49+11:00'
+            amount:
+              type: integer
+              description: Credit amount in cents
+              example: 1501
+            description:
+              type:
+              - string
+              - 'null'
+              description: Transaction description
+              example: Payment from Elon 654-321 12345678 (Purchase - Rocket)
+            channel:
+              type: string
+              enum:
+              - new_payments_platform
+              - direct_entry
+              description: The payment channel through which the credit was received
+            creditor:
+              type: object
+              description: The receiving float bank account
+              required:
+              - id
+              - type
+              - party_name
+              - account_identifier
+              - owner
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                  example: '0196d7e9-cdcb-7135-be08-99d06eda924d'
+                type:
+                  type: string
+                  enum:
+                  - FloatBankAccount
+                  description: The resource type
+                party_name:
+                  type: string
+                  description: Account holder name
+                  example: Caroline's Test Account
+                account_identifier:
+                  "$ref": "#/components/schemas/notifications.float_accounts.unmatched_credit.account_identifier"
+                owner:
+                  type: object
+                  required:
+                  - id
+                  - type
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                      example: 38bc6f3b-14fe-4998-be48-4b66b42fd363
+                    type:
+                      type: string
+                      enum:
+                      - Account
+                      description: The resource type
+            debtor:
+              type: object
+              description: The sending party
+              required:
+              - party_name
+              - reference
+              - account_identifier
+              properties:
+                party_name:
+                  type: string
+                  description: Sender name
+                  example: Elon
+                reference:
+                  type: string
+                  description: End-to-end identification (NPP) or lodgement reference
+                    (Direct Entry)
+                  example: Purchase - Rocket
+                description:
+                  type: string
+                  description: Payment description. Present for new_payments_platform
+                    channel only.
+                  example: Payment description
+                account_identifier:
+                  "$ref": "#/components/schemas/notifications.float_accounts.unmatched_credit.account_identifier"
+        event:
+          type: object
+          required:
+          - at
+          - type
+          - who
+          properties:
+            at:
+              type: string
+              format: date-time
+              description: When the event occurred
+              example: '2026-02-23T12:19:49+11:00'
+            type:
+              type: string
+              enum:
+              - float_accounts.unmatched_credit.received
+              description: The event type
+            who:
+              type: object
+              required:
+              - account_id
+              - account_type
+              - bank_account_id
+              - bank_account_type
+              properties:
+                account_id:
+                  type: string
+                  format: uuid
+                  example: 38bc6f3b-14fe-4998-be48-4b66b42fd363
+                account_type:
+                  type: string
+                  enum:
+                  - Account
+                bank_account_id:
+                  type: string
+                  format: uuid
+                  example: '0196d7e9-cd8d-77c8-87d3-fbe3f4c80880'
+                bank_account_type:
+                  type: string
+                  enum:
+                  - BankAccount

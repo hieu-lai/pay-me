@@ -10,6 +10,10 @@ const app = defineApp({
     PAYMENT_DESTINATION_ENCRYPTION_KEYS: v.string(),
     PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION: v.string(),
     PAYMENT_DESTINATION_FINGERPRINT_KEY: v.string(),
+    ZEPTO_ENVIRONMENT: v.optional(
+      v.union(v.literal('sandbox'), v.literal('production')),
+    ),
+    ZEPTO_PERSONAL_ACCESS_TOKEN: v.optional(v.string()),
   },
 })
 
