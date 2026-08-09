@@ -56,6 +56,8 @@ const legacySchema = defineSchema({
     clerkUserId: v.string(),
     email: v.string(),
     name: v.string(),
+    username: v.optional(v.string()),
+    searchText: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
     defaultPaymentDestinationId: v.optional(v.id('paymentDestinations')),
   }),
@@ -132,4 +134,30 @@ test('backfills missing payment destination search labels idempotently', async (
   await expect(
     t.run(async (ctx) => ctx.db.get('paymentDestinations', labeledId)),
   ).resolves.toMatchObject({ searchLabel: 'Everyday' })
+})
+
+test('backfills missing user search text from the user name', async () => {
+  const t = convexTest(legacySchema, modules)
+  migrationComponent.register(t)
+
+  const userId = await t.run(async (ctx) =>
+    ctx.db.insert('users', {
+      tokenIdentifier: 'issuer|searchable-user',
+      clerkUserId: 'searchable-user',
+      email: 'searchable@example.com',
+      name: 'Searchable User',
+    }),
+  )
+
+  await t.run(async (ctx) => {
+    await runToCompletion(
+      ctx,
+      components.migrations,
+      internal.migrations.backfillUserSearchText,
+    )
+  })
+
+  await expect(
+    t.run(async (ctx) => ctx.db.get('users', userId)),
+  ).resolves.toMatchObject({ searchText: 'Searchable User' })
 })

@@ -91,3 +91,107 @@ describe('users.me', () => {
     })
   })
 })
+
+describe('users.search', () => {
+  test('returns another user whose name matches the search term', async () => {
+    const t = convexTest(schema, modules)
+    await t.mutation(internal.users.addUser, addUserArgs)
+    const recipientId = await t.mutation(internal.users.addUser, {
+      tokenIdentifier: 'https://clerk.example.test|user_456',
+      clerkUserId: 'user_456',
+      email: 'ada@example.com',
+      name: 'Ada Lovelace',
+      imageUrl: 'https://example.com/ada.png',
+    })
+    const authenticated = t.withIdentity(identity)
+
+    await expect(
+      authenticated.query(api.users.search, { query: ' Love ' }),
+    ).resolves.toEqual([
+      {
+        id: recipientId,
+        name: 'Ada Lovelace',
+        imageUrl: 'https://example.com/ada.png',
+      },
+    ])
+  })
+
+  test('rejects unauthenticated callers', async () => {
+    const t = convexTest(schema, modules)
+
+    await expect(t.query(api.users.search, { query: 'Ada' })).rejects.toThrow(
+      'You must be signed in to call this function.',
+    )
+  })
+
+  test.each(['', ' ', ' A '])(
+    'returns no users for the short search term %j',
+    async (query) => {
+      const t = convexTest(schema, modules)
+      await t.mutation(internal.users.addUser, addUserArgs)
+      const authenticated = t.withIdentity(identity)
+
+      await expect(
+        authenticated.query(api.users.search, { query }),
+      ).resolves.toEqual([])
+    },
+  )
+
+  test('matches an optional PayMe Username', async () => {
+    const t = convexTest(schema, modules)
+    await t.mutation(internal.users.addUser, addUserArgs)
+    const recipientId = await t.run(async (ctx) =>
+      ctx.db.insert('users', {
+        tokenIdentifier: 'https://clerk.example.test|user_789',
+        clerkUserId: 'user_789',
+        email: 'rear.admiral@example.com',
+        name: 'Rear Admiral',
+        username: 'gracehopper',
+        searchText: 'Rear Admiral gracehopper',
+      }),
+    )
+    const authenticated = t.withIdentity(identity)
+
+    await expect(
+      authenticated.query(api.users.search, { query: 'graceh' }),
+    ).resolves.toEqual([
+      {
+        id: recipientId,
+        name: 'Rear Admiral',
+        username: 'gracehopper',
+      },
+    ])
+  })
+
+  test('does not return the authenticated user', async () => {
+    const t = convexTest(schema, modules)
+    await t.mutation(internal.users.addUser, addUserArgs)
+    const authenticated = t.withIdentity(identity)
+
+    await expect(
+      authenticated.query(api.users.search, { query: 'First' }),
+    ).resolves.toEqual([])
+  })
+
+  test('returns at most ten users', async () => {
+    const t = convexTest(schema, modules)
+    await t.mutation(internal.users.addUser, addUserArgs)
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        t.mutation(internal.users.addUser, {
+          tokenIdentifier: `https://clerk.example.test|recipient_${index}`,
+          clerkUserId: `recipient_${index}`,
+          email: `recipient-${index}@example.com`,
+          name: `Recipient ${index}`,
+        }),
+      ),
+    )
+    const authenticated = t.withIdentity(identity)
+
+    const results = await authenticated.query(api.users.search, {
+      query: 'Recipient',
+    })
+
+    expect(results).toHaveLength(10)
+  })
+})

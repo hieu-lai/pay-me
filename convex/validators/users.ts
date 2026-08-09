@@ -7,6 +7,8 @@ export const userValidator = z.object(
     clerkUserId: z.string(),
     email: z.string(),
     name: z.string(),
+    username: z.string().optional(),
+    searchText: z.string().optional(),
     imageUrl: z.string().optional(),
     defaultPaymentDestinationId: zid('paymentDestinations').optional(),
   }),

@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import { internalMutation, internalQuery } from './_generated/server'
 import { requireUser } from './lib/requireUser'
+import { userSearchText } from './lib/userSearch'
 import { userQuery } from './lib/userFunctions'
 import { userValidator } from './validators/users'
 
@@ -21,6 +22,43 @@ export const me = userQuery({
     name: ctx.user.name,
     ...(ctx.user.imageUrl === undefined ? {} : { imageUrl: ctx.user.imageUrl }),
   }),
+})
+
+/** Find public profiles by name or PayMe Username. */
+export const search = userQuery({
+  args: {
+    query: z.string(),
+  },
+  returns: z.array(
+    z.object({
+      id: zid('users'),
+      name: z.string(),
+      username: z.string().optional(),
+      imageUrl: z.string().optional(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const searchTerm = args.query.trim()
+
+    if (searchTerm.length < 2) return []
+
+    const users = await ctx.db
+      .query('users')
+      .withSearchIndex('search_by_searchText', (q) =>
+        q.search('searchText', searchTerm),
+      )
+      .take(11)
+
+    return users
+      .filter((user) => user._id !== ctx.user._id)
+      .slice(0, 10)
+      .map((user) => ({
+        id: user._id,
+        name: user.name,
+        ...(user.username === undefined ? {} : { username: user.username }),
+        ...(user.imageUrl === undefined ? {} : { imageUrl: user.imageUrl }),
+      }))
+  },
 })
 
 /** Create a Clerk user once and return their Convex ID. */
@@ -48,6 +86,7 @@ export const addUser = zodInternalMutation({
       clerkUserId: args.clerkUserId,
       email: args.email,
       name: args.name,
+      searchText: userSearchText({ name: args.name }),
       ...(args.imageUrl === undefined ? {} : { imageUrl: args.imageUrl }),
     })
   },

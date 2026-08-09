@@ -2,6 +2,7 @@ import { Migrations } from '@convex-dev/migrations'
 
 import { components, internal } from './_generated/api'
 import type { DataModel } from './_generated/dataModel'
+import { userSearchText } from './lib/userSearch'
 
 export const migrations = new Migrations<DataModel>(components.migrations)
 
@@ -25,4 +26,21 @@ export const backfillPaymentDestinationSearchLabel = migrations.define({
 
 export const runBackfillPaymentDestinationSearchLabel = migrations.runner(
   internal.migrations.backfillPaymentDestinationSearchLabel,
+)
+
+export const backfillUserSearchText = migrations.define({
+  table: 'users',
+  migrateOne: async (_ctx, user) => {
+    if (user.searchText !== undefined) return
+    return {
+      searchText: userSearchText({
+        name: user.name,
+        ...(user.username === undefined ? {} : { username: user.username }),
+      }),
+    }
+  },
+})
+
+export const runBackfillUserSearchText = migrations.runner(
+  internal.migrations.backfillUserSearchText,
 )

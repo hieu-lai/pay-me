@@ -13,11 +13,16 @@ export default defineSchema({
     clerkUserId: v.string(),
     email: v.string(),
     name: v.string(),
+    username: v.optional(v.string()),
+    searchText: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
     defaultPaymentDestinationId: v.optional(v.id('paymentDestinations')),
   })
     .index('by_tokenIdentifier', ['tokenIdentifier'])
-    .index('by_clerkUserId', ['clerkUserId']),
+    .index('by_clerkUserId', ['clerkUserId'])
+    .searchIndex('search_by_searchText', {
+      searchField: 'searchText',
+    }),
 
   paymentDestinations: defineTable(
     v.union(

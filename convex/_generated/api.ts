@@ -12,6 +12,7 @@ import type * as http from "../http.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
+import type * as lib_userSearch from "../lib/userSearch.js";
 import type * as migrations from "../migrations.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as users from "../users.js";
@@ -30,6 +31,7 @@ const fullApi: ApiFromModules<{
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
+  "lib/userSearch": typeof lib_userSearch;
   migrations: typeof migrations;
   paymentDestinations: typeof paymentDestinations;
   users: typeof users;
