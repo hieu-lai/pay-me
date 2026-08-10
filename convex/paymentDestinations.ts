@@ -18,7 +18,6 @@ import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import {
-  decryptPaymentDestination,
   normalizeLabel,
   protectPaymentDestination,
 } from './lib/paymentDestinationCrypto'
@@ -28,11 +27,6 @@ import {
   maskedPaymentDestinationValidator,
   paymentDestinationInputValidator,
   protectedPaymentDestinationValidator,
-  revealedPaymentDestinationValidator,
-} from './validators/paymentDestinations'
-import type {
-  EncryptedPaymentDestination,
-  RevealedPaymentDestination,
 } from './validators/paymentDestinations'
 
 const zodInternalQuery = zCustomQuery(internalQuery, NoOp)
@@ -42,6 +36,12 @@ const MAX_SEARCH_TERMS = 16
 const MAX_SEARCH_TERM_BYTES = 32
 const searchTermPattern = /[\p{L}\p{N}]+/gu
 const textEncoder = new TextEncoder()
+const destinationTypeToPayIdType = {
+  alias_phone: 'mobile',
+  alias_email: 'email',
+  alias_abn: 'abn',
+  alias_organisation_identifier: 'organisationIdentifier',
+} as const
 const paginationOptsZodValidator = convexToZod(paginationOptsValidator)
 const paginatedMaskedPaymentDestinationValidator = convexToZod(
   paginationResultValidator(
@@ -107,17 +107,14 @@ function maskedResult(
     maskedDisplay: destination.maskedDisplay,
     isDefault: destination._id === defaultDestinationId,
   }
-  return destination.kind === 'bankAccount'
+  return destination.type === 'bban'
     ? {
         kind: 'bankAccount' as const,
-        maskedAccountName: destination.maskedAccountName,
-        maskedBsb: destination.maskedBsb,
-        maskedAccountNumber: destination.maskedAccountNumber,
         ...common,
       }
     : {
         kind: 'payId' as const,
-        payIdType: destination.payIdType,
+        payIdType: destinationTypeToPayIdType[destination.type],
         ...common,
       }
 }
@@ -200,31 +197,6 @@ export const create = userAction({
         ? {}
         : { setAsDefault: args.setAsDefault }),
     })
-  },
-})
-
-/** Return decrypted details to the destination owner only. */
-export const reveal = userAction({
-  args: { destinationId: zid('paymentDestinations') },
-  returns: revealedPaymentDestinationValidator,
-  handler: async (ctx, args): Promise<RevealedPaymentDestination> => {
-    const encrypted: EncryptedPaymentDestination = await ctx.runQuery(
-      internal.paymentDestinations.getEncryptedForOwner,
-      { ownerUserId: ctx.user._id, destinationId: args.destinationId },
-    )
-    const decrypted = await decryptPaymentDestination(encrypted)
-    const common: {
-      id: Id<'paymentDestinations'>
-      label?: string
-      isDefault: boolean
-    } = {
-      id: encrypted.id,
-      ...(encrypted.label === undefined ? {} : { label: encrypted.label }),
-      isDefault: encrypted.isDefault,
-    }
-    return decrypted.kind === 'bankAccount'
-      ? { ...decrypted, ...common }
-      : { ...decrypted, ...common }
   },
 })
 
@@ -369,21 +341,12 @@ export const getEncryptedForOwner = zodInternalQuery({
       ...(destination.label === undefined ? {} : { label: destination.label }),
       isDefault: owner.defaultPaymentDestinationId === destination._id,
     }
-    return destination.kind === 'bankAccount'
-      ? {
-          kind: 'bankAccount' as const,
-          accountName: destination.accountName,
-          bsb: destination.bsb,
-          accountNumber: destination.accountNumber,
-          ...common,
-        }
-      : {
-          kind: 'payId' as const,
-          payIdType: destination.payIdType,
-          ciphertext: destination.ciphertext,
-          nonce: destination.nonce,
-          keyVersion: destination.keyVersion,
-          ...common,
-        }
+    return {
+      type: destination.type,
+      ciphertext: destination.ciphertext,
+      nonce: destination.nonce,
+      keyVersion: destination.keyVersion,
+      ...common,
+    }
   },
 })

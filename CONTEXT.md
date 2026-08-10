@@ -9,7 +9,7 @@ A saved Bank Account or PayID that identifies where a User can receive money and
 _Avoid_: Payment method, payout method, receiving method
 
 **Bank Account**:
-A Payment Destination identified by an account name, BSB, and account number.
+A Payment Destination identified by a BSB and account number.
 
 **PayID**:
 A Payment Destination identified by a mobile number, email address, ABN, or Organisation Identifier.

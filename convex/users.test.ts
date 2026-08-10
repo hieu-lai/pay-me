@@ -199,8 +199,7 @@ describe('users.search', () => {
     await t.run(async (ctx) => {
       const destinationId = await ctx.db.insert('paymentDestinations', {
         ownerUserId: recipientId,
-        kind: 'payId',
-        payIdType: 'email',
+        type: 'alias_email',
         searchLabel: 'ada@example.com',
         maskedDisplay: 'a**@example.com',
         fingerprint: 'fingerprint',

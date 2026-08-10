@@ -64,33 +64,47 @@ const methods = [
 const payIdTypes = [
   {
     label: 'Email',
-    value: 'email',
-    aliasType: 'alias_email',
+    value: 'alias_email',
     placeholder: 'name@example.com',
     icon: <MailIcon />,
   },
   {
     label: 'Mobile',
-    value: 'mobile',
-    aliasType: 'alias_phone',
+    value: 'alias_phone',
     placeholder: '04xx xxx xxx',
     icon: <SmartphoneIcon />,
   },
   {
     label: 'ABN',
-    value: 'abn',
-    aliasType: 'alias_abn',
+    value: 'alias_abn',
     placeholder: 'XX XXX XXX XXX',
     icon: <IdCardIcon />,
   },
   {
     label: 'Org. ID',
-    value: 'organisationIdentifier',
-    aliasType: 'alias_organisation_identifier',
+    value: 'alias_organisation_identifier',
     placeholder: 'Enter organisation ID',
     icon: <Building2 />,
   },
 ] as const
+
+type PayIdAliasType = (typeof payIdTypes)[number]['value']
+
+function normalizeAliasValue(type: PayIdAliasType, value: string): string {
+  switch (type) {
+    case 'alias_phone':
+      return value
+        .replace(/[\s()-]/g, '')
+        .replace(/^0/, '+61')
+        .replace(/^\+61/, '+61-')
+    case 'alias_email':
+      return value.normalize('NFC').trim().toLowerCase()
+    case 'alias_abn':
+      return value.replace(/\s/g, '')
+    case 'alias_organisation_identifier':
+      return value.normalize('NFC').trim()
+  }
+}
 
 export function Form({ onSuccess }: { onSuccess: () => void }) {
   const addPaymentDestination = useConvexAction(api.paymentDestinations.create)
@@ -120,15 +134,12 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
         destination:
           values.method === 'bankAccount'
             ? {
-                kind: 'bankAccount',
-                accountName: values.accountName,
-                bsb: values.bsb,
-                accountNumber: values.accountNumber,
+                type: 'bban',
+                value: `${values.bsb.replace(/[\s-]/g, '')}-${values.accountNumber.normalize('NFC').trim()}`,
               }
             : {
-                kind: 'payId',
-                payIdType: values.payIdType,
-                value: values.value,
+                type: values.payIdType,
+                value: normalizeAliasValue(values.payIdType, values.value),
               },
       }),
   })
@@ -215,33 +226,6 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
               method === 'bankAccount' ? (
                 <FieldGroup>
                   <form.Field
-                    name="accountName"
-                    children={(field) => {
-                      const isInvalid =
-                        field.state.meta.isTouched && !field.state.meta.isValid
-                      return (
-                        <Field data-invalid={isInvalid}>
-                          <FieldLabel htmlFor={field.name}>
-                            Account name
-                          </FieldLabel>
-                          <Input
-                            id={field.name}
-                            name={field.name}
-                            value={field.state.value}
-                            onBlur={field.handleBlur}
-                            onChange={(e) => field.handleChange(e.target.value)}
-                            aria-invalid={isInvalid}
-                            placeholder="Enter name"
-                            autoComplete="off"
-                          />
-                          {isInvalid && (
-                            <FieldError errors={field.state.meta.errors} />
-                          )}
-                        </Field>
-                      )
-                    }}
-                  />
-                  <form.Field
                     name="bsb"
                     children={(field) => {
                       const isInvalid =
@@ -303,9 +287,7 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                       validators={{
                         onChangeAsyncDebounceMs: 500,
                         onChangeAsync: async ({ value, fieldApi }) => {
-                          const aliasType = payIdTypes.find(
-                            ({ value }) => value === payIdTypeField.state.value,
-                          )?.aliasType
+                          const aliasType = payIdTypeField.state.value
 
                           if (!value || !aliasType) return
 

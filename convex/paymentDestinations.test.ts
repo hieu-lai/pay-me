@@ -10,6 +10,7 @@ import {
   searchLabelFor,
 } from './migrations'
 import schema from './schema'
+import { paymentDestinationInputValidator } from './validators/paymentDestinations'
 
 const modules = import.meta.glob('./**/*.ts')
 const encryptionKeyV1 = btoa('0123456789abcdef0123456789abcdef')
@@ -63,7 +64,6 @@ async function setup() {
 async function createBank(
   authenticated: Awaited<ReturnType<typeof setup>>['first'],
   overrides: Partial<{
-    accountName: string
     bsb: string
     accountNumber: string
     label: string
@@ -73,12 +73,14 @@ async function createBank(
   const {
     label,
     setAsDefault,
-    accountName = 'Ada Lovelace',
     bsb = '123-456',
     accountNumber = '0012 345',
   } = overrides
   return await authenticated.action(api.paymentDestinations.create, {
-    destination: { kind: 'bankAccount', accountName, bsb, accountNumber },
+    destination: {
+      type: 'bban',
+      value: `${bsb.replace(/[\s-]/g, '')}-${accountNumber.normalize('NFC').trim()}`,
+    },
     ...(label === undefined ? {} : { label }),
     ...(setAsDefault === undefined ? {} : { setAsDefault }),
   })
@@ -90,8 +92,30 @@ async function createPayId(
   value: string,
   setAsDefault?: boolean,
 ) {
+  const payIdTypeToDestinationType = {
+    mobile: 'alias_phone',
+    email: 'alias_email',
+    abn: 'alias_abn',
+    organisationIdentifier: 'alias_organisation_identifier',
+  } as const
+  const type = payIdTypeToDestinationType[payIdType]
+  const normalizedValue = (() => {
+    switch (type) {
+      case 'alias_phone':
+        return value
+          .replace(/[\s()-]/g, '')
+          .replace(/^0/, '+61')
+          .replace(/^\+61/, '+61-')
+      case 'alias_email':
+        return value.normalize('NFC').trim().toLowerCase()
+      case 'alias_abn':
+        return value.replace(/\s/g, '')
+      case 'alias_organisation_identifier':
+        return value.normalize('NFC').trim()
+    }
+  })()
   return await authenticated.action(api.paymentDestinations.create, {
-    destination: { kind: 'payId', payIdType, value },
+    destination: { type, value: normalizedValue },
     ...(setAsDefault === undefined ? {} : { setAsDefault }),
   })
 }
@@ -136,62 +160,22 @@ describe('payment destination storage and display', () => {
       kind: 'bankAccount',
       label: 'Everyday',
       maskedDisplay: 'Bank account ••••2345',
-      maskedAccountName: 'A** L*******',
-      maskedBsb: '***-456',
-      maskedAccountNumber: '••••2345',
       isDefault: true,
     })
-    await expect(
-      first.action(api.paymentDestinations.reveal, { destinationId }),
-    ).resolves.toEqual({
-      id: destinationId,
-      kind: 'bankAccount',
-      label: 'Everyday',
-      accountName: 'Ada Lovelace',
-      bsb: '123456',
-      accountNumber: '0012 345',
-      isDefault: true,
-    })
-
     const stored = await t.run(async (ctx) =>
       ctx.db.get('paymentDestinations', destinationId),
     )
     expect(stored).toMatchObject({
       ownerUserId: firstUserId,
-      kind: 'bankAccount',
+      type: 'bban',
       searchLabel: 'Everyday',
-      maskedAccountName: 'A** L*******',
-      maskedBsb: '***-456',
-      maskedAccountNumber: '••••2345',
-      accountName: {
-        ciphertext: expect.any(String),
-        nonce: expect.any(String),
-        keyVersion: 'v1',
-      },
-      bsb: {
-        ciphertext: expect.any(String),
-        nonce: expect.any(String),
-        keyVersion: 'v1',
-      },
-      accountNumber: {
-        ciphertext: expect.any(String),
-        nonce: expect.any(String),
-        keyVersion: 'v1',
-      },
+      ciphertext: expect.any(String),
+      nonce: expect.any(String),
+      keyVersion: 'v1',
     })
-    expect(stored).not.toHaveProperty('ciphertext')
-    expect(stored).not.toHaveProperty('nonce')
-    expect(stored).not.toHaveProperty('keyVersion')
-    if (!stored || stored.kind !== 'bankAccount') {
-      throw new Error('Expected a stored Bank Account destination.')
-    }
-    expect(
-      new Set([
-        stored.accountName.nonce,
-        stored.bsb.nonce,
-        stored.accountNumber.nonce,
-      ]).size,
-    ).toBe(3)
+    expect(stored).not.toHaveProperty('accountName')
+    expect(stored).not.toHaveProperty('bsb')
+    expect(stored).not.toHaveProperty('accountNumber')
     expect(JSON.stringify(stored)).not.toContain('Ada Lovelace')
     expect(JSON.stringify(stored)).not.toContain('123456')
     expect(
@@ -205,53 +189,47 @@ describe('payment destination storage and display', () => {
 
     const [masked] = await listDestinations(first)
     expect(masked.maskedDisplay).toBe('Bank account ••••')
-    expect(masked).toMatchObject({ maskedAccountNumber: '••••' })
   })
 
-  test.each([
-    ['0412 345 678', '+61-412345678'],
-    ['+61412345678', '+61-412345678'],
-    ['+61-4 1234 5678', '+61-412345678'],
-  ])('normalizes mobile PayID %s to %s', async (input, canonical) => {
-    const { first } = await setup()
-    const destinationId = await createPayId(first, 'mobile', input)
+  test.each([['0412 345 678'], ['+61412345678'], ['+61-4 1234 5678']])(
+    'normalizes mobile PayID %s',
+    async (input) => {
+      const { t, first } = await setup()
+      const destinationId = await createPayId(first, 'mobile', input)
 
-    await expect(
-      first.action(api.paymentDestinations.reveal, { destinationId }),
-    ).resolves.toMatchObject({
-      kind: 'payId',
-      payIdType: 'mobile',
-      value: canonical,
-    })
-    const [masked] = await listDestinations(first)
-    expect(masked.maskedDisplay).toBe('**** *** 678')
-  })
+      await expect(
+        t.run(async (ctx) => ctx.db.get('paymentDestinations', destinationId)),
+      ).resolves.toMatchObject({ type: 'alias_phone' })
+      const [masked] = await listDestinations(first)
+      expect(masked.maskedDisplay).toBe('**** *** 678')
+    },
+  )
 
   test.each([
-    ['email', '  Jane.Doe@GMAIL.com ', 'jane.doe@gmail.com', 'j***@gmail.com'],
-    ['abn', '51 824 753 556', '51824753556', '** *** *** 556'],
+    ['email', '  Jane.Doe@GMAIL.com ', 'j***@gmail.com', 'alias_email'],
+    ['abn', '51 824 753 556', '** *** *** 556', 'alias_abn'],
     [
       'organisationIdentifier',
       '  Example Campaign  ',
-      'example campaign',
-      'e***',
+      'E***',
+      'alias_organisation_identifier',
     ],
   ] as const)(
     'normalizes and masks %s PayIDs',
-    async (payIdType, input, canonical, mask) => {
-      const { first } = await setup()
+    async (payIdType, input, mask, type) => {
+      const { t, first } = await setup()
       const destinationId = await createPayId(first, payIdType, input)
 
       await expect(
-        first.action(api.paymentDestinations.reveal, { destinationId }),
-      ).resolves.toMatchObject({ value: canonical })
+        t.run(async (ctx) => ctx.db.get('paymentDestinations', destinationId)),
+      ).resolves.toMatchObject({ type })
       const [masked] = await listDestinations(first)
       expect(masked.maskedDisplay).toBe(mask)
     },
   )
 
   test('uses the stored key version when keys rotate', async () => {
-    const { first } = await setup()
+    const { t, first } = await setup()
     const destinationId = await createBank(first)
     process.env.PAYMENT_DESTINATION_ENCRYPTION_KEYS = JSON.stringify({
       v1: encryptionKeyV1,
@@ -259,9 +237,6 @@ describe('payment destination storage and display', () => {
     })
     process.env.PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION = 'v2'
 
-    await expect(
-      first.action(api.paymentDestinations.reveal, { destinationId }),
-    ).resolves.toMatchObject({ bsb: '123456' })
     const secondDestinationId = await createPayId(
       first,
       'email',
@@ -270,10 +245,13 @@ describe('payment destination storage and display', () => {
     const stored = await listDestinations(first)
     expect(stored).toHaveLength(2)
     await expect(
-      first.action(api.paymentDestinations.reveal, {
-        destinationId: secondDestinationId,
-      }),
-    ).resolves.toMatchObject({ value: 'rotated@example.com' })
+      t.run(async (ctx) => ctx.db.get('paymentDestinations', destinationId)),
+    ).resolves.toMatchObject({ keyVersion: 'v1' })
+    await expect(
+      t.run(async (ctx) =>
+        ctx.db.get('paymentDestinations', secondDestinationId),
+      ),
+    ).resolves.toMatchObject({ keyVersion: 'v2' })
   })
 
   test('lists destinations across cursor-based pages', async () => {
@@ -489,43 +467,67 @@ describe('payment destination label search', () => {
 
 describe('payment destination validation and uniqueness', () => {
   test.each([
+    ['bban', '123456-98765432'],
+    ['alias_email', 'person@example.com'],
+    ['alias_abn', '123456789'],
+    ['alias_abn', '12345678901'],
+    ['alias_organisation_identifier', 'Zepto Pty Ltd, Byron Bay NSW'],
+    ['alias_phone', '+61-411222333'],
+  ] as const)('accepts a valid %s value', (type, value) => {
+    expect(
+      paymentDestinationInputValidator.safeParse({ type, value }).success,
+    ).toBe(true)
+  })
+
+  test.each([
+    ['bban', '12345698765432'],
+    ['alias_email', 'Person@example.com'],
+    ['alias_abn', '1234567890'],
+    ['alias_organisation_identifier', ' trailing-space '],
+    ['alias_phone', '+61411222333'],
+  ] as const)('rejects an invalid %s value', (type, value) => {
+    expect(
+      paymentDestinationInputValidator.safeParse({ type, value }).success,
+    ).toBe(false)
+  })
+
+  test('rejects fields that do not belong to the destination type', () => {
+    expect(
+      paymentDestinationInputValidator.safeParse({
+        type: 'bban',
+        value: '123456-98765432',
+        accountName: 'Ada Lovelace',
+      }).success,
+    ).toBe(false)
+  })
+
+  test.each([
     [
       {
-        kind: 'bankAccount',
-        accountName: 'Ada',
-        bsb: '12345',
-        accountNumber: '1',
+        type: 'bban',
+        value: '12345-1',
       },
-      'BSB must contain exactly 6 digits',
+      '6-digit BSB',
     ],
     [
       {
-        kind: 'bankAccount',
-        accountName: 'Ada',
-        bsb: '123456',
-        accountNumber: '1234567890',
+        type: 'bban',
+        value: `123456-${'1'.repeat(29)}`,
       },
-      'Account number must be 1 to 9',
+      '6-digit BSB',
     ],
+    [{ type: 'alias_phone', value: '0411222333' }, 'international format'],
     [
-      { kind: 'payId', payIdType: 'mobile', value: '0312345678' },
-      'Australian 04 or +614',
+      { type: 'alias_email', value: 'Jane@example.com' },
+      'lowercase email address',
     ],
-    [
-      { kind: 'payId', payIdType: 'email', value: 'jane@éxample.com' },
-      'valid email address',
-    ],
-    [
-      { kind: 'payId', payIdType: 'abn', value: '11111111111' },
-      'valid 11-digit ABN',
-    ],
+    [{ type: 'alias_abn', value: '1234567890' }, '9 or 11 digits'],
     [
       {
-        kind: 'payId',
-        payIdType: 'organisationIdentifier',
+        type: 'alias_organisation_identifier',
         value: 'Café',
       },
-      'printable characters',
+      'printable ASCII',
     ],
   ] as const)(
     'rejects invalid destination %#',
@@ -536,14 +538,6 @@ describe('payment destination validation and uniqueness', () => {
       ).rejects.toThrow(message)
     },
   )
-
-  test('enforces the AP+ 256-character email ceiling', async () => {
-    const { first } = await setup()
-    const oversizedEmail = `${'a'.repeat(245)}@example.com`
-    await expect(createPayId(first, 'email', oversizedEmail)).rejects.toThrow(
-      'valid email address',
-    )
-  })
 
   test('rejects normalized duplicates for one owner but permits another owner', async () => {
     const { first, second } = await setup()
@@ -569,8 +563,7 @@ describe('payment destination authorization and lifecycle', () => {
     await expect(
       t.action(api.paymentDestinations.create, {
         destination: {
-          kind: 'payId',
-          payIdType: 'email',
+          type: 'alias_email',
           value: 'unauthenticated@example.com',
         },
       }),
@@ -581,9 +574,6 @@ describe('payment destination authorization and lifecycle', () => {
     const { first, second } = await setup()
     const destinationId = await createBank(first)
 
-    await expect(
-      second.action(api.paymentDestinations.reveal, { destinationId }),
-    ).rejects.toThrow('does not exist or is not yours')
     await expect(
       second.mutation(api.paymentDestinations.setDefault, { destinationId }),
     ).rejects.toThrow('does not exist or is not yours')

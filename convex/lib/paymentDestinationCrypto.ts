@@ -12,9 +12,10 @@ const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 const AES_GCM_NONCE_BYTES = 12
 const AES_256_KEY_BYTES = 32
-const MAX_ACCOUNT_NAME_LENGTH = 120
-const MAX_ACCOUNT_NUMBER_LENGTH = 9
-const MAX_ORGANISATION_IDENTIFIER_LENGTH = 256
+
+function paymentDestinationType(input: PaymentDestinationInput) {
+  return input.type
+}
 
 function invalidInput(message: string): never {
   throw new ConvexError({ code: 'INVALID_PAYMENT_DESTINATION', message })
@@ -119,129 +120,6 @@ async function fingerprint(value: string): Promise<string> {
   return bytesToBase64(new Uint8Array(signature))
 }
 
-function normalizeAccountName(value: string): string {
-  const normalized = value.normalize('NFC').trim()
-  if (!normalized || normalized.length > MAX_ACCOUNT_NAME_LENGTH) {
-    invalidInput('Account name must be between 1 and 120 characters.')
-  }
-  return normalized
-}
-
-function normalizeBsb(value: string): string {
-  const normalized = value.replace(/[\s-]/g, '')
-  if (!/^\d{6}$/.test(normalized)) {
-    invalidInput('BSB must contain exactly 6 digits.')
-  }
-  return normalized
-}
-
-function normalizeAccountNumber(value: string): string {
-  const normalized = value.normalize('NFC').trim()
-  if (
-    !normalized ||
-    normalized.length > MAX_ACCOUNT_NUMBER_LENGTH ||
-    !/^[A-Za-z0-9 -]+$/.test(normalized)
-  ) {
-    invalidInput(
-      'Account number must be 1 to 9 letters, digits, spaces, or hyphens.',
-    )
-  }
-  return normalized
-}
-
-function normalizeMobile(value: string): string {
-  const compact = value.replace(/[\s()-]/g, '')
-  if (/^04\d{8}$/.test(compact)) return `+61-${compact.slice(1)}`
-  if (/^\+614\d{8}$/.test(compact)) return `+61-${compact.slice(3)}`
-  invalidInput('Mobile PayID must be an Australian 04 or +614 mobile number.')
-}
-
-function normalizeEmail(value: string): string {
-  const normalized = value.normalize('NFC').trim().toLowerCase()
-  if (
-    normalized.length > 256 ||
-    !/^[\x21-\x7e]+$/.test(normalized) ||
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)
-  ) {
-    invalidInput('Email PayID must be a valid email address.')
-  }
-  return normalized
-}
-
-function isValidAbn(value: string): boolean {
-  const weights = [10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
-  const digits = [...value].map(Number)
-  digits[0] -= 1
-  return (
-    digits.reduce((sum, digit, index) => sum + digit * weights[index], 0) %
-      89 ===
-    0
-  )
-}
-
-function normalizeAbn(value: string): string {
-  const normalized = value.replace(/\s/g, '')
-  if (!/^\d{11}$/.test(normalized) || !isValidAbn(normalized)) {
-    invalidInput('ABN PayID must be a valid 11-digit ABN.')
-  }
-  return normalized
-}
-
-function normalizeOrganisationIdentifier(value: string): string {
-  const normalized = value.normalize('NFC').trim().toLowerCase()
-  if (
-    !normalized ||
-    normalized.length > MAX_ORGANISATION_IDENTIFIER_LENGTH ||
-    !/^[\x20-\x7e]+$/.test(normalized)
-  ) {
-    invalidInput(
-      'Organisation Identifier must be between 1 and 256 printable characters.',
-    )
-  }
-  return normalized
-}
-
-function normalizeInput(
-  input: PaymentDestinationInput,
-): PaymentDestinationInput {
-  if (input.kind === 'bankAccount') {
-    return {
-      kind: 'bankAccount',
-      accountName: normalizeAccountName(input.accountName),
-      bsb: normalizeBsb(input.bsb),
-      accountNumber: normalizeAccountNumber(input.accountNumber),
-    }
-  }
-
-  const value = (() => {
-    switch (input.payIdType) {
-      case 'mobile':
-        return normalizeMobile(input.value)
-      case 'email':
-        return normalizeEmail(input.value)
-      case 'abn':
-        return normalizeAbn(input.value)
-      case 'organisationIdentifier':
-        return normalizeOrganisationIdentifier(input.value)
-    }
-  })()
-  return { kind: 'payId', payIdType: input.payIdType, value }
-}
-
-function maskAccountName(value: string): string {
-  return value
-    .split(/\s+/)
-    .map((part) => {
-      const [first, ...rest] = [...part]
-      return `${first}${'*'.repeat(rest.length)}`
-    })
-    .join(' ')
-}
-
-function maskBsb(value: string): string {
-  return `***-${value.slice(-3)}`
-}
-
 function maskAccountNumber(value: string): string {
   const displayAccountNumber = value.replace(/[ -]/g, '')
   const visibleLength = Math.min(
@@ -254,27 +132,24 @@ function maskAccountNumber(value: string): string {
 }
 
 function maskedDisplay(input: PaymentDestinationInput): string {
-  if (input.kind === 'bankAccount') {
-    return `Bank account ${maskAccountNumber(input.accountNumber)}`
-  }
-  switch (input.payIdType) {
-    case 'mobile':
+  switch (input.type) {
+    case 'bban':
+      return `Bank account ${maskAccountNumber(input.value.slice(7))}`
+    case 'alias_phone':
       return `**** *** ${input.value.slice(-3)}`
-    case 'email': {
+    case 'alias_email': {
       const [local, domain] = input.value.split('@') as [string, string]
       return `${[...local][0]}***@${domain}`
     }
-    case 'abn':
+    case 'alias_abn':
       return `** *** *** ${input.value.slice(-3)}`
-    case 'organisationIdentifier':
+    case 'alias_organisation_identifier':
       return `${[...input.value][0]}***`
   }
 }
 
 function fingerprintSource(input: PaymentDestinationInput): string {
-  return input.kind === 'bankAccount'
-    ? `bankAccount\u0000${input.bsb}\u0000${input.accountNumber}`
-    : `payId\u0000${input.payIdType}\u0000${input.value}`
+  return `${input.type}\u0000${input.value}`
 }
 
 async function encryptValue(
@@ -313,9 +188,8 @@ async function decryptValue(value: EncryptedValue): Promise<string> {
 }
 
 export async function protectPaymentDestination(
-  rawInput: PaymentDestinationInput,
+  input: PaymentDestinationInput,
 ): Promise<ProtectedPaymentDestination> {
-  const input = normalizeInput(rawInput)
   const keyVersion = env.PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION
   if (!keyVersion) {
     throw new ConvexError({
@@ -329,27 +203,8 @@ export async function protectPaymentDestination(
     maskedDisplay: maskedDisplay(input),
     fingerprint: await fingerprint(fingerprintSource(input)),
   }
-  if (input.kind === 'bankAccount') {
-    const [accountName, bsb, accountNumber] = await Promise.all([
-      encryptValue(input.accountName, key, keyVersion),
-      encryptValue(input.bsb, key, keyVersion),
-      encryptValue(input.accountNumber, key, keyVersion),
-    ])
-    return {
-      kind: 'bankAccount',
-      ...common,
-      maskedAccountName: maskAccountName(input.accountName),
-      maskedBsb: maskBsb(input.bsb),
-      maskedAccountNumber: maskAccountNumber(input.accountNumber),
-      accountName,
-      bsb,
-      accountNumber,
-    }
-  }
-
   return {
-    kind: 'payId',
-    payIdType: input.payIdType,
+    type: paymentDestinationType(input),
     ...common,
     ...(await encryptValue(JSON.stringify(input), key, keyVersion)),
   }
@@ -358,27 +213,11 @@ export async function protectPaymentDestination(
 export async function decryptPaymentDestination(
   destination: EncryptedPaymentDestination,
 ): Promise<PaymentDestinationInput> {
-  if (destination.kind === 'bankAccount') {
-    const [accountName, bsb, accountNumber] = await Promise.all([
-      decryptValue(destination.accountName),
-      decryptValue(destination.bsb),
-      decryptValue(destination.accountNumber),
-    ])
-    try {
-      return paymentDestinationInputValidator.parse({
-        kind: 'bankAccount',
-        accountName,
-        bsb,
-        accountNumber,
-      })
-    } catch {
-      decryptionFailed()
-    }
-  }
-
   const plaintext = await decryptValue(destination)
   try {
-    return paymentDestinationInputValidator.parse(JSON.parse(plaintext))
+    const input = paymentDestinationInputValidator.parse(JSON.parse(plaintext))
+    if (paymentDestinationType(input) !== destination.type) decryptionFailed()
+    return input
   } catch {
     decryptionFailed()
   }

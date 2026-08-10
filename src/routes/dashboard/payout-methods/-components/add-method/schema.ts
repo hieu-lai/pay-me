@@ -6,12 +6,6 @@ const labelSchema = z
   .min(1, 'Enter a label for this payout method.')
   .max(80, 'Label must be 80 characters or fewer.')
 
-const accountNameSchema = z
-  .string({ error: 'Enter the name on the bank account.' })
-  .trim()
-  .min(1, 'Enter the name on the bank account.')
-  .max(120, 'Account name must be 120 characters or fewer.')
-
 const bsbSchema = z
   .string({ error: 'Enter the 6-digit BSB.' })
   .trim()
@@ -82,22 +76,22 @@ const payIdSchema = z.discriminatedUnion(
   [
     commonSchema.extend({
       method: z.literal('payid'),
-      payIdType: z.literal('email'),
+      payIdType: z.literal('alias_email'),
       value: emailPayIdSchema,
     }),
     commonSchema.extend({
       method: z.literal('payid'),
-      payIdType: z.literal('mobile'),
+      payIdType: z.literal('alias_phone'),
       value: mobilePayIdSchema,
     }),
     commonSchema.extend({
       method: z.literal('payid'),
-      payIdType: z.literal('abn'),
+      payIdType: z.literal('alias_abn'),
       value: abnPayIdSchema,
     }),
     commonSchema.extend({
       method: z.literal('payid'),
-      payIdType: z.literal('organisationIdentifier'),
+      payIdType: z.literal('alias_organisation_identifier'),
       value: organisationIdentifierPayIdSchema,
     }),
   ],
@@ -109,7 +103,6 @@ export const formSchema = z.discriminatedUnion(
   [
     commonSchema.extend({
       method: z.literal('bankAccount'),
-      accountName: accountNameSchema,
       bsb: bsbSchema,
       accountNumber: accountNumberSchema,
     }),
@@ -123,7 +116,6 @@ export type FormSubmitValues = z.output<typeof formSchema>
 export type FormDefaultValues = FormValues & {
   payIdType?: z.input<typeof payIdSchema>['payIdType']
   value?: string
-  accountName?: string
   bsb?: string
   accountNumber?: string
 }
@@ -131,9 +123,8 @@ export type FormDefaultValues = FormValues & {
 export const defaultValues: FormDefaultValues = {
   label: '',
   method: 'payid',
-  payIdType: 'mobile',
+  payIdType: 'alias_phone',
   value: '',
-  accountName: '',
   bsb: '',
   accountNumber: '',
 }

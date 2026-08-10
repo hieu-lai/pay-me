@@ -19,14 +19,12 @@ describe('add payout method schema', () => {
       formSchema.parse({
         label: '  Main account  ',
         method: 'bankAccount',
-        accountName: '  Ada Lovelace  ',
         bsb: '123-456',
         accountNumber: '0012 345',
       }),
     ).toEqual({
       label: 'Main account',
       method: 'bankAccount',
-      accountName: 'Ada Lovelace',
       bsb: '123-456',
       accountNumber: '0012 345',
     })
@@ -36,7 +34,6 @@ describe('add payout method schema', () => {
     expect(messagesFor({ label: '', method: 'bankAccount' })).toEqual(
       expect.arrayContaining([
         'Enter a label for this payout method.',
-        'Enter the name on the bank account.',
         'Enter the 6-digit BSB.',
         'Enter the bank account number.',
       ]),
@@ -48,7 +45,6 @@ describe('add payout method schema', () => {
       messagesFor({
         label: 'Main',
         method: 'bankAccount',
-        accountName: 'Ada Lovelace',
         bsb: '12345',
         accountNumber: '1234567890',
       }),
@@ -61,10 +57,10 @@ describe('add payout method schema', () => {
   })
 
   test.each([
-    ['email', 'person@example.com'],
-    ['mobile', '0412 345 678'],
-    ['abn', '51 824 753 556'],
-    ['organisationIdentifier', 'Example Campaign'],
+    ['alias_email', 'person@example.com'],
+    ['alias_phone', '0412 345 678'],
+    ['alias_abn', '51 824 753 556'],
+    ['alias_organisation_identifier', 'Example Campaign'],
   ] as const)('accepts a valid %s PayID', (payIdType, value) => {
     expect(
       formSchema.safeParse({
@@ -85,21 +81,21 @@ describe('add payout method schema', () => {
       messagesFor({
         label: 'PayID',
         method: 'payid',
-        payIdType: 'email',
+        payIdType: 'alias_email',
       }),
     ).toEqual(['Enter the email address used for this PayID.'])
   })
 
   test.each([
-    ['email', 'not-an-email', 'Enter a valid email address.'],
+    ['alias_email', 'not-an-email', 'Enter a valid email address.'],
     [
-      'mobile',
+      'alias_phone',
       '0312 345 678',
       'Enter an Australian mobile number starting with 04 or +614.',
     ],
-    ['abn', '11 111 111 111', 'Enter a valid 11-digit ABN.'],
+    ['alias_abn', '11 111 111 111', 'Enter a valid 11-digit ABN.'],
     [
-      'organisationIdentifier',
+      'alias_organisation_identifier',
       'Café',
       'Enter an organisation identifier using 1 to 256 printable characters.',
     ],
