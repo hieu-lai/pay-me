@@ -1,6 +1,7 @@
 import { useConvexAction } from '@convex-dev/react-query'
 import { useMutation } from '@tanstack/react-query'
 import BankIcon from '#/components/icons/bank'
+import CircleCheckIcon from '#/components/icons/circle-check'
 import PayIdIdIcon from '#/components/icons/payid-id'
 import { Button } from '#/components/ui/button'
 import {
@@ -32,6 +33,7 @@ import {
 import { SheetClose, SheetFooter } from '#/components/ui/sheet'
 import { Spinner } from '#/components/ui/spinner'
 import { toast } from '#/components/ui/toast'
+import { aliasResolution } from '#/server-fns/alias-resolution'
 import type { ConvexError } from 'convex/values'
 import {
   Building2,
@@ -46,16 +48,16 @@ import { usePayoutMethodForm } from './use-payout-method-form'
 
 const methods = [
   {
-    id: 'bankAccount',
-    title: 'Bank account',
-    description: 'Payouts via BSB and account number.',
-    icon: <BankIcon className="size-5" />,
-  },
-  {
     id: 'payid',
     title: 'PayID',
     description: 'Payouts using your PayID.',
     icon: <PayIdIdIcon className="size-5" />,
+  },
+  {
+    id: 'bankAccount',
+    title: 'Bank account',
+    description: 'Payouts via BSB and account number.',
+    icon: <BankIcon className="size-5" />,
   },
 ] as const
 
@@ -63,24 +65,28 @@ const payIdTypes = [
   {
     label: 'Email',
     value: 'email',
+    aliasType: 'alias_email',
     placeholder: 'name@example.com',
     icon: <MailIcon />,
   },
   {
     label: 'Mobile',
     value: 'mobile',
+    aliasType: 'alias_phone',
     placeholder: '04xx xxx xxx',
     icon: <SmartphoneIcon />,
   },
   {
     label: 'ABN',
     value: 'abn',
+    aliasType: 'alias_abn',
     placeholder: 'XX XXX XXX XXX',
     icon: <IdCardIcon />,
   },
   {
     label: 'Org. ID',
     value: 'organisationIdentifier',
+    aliasType: 'alias_organisation_identifier',
     placeholder: 'Enter organisation ID',
     icon: <Building2 />,
   },
@@ -294,6 +300,47 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                   children={(payIdTypeField) => (
                     <form.Field
                       name="value"
+                      validators={{
+                        onChangeAsyncDebounceMs: 500,
+                        onChangeAsync: async ({ value, fieldApi }) => {
+                          const aliasType = payIdTypes.find(
+                            ({ value }) => value === payIdTypeField.state.value,
+                          )?.aliasType
+
+                          if (!value || !aliasType) return
+
+                          fieldApi.setMeta((prev) => ({
+                            ...prev,
+                            isValidating: true,
+                          }))
+
+                          try {
+                            const result = await aliasResolution({
+                              data: {
+                                type: aliasType,
+                                value:
+                                  aliasType === 'alias_phone'
+                                    ? value
+                                        .replace(/[\s()-]/g, '')
+                                        .replace(/^0/, '+61')
+                                        .replace(/^\+61/, '+61-')
+                                    : value,
+                              },
+                            })
+
+                            if (result) return undefined
+
+                            return { message: 'Invalid PayID' }
+                          } catch (e) {
+                            return { message: 'Cannot validate PayID' }
+                          } finally {
+                            fieldApi.setMeta((prev) => ({
+                              ...prev,
+                              isValidating: false,
+                            }))
+                          }
+                        },
+                      }}
                       children={(valueField) => {
                         const isInvalid =
                           valueField.state.meta.isTouched &&
@@ -301,6 +348,15 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                         const selectedType = payIdTypes.find(
                           (type) => type.value === payIdTypeField.state.value,
                         )
+
+                        const { isDirty, isValid, isValidating } =
+                          valueField.state.meta
+
+                        const showValid =
+                          isDirty &&
+                          isValid &&
+                          !isValidating &&
+                          !!valueField.state.value?.length
 
                         return (
                           <Field data-invalid={isInvalid}>
@@ -361,6 +417,12 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                                 autoComplete="off"
                               />
                             </InputGroup>
+                            {showValid && (
+                              <div className="flex items-center gap-1 text-xs font-semibold">
+                                <CircleCheckIcon className="size-3.5 text-green-500" />
+                                Valid PayID
+                              </div>
+                            )}
 
                             {isInvalid && (
                               <FieldError

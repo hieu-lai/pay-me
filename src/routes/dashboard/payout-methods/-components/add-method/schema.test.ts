@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 
-import { formSchema } from './schema'
+import { defaultValues, formSchema } from './schema'
 
 function messagesFor(input: unknown) {
   const result = formSchema.safeParse(input)
@@ -10,6 +10,10 @@ function messagesFor(input: unknown) {
 }
 
 describe('add payout method schema', () => {
+  test('defaults to PayID', () => {
+    expect(defaultValues.method).toBe('payid')
+  })
+
   test('accepts a complete bank account and trims text fields', () => {
     expect(
       formSchema.parse({

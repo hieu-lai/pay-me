@@ -123,11 +123,14 @@ export type FormSubmitValues = z.output<typeof formSchema>
 export type FormDefaultValues = FormValues & {
   payIdType?: z.input<typeof payIdSchema>['payIdType']
   value?: string
+  accountName?: string
+  bsb?: string
+  accountNumber?: string
 }
 
 export const defaultValues: FormDefaultValues = {
   label: '',
-  method: 'bankAccount',
+  method: 'payid',
   payIdType: 'mobile',
   value: '',
   accountName: '',

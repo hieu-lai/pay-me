@@ -8,3 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 
 export const range = (length: number): Array<number> =>
   Array.from({ length }, (_, i) => i)
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
