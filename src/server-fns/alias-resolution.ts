@@ -69,6 +69,8 @@ export const aliasResolution = createServerFn({ method: 'GET' })
       getRequestHeader('x-vercel-forwarded-for') ??
       getRequestHeader('x-forwarded-for')
 
+    console.log({ remoteIp })
+
     if (value === '+61-412345678') {
       return true
     }
