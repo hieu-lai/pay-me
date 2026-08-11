@@ -1,4 +1,5 @@
 import migrations from '@convex-dev/migrations/convex.config.js'
+import workpool from '@convex-dev/workpool/convex.config'
 import { defineApp } from 'convex/server'
 import { v } from 'convex/values'
 
@@ -15,9 +16,11 @@ const app = defineApp({
       v.union(v.literal('sandbox'), v.literal('production')),
     ),
     ZEPTO_PERSONAL_ACCESS_TOKEN: v.optional(v.string()),
+    ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN: v.optional(v.string()),
   },
 })
 
 app.use(migrations)
+app.use(workpool, { name: 'agreementCreationWorkpool' })
 
 export default app

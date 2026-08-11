@@ -487,4 +487,35 @@ describe('production sandbox guards', () => {
     }
     expect(fetch).not.toHaveBeenCalled()
   })
+
+  test('rejects sandbox simulation fields in production request bodies', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: {} }, { status: 201 }))
+    const client = createZeptoClient({
+      environment: 'production',
+      accessToken: 'token',
+      fetch,
+    })
+
+    await expect(
+      client.payTo.POST('/payto/agreements', {
+        body: {
+          uid: 'agreement-1',
+          purpose: 'other',
+          description: 'Test agreement',
+          debtor: {
+            party_name: 'Paying User',
+            account_identifier: { type: 'bban', value: '123456-1234567' },
+          },
+          payment_terms: {
+            type: 'fixed',
+            frequency: 'adhoc',
+            amount: 100,
+            count: 1,
+          },
+          sandbox: { simulate: 'debtor_accept' },
+        },
+      }),
+    ).rejects.toMatchObject(errorOfKind('sandbox_only'))
+    expect(fetch).not.toHaveBeenCalled()
+  })
 })

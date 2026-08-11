@@ -1,7 +1,6 @@
 import { ConvexError } from 'convex/values'
 import { env } from '../_generated/server'
 import type {
-  EncryptedPaymentDestination,
   EncryptedValue,
   PaymentDestinationInput,
   ProtectedPaymentDestination,
@@ -211,7 +210,7 @@ export async function protectPaymentDestination(
 }
 
 export async function decryptPaymentDestination(
-  destination: EncryptedPaymentDestination,
+  destination: EncryptedValue & { type: PaymentDestinationInput['type'] },
 ): Promise<PaymentDestinationInput> {
   const plaintext = await decryptValue(destination)
   try {

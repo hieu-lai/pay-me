@@ -43,6 +43,7 @@ type Env = {
   readonly PAYMENT_DESTINATION_FINGERPRINT_KEY: string;
   readonly ZEPTO_ENVIRONMENT: "sandbox" | "production" | undefined;
   readonly ZEPTO_PERSONAL_ACCESS_TOKEN: string | undefined;
+  readonly ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN: string | undefined;
 };
 
 /**

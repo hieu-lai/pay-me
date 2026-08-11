@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test } from 'vitest'
 
-import { createZeptoClientFromEnv } from './env'
+import {
+  createSandboxZeptoClientFromEnv,
+  createZeptoClientFromEnv,
+} from './env'
 
 const originalEnvironment = process.env.ZEPTO_ENVIRONMENT
 const originalToken = process.env.ZEPTO_PERSONAL_ACCESS_TOKEN
+const originalSandboxToken = process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN
 
 afterEach(() => {
   if (originalEnvironment === undefined) delete process.env.ZEPTO_ENVIRONMENT
@@ -12,6 +16,10 @@ afterEach(() => {
   if (originalToken === undefined)
     delete process.env.ZEPTO_PERSONAL_ACCESS_TOKEN
   else process.env.ZEPTO_PERSONAL_ACCESS_TOKEN = originalToken
+
+  if (originalSandboxToken === undefined)
+    delete process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN
+  else process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = originalSandboxToken
 })
 
 describe('createZeptoClientFromEnv', () => {
@@ -37,6 +45,35 @@ describe('createZeptoClientFromEnv', () => {
         investigations: expect.any(Object),
         confirmationOfPayee: expect.any(Object),
       }),
+    )
+  })
+
+  test('denies production credentials to sandbox-only agreement work', () => {
+    process.env.ZEPTO_ENVIRONMENT = 'sandbox'
+    process.env.ZEPTO_PERSONAL_ACCESS_TOKEN = 'production-token'
+    delete process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN
+
+    expect(() => createSandboxZeptoClientFromEnv()).toThrow(
+      'ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN must be configured',
+    )
+  })
+
+  test('creates sandbox agreement clients only from sandbox credentials', () => {
+    process.env.ZEPTO_ENVIRONMENT = 'sandbox'
+    process.env.ZEPTO_PERSONAL_ACCESS_TOKEN = 'production-token'
+    process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-token'
+
+    expect(createSandboxZeptoClientFromEnv()).toEqual(
+      expect.objectContaining({ payTo: expect.any(Object) }),
+    )
+  })
+
+  test('denies sandbox credentials when the configured origin is production', () => {
+    process.env.ZEPTO_ENVIRONMENT = 'production'
+    process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-token'
+
+    expect(() => createSandboxZeptoClientFromEnv()).toThrow(
+      'Sandbox agreement work requires sandbox-only Zepto configuration.',
     )
   })
 })

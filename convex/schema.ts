@@ -1,13 +1,10 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 
-const bankAccountRoutingSnapshot = v.object({
-  kind: v.literal('bban'),
-  maskedDisplay: v.string(),
-  ciphertext: v.string(),
-  nonce: v.string(),
-  keyVersion: v.string(),
-})
+import {
+  bankAccountRoutingSnapshotValidator,
+  providerAgreementStateValidator,
+} from './validators/payToAgreements'
 
 export default defineSchema({
   users: defineTable({
@@ -60,7 +57,7 @@ export default defineSchema({
     submissionKey: v.string(),
     submissionFingerprint: v.string(),
     sourceCreditorPaymentDestinationId: v.id('paymentDestinations'),
-    creditorSnapshot: bankAccountRoutingSnapshot,
+    creditorSnapshot: bankAccountRoutingSnapshotValidator,
     submittedAt: v.number(),
   })
     .index('by_requesterUserId', ['requesterUserId'])
@@ -74,18 +71,24 @@ export default defineSchema({
     payerUserId: v.id('users'),
     payerNameSnapshot: v.string(),
     sourceDebtorPaymentDestinationId: v.id('paymentDestinations'),
-    debtorSnapshot: bankAccountRoutingSnapshot,
+    debtorSnapshot: bankAccountRoutingSnapshotValidator,
     provider: v.literal('zepto'),
     environment: v.literal('sandbox'),
     apiVersion: v.literal('20260101'),
     providerUid: v.string(),
-    creationState: v.literal('queued'),
+    creationState: v.union(
+      v.literal('queued'),
+      v.literal('submitting'),
+      v.literal('created'),
+    ),
     creationUpdatedAt: v.number(),
-    lifecycleState: v.literal('pending'),
+    lifecycleState: providerAgreementStateValidator,
     lifecycleConfidence: v.literal('provisional'),
     lifecycleObservedAt: v.number(),
     trackingState: v.literal('verification_due'),
     trackingUpdatedAt: v.number(),
+    providerCreatedAt: v.optional(v.number()),
+    providerMmsAgreementId: v.optional(v.union(v.string(), v.null())),
   })
     .index('by_moneyRequestId', ['moneyRequestId'])
     .index('by_payerUserId', ['payerUserId'])
@@ -95,11 +98,22 @@ export default defineSchema({
     ])
     .index('by_environment_and_providerUid', ['environment', 'providerUid']),
 
-  payToAgreementEvidence: defineTable({
-    payToAgreementId: v.id('payToAgreements'),
-    kind: v.literal('local_accepted'),
-    observedAt: v.number(),
-  }).index('by_payToAgreementId_and_observedAt', [
+  payToAgreementEvidence: defineTable(
+    v.union(
+      v.object({
+        payToAgreementId: v.id('payToAgreements'),
+        kind: v.literal('local_accepted'),
+        observedAt: v.number(),
+      }),
+      v.object({
+        payToAgreementId: v.id('payToAgreements'),
+        kind: v.literal('provider_create_succeeded'),
+        providerState: providerAgreementStateValidator,
+        providerCreatedAt: v.number(),
+        observedAt: v.number(),
+      }),
+    ),
+  ).index('by_payToAgreementId_and_observedAt', [
     'payToAgreementId',
     'observedAt',
   ]),
@@ -107,7 +121,14 @@ export default defineSchema({
   payToAgreementWorkItems: defineTable({
     payToAgreementId: v.id('payToAgreements'),
     kind: v.literal('create'),
-    state: v.literal('queued'),
+    state: v.union(
+      v.literal('queued'),
+      v.literal('running'),
+      v.literal('completed'),
+    ),
     availableAt: v.number(),
+    workId: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
   }).index('by_payToAgreementId', ['payToAgreementId']),
 })

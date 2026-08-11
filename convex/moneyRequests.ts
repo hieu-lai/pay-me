@@ -2,10 +2,11 @@ import {
   paginationOptsValidator,
   paginationResultValidator,
 } from 'convex/server'
+import { Workpool } from '@convex-dev/workpool'
 import { ConvexError, v } from 'convex/values'
 import { v7 as uuid } from 'uuid'
 
-import { internal } from './_generated/api'
+import { components, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import {
@@ -44,6 +45,13 @@ const attestationValidator = v.object({
   intentDigest: v.string(),
   signature: v.string(),
 })
+const agreementCreationPool = new Workpool(
+  components.agreementCreationWorkpool,
+  {
+    maxParallelism: 5,
+    retryActionsByDefault: false,
+  },
+)
 const publicUserIdentityValidator = v.object({
   name: v.string(),
   username: v.optional(v.string()),
@@ -52,11 +60,20 @@ const publicUserIdentityValidator = v.object({
 const publicAgreementValidator = v.object({
   payer: publicUserIdentityValidator,
   creation: v.object({
-    state: v.literal('queued'),
+    state: v.union(
+      v.literal('queued'),
+      v.literal('submitting'),
+      v.literal('created'),
+    ),
     updatedAt: v.number(),
   }),
   lifecycle: v.object({
-    meaning: v.literal('waitingForPayer'),
+    meaning: v.union(
+      v.literal('waitingForPayer'),
+      v.literal('ready'),
+      v.literal('temporarilyUnavailable'),
+      v.literal('ended'),
+    ),
     confidence: v.literal('provisional'),
     observedAt: v.number(),
   }),
@@ -449,12 +466,19 @@ export const accept = internalMutation({
         kind: 'local_accepted',
         observedAt: args.submittedAt,
       })
-      await ctx.db.insert('payToAgreementWorkItems', {
+      const workItemId = await ctx.db.insert('payToAgreementWorkItems', {
         payToAgreementId,
         kind: 'create',
         state: 'queued',
         availableAt: args.submittedAt,
       })
+      const workId = await agreementCreationPool.enqueueAction(
+        ctx,
+        internal.payToAgreementCreation.create,
+        { payToAgreementId },
+        { retry: false },
+      )
+      await ctx.db.patch('payToAgreementWorkItems', workItemId, { workId })
     }
     return moneyRequestId
   },
@@ -486,7 +510,7 @@ function publicAgreement(
       updatedAt: agreement.creationUpdatedAt,
     },
     lifecycle: {
-      meaning: 'waitingForPayer' as const,
+      meaning: publicLifecycleMeaning(agreement.lifecycleState),
       confidence: agreement.lifecycleConfidence,
       observedAt: agreement.lifecycleObservedAt,
     },
@@ -494,6 +518,25 @@ function publicAgreement(
       state: 'verificationDue' as const,
       updatedAt: agreement.trackingUpdatedAt,
     },
+  }
+}
+
+function publicLifecycleMeaning(
+  state: Doc<'payToAgreements'>['lifecycleState'],
+) {
+  switch (state) {
+    case 'pending':
+    case 'created':
+      return 'waitingForPayer' as const
+    case 'active':
+      return 'ready' as const
+    case 'suspended':
+      return 'temporarilyUnavailable' as const
+    case 'cancelled':
+    case 'declined':
+    case 'failed':
+    case 'expired':
+      return 'ended' as const
   }
 }
 

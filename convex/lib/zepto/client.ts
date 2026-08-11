@@ -93,6 +93,16 @@ async function hasPayToUid(request: Request): Promise<boolean> {
   }
 }
 
+async function hasSandboxSimulation(request: Request): Promise<boolean> {
+  if (request.method === 'GET' || request.method === 'HEAD') return false
+  try {
+    const body: unknown = JSON.parse(await request.clone().text())
+    return isRecord(body) && Object.hasOwn(body, 'sandbox')
+  } catch {
+    return false
+  }
+}
+
 async function canRetry(request: Request): Promise<boolean> {
   if (request.method === 'GET') return true
   if (request.method !== 'POST') return false
@@ -246,10 +256,13 @@ function createZeptoFetch(options: {
     headers.set('Zepto-API-Version', ZEPTO_API_VERSION)
     const request = new Request(inputRequest, { headers })
     const path = requestPath(request)
-    if (options.environment === 'production' && isSandboxOnlyPath(path)) {
+    if (
+      options.environment === 'production' &&
+      (isSandboxOnlyPath(path) || (await hasSandboxSimulation(request)))
+    ) {
       throw new ZeptoClientError({
         kind: 'sandbox_only',
-        message: `Zepto sandbox-only endpoint cannot be called in production: ${request.method} ${path}.`,
+        message: `Zepto sandbox-only behavior cannot be called in production: ${request.method} ${path}.`,
         method: request.method,
         path,
       })

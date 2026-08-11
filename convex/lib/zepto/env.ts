@@ -18,3 +18,25 @@ export function createZeptoClientFromEnv(): ZeptoClient {
     accessToken: env.ZEPTO_PERSONAL_ACCESS_TOKEN,
   })
 }
+
+/** Create the client used by sandbox-only provider workers. */
+export function createSandboxZeptoClientFromEnv(): ZeptoClient {
+  if (env.ZEPTO_ENVIRONMENT !== 'sandbox') {
+    throw new ZeptoClientError({
+      kind: 'sandbox_only',
+      message:
+        'Sandbox agreement work requires sandbox-only Zepto configuration.',
+    })
+  }
+  if (!env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN) {
+    throw new ZeptoClientError({
+      kind: 'configuration',
+      message:
+        'ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN must be configured for sandbox agreement work.',
+    })
+  }
+  return createZeptoClient({
+    environment: 'sandbox',
+    accessToken: env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN,
+  })
+}

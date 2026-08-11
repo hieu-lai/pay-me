@@ -14,6 +14,7 @@ import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCry
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
 import type * as lib_userSearch from "../lib/userSearch.js";
+import type * as lib_zepto_agreement from "../lib/zepto/agreement.js";
 import type * as lib_zepto_client from "../lib/zepto/client.js";
 import type * as lib_zepto_env from "../lib/zepto/env.js";
 import type * as lib_zepto_error from "../lib/zepto/error.js";
@@ -29,9 +30,11 @@ import type * as lib_zepto_pagination from "../lib/zepto/pagination.js";
 import type * as lib_zepto_webhook from "../lib/zepto/webhook.js";
 import type * as migrations from "../migrations.js";
 import type * as moneyRequests from "../moneyRequests.js";
+import type * as payToAgreementCreation from "../payToAgreementCreation.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as seed from "../seed.js";
 import type * as users from "../users.js";
+import type * as validators_payToAgreements from "../validators/payToAgreements.js";
 import type * as validators_paymentDestinations from "../validators/paymentDestinations.js";
 import type * as validators_users from "../validators/users.js";
 
@@ -49,6 +52,7 @@ const fullApi: ApiFromModules<{
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
   "lib/userSearch": typeof lib_userSearch;
+  "lib/zepto/agreement": typeof lib_zepto_agreement;
   "lib/zepto/client": typeof lib_zepto_client;
   "lib/zepto/env": typeof lib_zepto_env;
   "lib/zepto/error": typeof lib_zepto_error;
@@ -64,9 +68,11 @@ const fullApi: ApiFromModules<{
   "lib/zepto/webhook": typeof lib_zepto_webhook;
   migrations: typeof migrations;
   moneyRequests: typeof moneyRequests;
+  payToAgreementCreation: typeof payToAgreementCreation;
   paymentDestinations: typeof paymentDestinations;
   seed: typeof seed;
   users: typeof users;
+  "validators/payToAgreements": typeof validators_payToAgreements;
   "validators/paymentDestinations": typeof validators_paymentDestinations;
   "validators/users": typeof validators_users;
 }> = anyApi as any;
@@ -99,4 +105,5 @@ export const internal: FilterApi<
 
 export const components = componentsGeneric() as unknown as {
   migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
+  agreementCreationWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"agreementCreationWorkpool">;
 };

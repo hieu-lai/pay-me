@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 import type { UserIdentity } from 'convex/server'
+import workpoolTest from '@convex-dev/workpool/test'
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -117,6 +118,7 @@ async function setup() {
 
 async function setupUsers() {
   const t = convexTest(schema, modules)
+  workpoolTest.register(t, 'agreementCreationWorkpool')
   const requesterUserId = await t.mutation(internal.users.addUser, {
     tokenIdentifier: requesterIdentity.tokenIdentifier,
     clerkUserId: requesterIdentity.subject,
@@ -229,6 +231,8 @@ beforeEach(() => {
   process.env.PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION = 'v1'
   process.env.PAYMENT_DESTINATION_FINGERPRINT_KEY = fingerprintKey
   process.env.MONEY_REQUEST_INGRESS_ATTESTATION_SECRET = ingressSecret
+  process.env.ZEPTO_ENVIRONMENT = 'sandbox'
+  process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-test-token'
 })
 
 afterEach(() => {
@@ -236,6 +240,11 @@ afterEach(() => {
 })
 
 describe('Money Request submission and requester read', () => {
+  test(
+    'reactively exposes a created sandbox agreement after bounded provider work completes',
+    createdAgreementTest,
+  )
+
   test('durably accepts one Bank Account Payer before provider work begins', async () => {
     const { t, requester, payerUserId } = await setup()
     const intent = moneyRequestIntent(payerUserId)
@@ -292,6 +301,108 @@ describe('Money Request submission and requester read', () => {
       (await attestation(intent, issuedAtMs)).signature,
     )
   })
+
+  async function createdAgreementTest() {
+    const postedProviderUids: string[] = []
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (request) => {
+        const body = (await new Request(request).json()) as { uid: string }
+        postedProviderUids.push(body.uid)
+        return new Response(
+          JSON.stringify({
+            data: {
+              uid: body.uid,
+              state: 'pending',
+              created_at: '2026-08-11T09:30:00+10:00',
+              mms_agreement_id: '3de455278b21196da0c4599025cb7dfa',
+              links: { self: 'https://provider.example/raw-provider-marker' },
+            },
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        )
+      })
+    const { t, requester, payerUserId } = await setup()
+    const moneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId),
+    )
+    const agreement = await t.run(async (ctx) =>
+      ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', moneyRequestId),
+        )
+        .unique(),
+    )
+    if (!agreement) throw new Error('Expected PayTo Agreement')
+    vi.useFakeTimers()
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    vi.useRealTimers()
+
+    const created = await requester.query(api.moneyRequests.get, {
+      moneyRequestId,
+    })
+    expect(created).toMatchObject({
+      agreements: [
+        {
+          creation: { state: 'created' },
+          lifecycle: {
+            meaning: 'waitingForPayer',
+            confidence: 'provisional',
+          },
+          tracking: { state: 'verificationDue' },
+        },
+      ],
+    })
+    const zeptoRequests = fetch.mock.calls
+      .map(([request]) =>
+        request instanceof Request ? request.url : request.toString(),
+      )
+      .filter((url) => url.includes('api.sandbox.zeptopayments.com'))
+    expect(zeptoRequests.length).toBeGreaterThan(0)
+    expect(postedProviderUids).toHaveLength(zeptoRequests.length)
+    expect(new Set(postedProviderUids)).toEqual(
+      new Set([agreement.providerUid]),
+    )
+    const durable = await t.run(async (ctx) => ({
+      agreement: await ctx.db.get('payToAgreements', agreement._id),
+      evidence: await ctx.db
+        .query('payToAgreementEvidence')
+        .withIndex('by_payToAgreementId_and_observedAt', (q) =>
+          q.eq('payToAgreementId', agreement._id),
+        )
+        .take(3),
+      work: await ctx.db
+        .query('payToAgreementWorkItems')
+        .withIndex('by_payToAgreementId', (q) =>
+          q.eq('payToAgreementId', agreement._id),
+        )
+        .unique(),
+    }))
+    expect(durable.agreement).toMatchObject({
+      providerUid: agreement.providerUid,
+      providerMmsAgreementId: '3de455278b21196da0c4599025cb7dfa',
+      creationState: 'created',
+      lifecycleState: 'pending',
+      lifecycleConfidence: 'provisional',
+      trackingState: 'verification_due',
+    })
+    expect(durable.evidence.map(({ kind }) => kind)).toEqual([
+      'local_accepted',
+      'provider_create_succeeded',
+    ])
+    expect(durable.work?.state).toBe('completed')
+    expect(JSON.stringify(created)).not.toContain(agreement.providerUid)
+    expect(JSON.stringify(created)).not.toContain('providerUid')
+    expect(JSON.stringify(created)).not.toContain(
+      '3de455278b21196da0c4599025cb7dfa',
+    )
+    expect(JSON.stringify(created)).not.toContain('providerMmsAgreementId')
+    expect(JSON.stringify(durable)).not.toContain('raw-provider-marker')
+    expect(JSON.stringify(durable)).not.toContain('123456-0012345')
+    expect(JSON.stringify(durable)).not.toContain('654321-0098765')
+  }
 
   test('atomically queues five independent Payer agreements and exposes every projection', async () => {
     const { t, requester, payerUserId } = await setup()
