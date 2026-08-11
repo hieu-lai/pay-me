@@ -12,26 +12,26 @@ import { api } from '../../../../../../../convex/_generated/api'
 import type { FormValues } from '../schema'
 import { LoadingItems } from './loading-items'
 
-type Recipient = FormValues['recipients'][number]
+type Payer = FormValues['payers'][number]
 
-type SearchRecipientsProps = Pick<
+type SearchPayersProps = Pick<
   ComponentProps<'input'>,
   'aria-invalid' | 'id' | 'name' | 'onBlur'
 > & {
-  value: Array<Recipient>
-  onValueChange: (value: Array<Recipient>) => void
+  value: Array<Payer>
+  onValueChange: (value: Array<Payer>) => void
 }
 
-export function SearchRecipients({
+export function SearchPayers({
   value,
   onValueChange,
   ...inputProps
-}: SearchRecipientsProps) {
+}: SearchPayersProps) {
   const [query, setQuery] = useState('')
   const [debouncedQuery] = useDebounceValue(query, 300)
   const searchTerm = debouncedQuery.trim()
   const {
-    data: recipients = [],
+    data: payers = [],
     isError,
     isFetching,
     isLoading,
@@ -45,25 +45,25 @@ export function SearchRecipients({
 
   const emptyPlaceholder =
     searchTerm.length === 0
-      ? 'Start typing to search for a recipient.'
+      ? 'Start typing to search for a Payer.'
       : isError
-        ? 'Unable to search for recipients.'
-        : 'No recipients found.'
+        ? 'Unable to search for Payers.'
+        : 'No Payers found.'
 
   return (
-    <AsyncInputCombobox<Recipient, true>
+    <AsyncInputCombobox<Payer, true>
       multiple
-      items={recipients}
+      items={payers}
       value={value}
       onValueChange={onValueChange}
       inputValue={query}
       onInputValueChange={setQuery}
       isLoading={isLoading}
       isFetching={isFetching}
-      itemToStringLabel={(recipient) => recipient.name}
-      itemToStringValue={(recipient) => recipient.id}
-      isItemEqualToValue={(recipient, selectedValue) =>
-        recipient.id === selectedValue.id
+      itemToStringLabel={(payer) => payer.name}
+      itemToStringValue={(payer) => payer.id}
+      isItemEqualToValue={(payer, selectedValue) =>
+        payer.id === selectedValue.id
       }
       loader={<LoadingItems />}
       emptyPlaceholder={emptyPlaceholder}
@@ -71,24 +71,24 @@ export function SearchRecipients({
 
       {...inputProps}
     >
-      {recipients.map((recipient, index) => (
+      {payers.map((payer, index) => (
         <ComboboxItem
-          key={recipient.id}
-          value={recipient}
+          key={payer.id}
+          value={payer}
           index={index}
-          disabled={!recipient.hasPaymentDestination}
+          disabled={!payer.hasPaymentDestination}
         >
           <Avatar size="sm">
-            {recipient.imageUrl && (
-              <AvatarImage src={recipient.imageUrl} alt={recipient.name} />
+            {payer.imageUrl && (
+              <AvatarImage src={payer.imageUrl} alt={payer.name} />
             )}
-            <AvatarFallback>{getInitials(recipient.name)}</AvatarFallback>
+            <AvatarFallback>{getInitials(payer.name)}</AvatarFallback>
           </Avatar>
           <div className="flex min-w-0 flex-col">
-            <span className="truncate">{recipient.name}</span>
-            {recipient.username && (
+            <span className="truncate">{payer.name}</span>
+            {payer.username && (
               <span className="text-muted-foreground truncate text-xs">
-                @{recipient.username}
+                @{payer.username}
               </span>
             )}
           </div>

@@ -28,8 +28,8 @@ import { submitMoneyRequest } from '#/server-fns/money-requests'
 import { DollarSignIcon, XIcon } from 'lucide-react'
 
 import type { Id } from '../../../../../../convex/_generated/dataModel'
-import { MAX_RECIPIENTS } from './schema'
-import { SearchRecipients } from './search-recipients'
+import { MAX_PAYERS } from './schema'
+import { SearchPayers } from './search-payers'
 import {
   clearPendingSubmissionKey,
   getPendingSubmissionKey,
@@ -66,7 +66,7 @@ export function Form() {
       const terms = {
         amountCents: Number(values.amount),
         description: values.description,
-        payerId: values.recipients[0].id as Id<'users'>,
+        payerIds: values.payers.map((payer) => payer.id as Id<'users'>),
       }
       const submissionKey = await getPendingSubmissionKey(
         terms,
@@ -147,7 +147,7 @@ export function Form() {
           }}
         />
         <form.Field
-          name="recipients"
+          name="payers"
           mode="array"
           children={(field) => {
             const isInvalid =
@@ -155,16 +155,16 @@ export function Form() {
             return (
               <Field data-invalid={isInvalid}>
                 <FieldLabel htmlFor={field.name}>
-                  {`Recipients (${field.state.value.length}/${MAX_RECIPIENTS})`}
+                  {`Payers (${field.state.value.length}/${MAX_PAYERS})`}
                 </FieldLabel>
-                <SearchRecipients
+                <SearchPayers
                   id={field.name}
                   name={field.name}
                   value={field.state.value}
                   onBlur={field.handleBlur}
-                  onValueChange={(recipients) => {
-                    if (recipients.length <= MAX_RECIPIENTS) {
-                      field.handleChange(recipients)
+                  onValueChange={(payers) => {
+                    if (payers.length <= MAX_PAYERS) {
+                      field.handleChange(payers)
                     }
                   }}
                   aria-invalid={isInvalid}
@@ -172,25 +172,25 @@ export function Form() {
                 {field.state.value.map((_, index) => (
                   <form.Field
                     key={index}
-                    name={`recipients[${index}]`}
+                    name={`payers[${index}]`}
                     children={(subField) => {
-                      const recipient = subField.state.value
+                      const payer = subField.state.value
 
                       return (
-                        <Item key={recipient.id} variant="outline">
+                        <Item key={payer.id} variant="outline">
                           <ItemMedia>
                             <Avatar>
-                              <AvatarImage src={recipient.imageUrl} />
+                              <AvatarImage src={payer.imageUrl} />
                               <AvatarFallback>
-                                {getInitials(recipient.name)}
+                                {getInitials(payer.name)}
                               </AvatarFallback>
                             </Avatar>
                           </ItemMedia>
                           <ItemContent>
-                            <ItemTitle>{recipient.name}</ItemTitle>
-                            {recipient.username && (
+                            <ItemTitle>{payer.name}</ItemTitle>
+                            {payer.username && (
                               <ItemDescription>
-                                @{recipient.username}
+                                @{payer.username}
                               </ItemDescription>
                             )}
                           </ItemContent>

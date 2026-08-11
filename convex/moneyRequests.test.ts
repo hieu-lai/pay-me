@@ -75,7 +75,7 @@ async function attestation(
     submissionKey: string
     amountCents: number
     description: string
-    payerId: string
+    payerIds: Id<'users'>[]
   },
   issuedAtMs: number,
   identity = requesterIdentity,
@@ -85,7 +85,7 @@ async function attestation(
       intent.submissionKey,
       intent.amountCents,
       intent.description,
-      intent.payerId,
+      [...intent.payerIds].sort(),
     ]),
   )
   const payload = JSON.stringify([
@@ -134,14 +134,44 @@ async function setupUsers() {
   return { t, requester, payer, requesterUserId, payerUserId }
 }
 
+async function addPayer(
+  t: Awaited<ReturnType<typeof setupUsers>>['t'],
+  index: number,
+  withDestination = true,
+) {
+  const identity = {
+    tokenIdentifier: `https://clerk.example.test|payer_${index}`,
+    subject: `payer_${index}`,
+    issuer: 'https://clerk.example.test',
+    email: `payer-${index}@example.com`,
+    name: `Paying User ${index}`,
+  } satisfies UserIdentity
+  const payerUserId = await t.mutation(internal.users.addUser, {
+    tokenIdentifier: identity.tokenIdentifier,
+    clerkUserId: identity.subject,
+    email: identity.email,
+    name: identity.name,
+  })
+  const payer = t.withIdentity(identity)
+  if (withDestination) {
+    await payer.action(api.paymentDestinations.create, {
+      destination: {
+        type: 'bban',
+        value: `${100_000 + index}-${String(index).padStart(7, '0')}`,
+      },
+    })
+  }
+  return { identity, payer, payerUserId }
+}
+
 async function durableSubmissionState(
   t: Awaited<ReturnType<typeof setupUsers>>['t'],
 ) {
   return await t.run(async (ctx) => ({
-    requests: await ctx.db.query('moneyRequests').take(3),
-    agreements: await ctx.db.query('payToAgreements').take(3),
-    evidence: await ctx.db.query('payToAgreementEvidence').take(3),
-    work: await ctx.db.query('payToAgreementWorkItems').take(3),
+    requests: await ctx.db.query('moneyRequests').take(6),
+    agreements: await ctx.db.query('payToAgreements').take(6),
+    evidence: await ctx.db.query('payToAgreementEvidence').take(6),
+    work: await ctx.db.query('payToAgreementWorkItems').take(6),
   }))
 }
 
@@ -157,7 +187,7 @@ function moneyRequestIntent(
     submissionKey,
     amountCents: 12_345,
     description: 'Shared dinner',
-    payerId,
+    payerIds: [payerId],
     ...overrides,
   }
 }
@@ -261,6 +291,99 @@ describe('Money Request submission and requester read', () => {
     expect(JSON.stringify(durable)).not.toContain(
       (await attestation(intent, issuedAtMs)).signature,
     )
+  })
+
+  test('atomically queues five independent Payer agreements and exposes every projection', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const addedPayers = await Promise.all(
+      [2, 3, 4, 5].map((index) => addPayer(t, index)),
+    )
+    const payerIds = [
+      payerUserId,
+      ...addedPayers.map((payer) => payer.payerUserId),
+    ]
+
+    const moneyRequestId = await submit(requester, {
+      ...moneyRequestIntent(payerUserId),
+      payerIds,
+    })
+
+    const accepted = await requester.query(api.moneyRequests.get, {
+      moneyRequestId,
+    })
+    expect(accepted.agreements).toHaveLength(5)
+    expect(accepted.agreements.map(({ payer }) => payer.name)).toEqual(
+      expect.arrayContaining([
+        payerIdentity.name,
+        ...addedPayers.map(({ identity }) => identity.name),
+      ]),
+    )
+    expect(accepted.agreements.map(({ creation }) => creation.state)).toEqual(
+      Array(5).fill('queued'),
+    )
+
+    const durable = await durableSubmissionState(t)
+    expect(durable.requests).toHaveLength(1)
+    expect(durable.agreements).toHaveLength(5)
+    expect(durable.evidence).toHaveLength(5)
+    expect(durable.work).toHaveLength(5)
+    expect(
+      new Set(durable.agreements.map(({ providerUid }) => providerUid)).size,
+    ).toBe(5)
+  })
+
+  test('rejects empty, duplicate, oversized, and self-inclusive Payer groups without durable records', async () => {
+    const { t, requester, requesterUserId, payerUserId } = await setup()
+    const addedPayers = await Promise.all(
+      [2, 3, 4, 5, 6].map((index) => addPayer(t, index, false)),
+    )
+    const allPayerIds = [
+      payerUserId,
+      ...addedPayers.map(({ payerUserId: id }) => id),
+    ]
+    const candidates = [
+      [],
+      [payerUserId, payerUserId],
+      allPayerIds,
+      [payerUserId, requesterUserId],
+    ]
+
+    for (const payerIds of candidates) {
+      await expect(
+        submit(requester, {
+          ...moneyRequestIntent(payerUserId),
+          payerIds,
+        }),
+      ).rejects.toThrow()
+    }
+
+    const durable = await durableSubmissionState(t)
+    expect(durable).toEqual({
+      requests: [],
+      agreements: [],
+      evidence: [],
+      work: [],
+    })
+  })
+
+  test('fails the complete group when any selected Payer destination is unavailable', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const unavailablePayer = await addPayer(t, 2, false)
+
+    await expect(
+      submit(requester, {
+        ...moneyRequestIntent(payerUserId),
+        payerIds: [payerUserId, unavailablePayer.payerUserId],
+      }),
+    ).rejects.toThrow('selected Payer is unavailable')
+
+    const durable = await durableSubmissionState(t)
+    expect(durable).toEqual({
+      requests: [],
+      agreements: [],
+      evidence: [],
+      work: [],
+    })
   })
 
   test('rejects unauthenticated submission without creating durable records', async () => {
@@ -415,6 +538,28 @@ describe('Money Request submission and requester read', () => {
     })
   })
 
+  test('treats a reordered Payer set as the same idempotent intent', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const secondPayer = await addPayer(t, 2)
+    const candidate = {
+      ...moneyRequestIntent(payerUserId),
+      payerIds: [payerUserId, secondPayer.payerUserId],
+    }
+
+    const firstId = await submit(requester, candidate)
+    const replayedId = await submit(requester, {
+      ...candidate,
+      payerIds: [...candidate.payerIds].reverse(),
+    })
+
+    expect(replayedId).toBe(firstId)
+    const durable = await durableSubmissionState(t)
+    expect(durable.requests).toHaveLength(1)
+    expect(durable.agreements).toHaveLength(2)
+    expect(durable.evidence).toHaveLength(2)
+    expect(durable.work).toHaveLength(2)
+  })
+
   test('scopes the same submission key independently to each Requester', async () => {
     const { t, requester, requesterUserId, payerUserId } = await setup()
     const otherRequesterUserId = await t.mutation(internal.users.addUser, {
@@ -546,10 +691,14 @@ describe('Money Request submission and requester read', () => {
         requester.mutation(internal.moneyRequests.accept, {
           intent: candidate,
           submissionFingerprint: proof.intentDigest,
-          providerUid: '018f22e2-7c00-7000-8000-000000000099',
+          agreementAllocations: [
+            {
+              ...preflight.payerDestinations[0],
+              providerUid: '018f22e2-7c00-7000-8000-000000000099',
+            },
+          ],
           submittedAt: Date.now(),
           expectedRequesterDestinationId: preflight.requesterDestinationId,
-          expectedPayerDestinationId: preflight.payerDestinationId,
         }),
       ).rejects.toThrow(
         racedParty === 'Requester'
@@ -563,6 +712,49 @@ describe('Money Request submission and requester read', () => {
     },
   )
 
+  test('rechecks every selected Payer destination and rolls back a later Payer race', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const laterPayer = await addPayer(t, 2)
+    const candidate = {
+      ...moneyRequestIntent(payerUserId),
+      payerIds: [payerUserId, laterPayer.payerUserId],
+    }
+    const proof = await attestation(candidate, Date.now())
+    const preflight = await requester.query(internal.moneyRequests.preflight, {
+      intent: candidate,
+      submissionFingerprint: proof.intentDigest,
+    })
+    if (preflight.kind !== 'new') throw new Error('Expected new intent')
+
+    await laterPayer.payer.action(api.paymentDestinations.create, {
+      destination: { type: 'bban', value: '222222-0000002' },
+      setAsDefault: true,
+    })
+
+    await expect(
+      requester.mutation(internal.moneyRequests.accept, {
+        intent: candidate,
+        submissionFingerprint: proof.intentDigest,
+        agreementAllocations: preflight.payerDestinations.map(
+          (payerDestination, index) => ({
+            ...payerDestination,
+            providerUid: `018f22e2-7c00-7000-8000-00000000009${index}`,
+          }),
+        ),
+        submittedAt: Date.now(),
+        expectedRequesterDestinationId: preflight.requesterDestinationId,
+      }),
+    ).rejects.toThrow('selected Payer is unavailable')
+
+    const durable = await durableSubmissionState(t)
+    expect(durable).toEqual({
+      requests: [],
+      agreements: [],
+      evidence: [],
+      work: [],
+    })
+  })
+
   test('rolls back the root when a later provider UID allocation fails', async () => {
     const { t, requester, payerUserId } = await setup()
     const firstId = await submit(requester, moneyRequestIntent(payerUserId))
@@ -573,9 +765,13 @@ describe('Money Request submission and requester read', () => {
         .unique(),
     )
     if (!existingAgreement) throw new Error('Expected PayTo Agreement')
-    const candidate = moneyRequestIntent(payerUserId, {
-      submissionKey: '018f22e2-7c00-7000-8000-000000000004',
-    })
+    const secondPayer = await addPayer(t, 2)
+    const candidate = {
+      ...moneyRequestIntent(payerUserId, {
+        submissionKey: '018f22e2-7c00-7000-8000-000000000004',
+      }),
+      payerIds: [payerUserId, secondPayer.payerUserId],
+    }
     const proof = await attestation(candidate, Date.now())
     const preflight = await requester.query(internal.moneyRequests.preflight, {
       intent: candidate,
@@ -587,10 +783,17 @@ describe('Money Request submission and requester read', () => {
       requester.mutation(internal.moneyRequests.accept, {
         intent: candidate,
         submissionFingerprint: proof.intentDigest,
-        providerUid: existingAgreement.providerUid,
+        agreementAllocations: preflight.payerDestinations.map(
+          (payerDestination, index) => ({
+            ...payerDestination,
+            providerUid:
+              index === 1
+                ? existingAgreement.providerUid
+                : '018f22e2-7c00-7000-8000-000000000098',
+          }),
+        ),
         submittedAt: Date.now(),
         expectedRequesterDestinationId: preflight.requesterDestinationId,
-        expectedPayerDestinationId: preflight.payerDestinationId,
       }),
     ).rejects.toThrow('temporarily unavailable')
 

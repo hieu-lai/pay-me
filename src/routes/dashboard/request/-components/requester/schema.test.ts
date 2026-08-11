@@ -3,11 +3,11 @@ import { describe, expect, test } from 'vitest'
 import { formSchema } from './schema'
 
 describe('request schema', () => {
-  test('requires at least one recipient', () => {
+  test('requires at least one Payer', () => {
     const result = formSchema.safeParse({
       amount: '10',
       description: 'Lunch',
-      recipients: [],
+      payers: [],
     })
 
     expect(result.success).toBe(false)
@@ -16,8 +16,8 @@ describe('request schema', () => {
     expect(result.error.issues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: ['recipients'],
-          message: 'Choose at least one recipient.',
+          path: ['payers'],
+          message: 'Choose at least one Payer.',
         }),
       ]),
     )

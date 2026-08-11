@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const MAX_RECIPIENTS = 5
+export const MAX_PAYERS = 5
 
 const amountSchema = z
   .string({ error: 'Enter an amount.' })
@@ -25,7 +25,7 @@ const descriptionSchema = z
 export const formSchema = z.object({
   amount: amountSchema,
   description: descriptionSchema,
-  recipients: z
+  payers: z
     .array(
       z.object({
         id: z.string(),
@@ -35,8 +35,8 @@ export const formSchema = z.object({
         imageUrl: z.string().optional(),
       }),
     )
-    .min(1, 'Choose at least one recipient.')
-    .max(MAX_RECIPIENTS, `You can add up to ${MAX_RECIPIENTS} recipients.`),
+    .min(1, 'Choose at least one Payer.')
+    .max(MAX_PAYERS, `You can add up to ${MAX_PAYERS} Payers.`),
 })
 
 export type FormValues = z.input<typeof formSchema>
@@ -46,5 +46,5 @@ export type FormDefaultValues = FormValues
 export const defaultValues: FormDefaultValues = {
   amount: '',
   description: '',
-  recipients: [],
+  payers: [],
 }

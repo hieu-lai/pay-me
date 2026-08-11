@@ -11,7 +11,7 @@ const intent = moneyRequestIntentSchema.parse({
   submissionKey: '018f22e2-7c00-7000-8000-000000000001',
   amountCents: 12_345,
   description: 'Shared dinner',
-  payerId: 'payer-id',
+  payerIds: ['payer-id'],
 })
 
 function dependencies(
@@ -53,9 +53,7 @@ describe('submitMoneyRequest trusted server ingress', () => {
       authenticate: async () => ({ clerkUserId: null, token: null }),
     })
 
-    await expect(
-      handleMoneyRequestSubmission(intent, deps),
-    ).rejects.toEqual(
+    await expect(handleMoneyRequestSubmission(intent, deps)).rejects.toEqual(
       new MoneyRequestSubmissionError('Unauthorized', 'UNAUTHORIZED'),
     )
     expect(deps.submit).not.toHaveBeenCalled()
@@ -98,9 +96,7 @@ describe('submitMoneyRequest trusted server ingress', () => {
       },
     })
 
-    await expect(
-      handleMoneyRequestSubmission(intent, deps),
-    ).rejects.toEqual(
+    await expect(handleMoneyRequestSubmission(intent, deps)).rejects.toEqual(
       new MoneyRequestSubmissionError('Forbidden', 'FORBIDDEN'),
     )
   })
@@ -112,6 +108,19 @@ describe('submitMoneyRequest trusted server ingress', () => {
     { ...intent, amountCents: 1_000_000_001 },
     { ...intent, description: ' leading space' },
     { ...intent, description: 'line\nbreak' },
+    { ...intent, payerIds: [] },
+    { ...intent, payerIds: ['payer-id', 'payer-id'] },
+    {
+      ...intent,
+      payerIds: [
+        'payer-1',
+        'payer-2',
+        'payer-3',
+        'payer-4',
+        'payer-5',
+        'payer-6',
+      ],
+    },
   ])('rejects a non-canonical intent %#', (candidate) => {
     expect(moneyRequestIntentSchema.safeParse(candidate).success).toBe(false)
   })

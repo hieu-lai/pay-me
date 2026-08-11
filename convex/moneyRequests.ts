@@ -12,6 +12,7 @@ import {
   query,
 } from './_generated/server'
 import {
+  MAX_MONEY_REQUEST_PAYER_COUNT,
   fingerprintMoneyRequestTerms,
   isCanonicalIpv4,
   isCanonicalMoneyRequestIntent,
@@ -23,7 +24,14 @@ const intentValidator = v.object({
   submissionKey: v.string(),
   amountCents: v.number(),
   description: v.string(),
+  payerIds: v.array(v.id('users')),
+})
+const payerDestinationValidator = v.object({
   payerId: v.id('users'),
+  destinationId: v.id('paymentDestinations'),
+})
+const agreementAllocationValidator = payerDestinationValidator.extend({
+  providerUid: v.string(),
 })
 const attestationValidator = v.object({
   issuedAtMs: v.number(),
@@ -52,7 +60,7 @@ function validateIntent(intent: {
   submissionKey: string
   amountCents: number
   description: string
-  payerId: Id<'users'>
+  payerIds: Id<'users'>[]
 }) {
   if (!isCanonicalMoneyRequestIntent(intent)) {
     safeError(
@@ -114,14 +122,10 @@ async function existingMoneyRequest(
 async function resolveDestinations(
   ctx: Pick<QueryCtx, 'db'>,
   requester: Doc<'users'>,
-  payerId: Id<'users'>,
+  payerIds: Id<'users'>[],
 ) {
-  if (payerId === requester._id) {
+  if (payerIds.includes(requester._id)) {
     safeError('INVALID_INTENT', 'A Requester cannot also be the Payer.')
-  }
-  const payer = await ctx.db.get('users', payerId)
-  if (!payer) {
-    safeError('PAYER_UNAVAILABLE', 'The selected Payer is unavailable.')
   }
   const requesterDestination = await currentBankAccount(ctx, requester)
   if (!requesterDestination) {
@@ -130,11 +134,19 @@ async function resolveDestinations(
       'Choose an available Bank Account as your Default Destination.',
     )
   }
-  const payerDestination = await currentBankAccount(ctx, payer)
-  if (!payerDestination) {
-    safeError('PAYER_UNAVAILABLE', 'The selected Payer is unavailable.')
+  const payers = []
+  for (const payerId of [...payerIds].sort()) {
+    const payer = await ctx.db.get('users', payerId)
+    if (!payer) {
+      safeError('PAYER_UNAVAILABLE', 'A selected Payer is unavailable.')
+    }
+    const payerDestination = await currentBankAccount(ctx, payer)
+    if (!payerDestination) {
+      safeError('PAYER_UNAVAILABLE', 'A selected Payer is unavailable.')
+    }
+    payers.push({ payer, payerDestination })
   }
-  return { payer, requesterDestination, payerDestination }
+  return { requesterDestination, payers }
 }
 
 export const submit = action({
@@ -174,7 +186,10 @@ export const submit = action({
       | {
           kind: 'new'
           requesterDestinationId: Id<'paymentDestinations'>
-          payerDestinationId: Id<'paymentDestinations'>
+          payerDestinations: Array<{
+            payerId: Id<'users'>
+            destinationId: Id<'paymentDestinations'>
+          }>
         } = await ctx.runQuery(internal.moneyRequests.preflight, {
       intent: args.intent,
       submissionFingerprint,
@@ -186,10 +201,15 @@ export const submit = action({
       {
         intent: args.intent,
         submissionFingerprint,
-        providerUid: uuid({ msecs: nowMs }),
+        agreementAllocations: preflight.payerDestinations.map(
+          ({ payerId, destinationId }) => ({
+            payerId,
+            destinationId,
+            providerUid: uuid({ msecs: nowMs }),
+          }),
+        ),
         submittedAt: nowMs,
         expectedRequesterDestinationId: preflight.requesterDestinationId,
-        expectedPayerDestinationId: preflight.payerDestinationId,
       },
     )
     return moneyRequestId
@@ -209,7 +229,7 @@ export const preflight = internalQuery({
     v.object({
       kind: v.literal('new'),
       requesterDestinationId: v.id('paymentDestinations'),
-      payerDestinationId: v.id('paymentDestinations'),
+      payerDestinations: v.array(payerDestinationValidator),
     }),
   ),
   handler: async (ctx, args) => {
@@ -223,12 +243,18 @@ export const preflight = internalQuery({
     if (existing) {
       return { kind: 'replay' as const, moneyRequestId: existing._id }
     }
-    const { requesterDestination, payerDestination } =
-      await resolveDestinations(ctx, requester, args.intent.payerId)
+    const { requesterDestination, payers } = await resolveDestinations(
+      ctx,
+      requester,
+      args.intent.payerIds,
+    )
     return {
       kind: 'new' as const,
       requesterDestinationId: requesterDestination.destination._id,
-      payerDestinationId: payerDestination.destination._id,
+      payerDestinations: payers.map(({ payer, payerDestination }) => ({
+        payerId: payer._id,
+        destinationId: payerDestination.destination._id,
+      })),
     }
   },
 })
@@ -237,10 +263,9 @@ export const accept = internalMutation({
   args: {
     intent: intentValidator,
     submissionFingerprint: v.string(),
-    providerUid: v.string(),
+    agreementAllocations: v.array(agreementAllocationValidator),
     submittedAt: v.number(),
     expectedRequesterDestinationId: v.id('paymentDestinations'),
-    expectedPayerDestinationId: v.id('paymentDestinations'),
   },
   returns: v.id('moneyRequests'),
   handler: async (ctx, args) => {
@@ -255,8 +280,11 @@ export const accept = internalMutation({
       return existing._id
     }
 
-    const { payer, requesterDestination, payerDestination } =
-      await resolveDestinations(ctx, requester, args.intent.payerId)
+    const { requesterDestination, payers } = await resolveDestinations(
+      ctx,
+      requester,
+      args.intent.payerIds,
+    )
     if (
       requesterDestination.destination._id !==
       args.expectedRequesterDestinationId
@@ -266,8 +294,52 @@ export const accept = internalMutation({
         'Choose an available Bank Account as your Default Destination.',
       )
     }
-    if (payerDestination.destination._id !== args.expectedPayerDestinationId) {
-      safeError('PAYER_UNAVAILABLE', 'The selected Payer is unavailable.')
+    const allocationsByPayerId = new Map(
+      args.agreementAllocations.map((allocation) => [
+        allocation.payerId,
+        allocation,
+      ]),
+    )
+    if (
+      allocationsByPayerId.size !== payers.length ||
+      args.agreementAllocations.length !== payers.length
+    ) {
+      safeError(
+        'SERVICE_UNAVAILABLE',
+        'Money Request submission is temporarily unavailable.',
+      )
+    }
+    for (const { payer, payerDestination } of payers) {
+      const allocation = allocationsByPayerId.get(payer._id)
+      if (
+        !allocation ||
+        allocation.destinationId !== payerDestination.destination._id
+      ) {
+        safeError('PAYER_UNAVAILABLE', 'A selected Payer is unavailable.')
+      }
+    }
+    if (
+      new Set(args.agreementAllocations.map(({ providerUid }) => providerUid))
+        .size !== args.agreementAllocations.length
+    ) {
+      safeError(
+        'SERVICE_UNAVAILABLE',
+        'Money Request submission is temporarily unavailable.',
+      )
+    }
+    for (const { providerUid } of args.agreementAllocations) {
+      const providerUidCollision = await ctx.db
+        .query('payToAgreements')
+        .withIndex('by_environment_and_providerUid', (q) =>
+          q.eq('environment', 'sandbox').eq('providerUid', providerUid),
+        )
+        .unique()
+      if (providerUidCollision) {
+        safeError(
+          'SERVICE_UNAVAILABLE',
+          'Money Request submission is temporarily unavailable.',
+        )
+      }
     }
     const moneyRequestId = await ctx.db.insert('moneyRequests', {
       requesterUserId: requester._id,
@@ -282,47 +354,38 @@ export const accept = internalMutation({
       creditorSnapshot: requesterDestination.snapshot,
       submittedAt: args.submittedAt,
     })
-    const providerUidCollision = await ctx.db
-      .query('payToAgreements')
-      .withIndex('by_environment_and_providerUid', (q) =>
-        q.eq('environment', 'sandbox').eq('providerUid', args.providerUid),
-      )
-      .unique()
-    if (providerUidCollision) {
-      safeError(
-        'SERVICE_UNAVAILABLE',
-        'Money Request submission is temporarily unavailable.',
-      )
+    for (const { payer, payerDestination } of payers) {
+      const allocation = allocationsByPayerId.get(payer._id)!
+      const payToAgreementId = await ctx.db.insert('payToAgreements', {
+        moneyRequestId,
+        payerUserId: payer._id,
+        payerNameSnapshot: payer.name,
+        sourceDebtorPaymentDestinationId: payerDestination.destination._id,
+        debtorSnapshot: payerDestination.snapshot,
+        provider: 'zepto',
+        environment: 'sandbox',
+        apiVersion: '20260101',
+        providerUid: allocation.providerUid,
+        creationState: 'queued',
+        creationUpdatedAt: args.submittedAt,
+        lifecycleState: 'pending',
+        lifecycleConfidence: 'provisional',
+        lifecycleObservedAt: args.submittedAt,
+        trackingState: 'verification_due',
+        trackingUpdatedAt: args.submittedAt,
+      })
+      await ctx.db.insert('payToAgreementEvidence', {
+        payToAgreementId,
+        kind: 'local_accepted',
+        observedAt: args.submittedAt,
+      })
+      await ctx.db.insert('payToAgreementWorkItems', {
+        payToAgreementId,
+        kind: 'create',
+        state: 'queued',
+        availableAt: args.submittedAt,
+      })
     }
-    const payToAgreementId = await ctx.db.insert('payToAgreements', {
-      moneyRequestId,
-      payerUserId: payer._id,
-      payerNameSnapshot: payer.name,
-      sourceDebtorPaymentDestinationId: payerDestination.destination._id,
-      debtorSnapshot: payerDestination.snapshot,
-      provider: 'zepto',
-      environment: 'sandbox',
-      apiVersion: '20260101',
-      providerUid: args.providerUid,
-      creationState: 'queued',
-      creationUpdatedAt: args.submittedAt,
-      lifecycleState: 'pending',
-      lifecycleConfidence: 'provisional',
-      lifecycleObservedAt: args.submittedAt,
-      trackingState: 'verification_due',
-      trackingUpdatedAt: args.submittedAt,
-    })
-    await ctx.db.insert('payToAgreementEvidence', {
-      payToAgreementId,
-      kind: 'local_accepted',
-      observedAt: args.submittedAt,
-    })
-    await ctx.db.insert('payToAgreementWorkItems', {
-      payToAgreementId,
-      kind: 'create',
-      state: 'queued',
-      availableAt: args.submittedAt,
-    })
     return moneyRequestId
   },
 })
@@ -366,8 +429,11 @@ export const get = query({
       .withIndex('by_moneyRequestId', (q) =>
         q.eq('moneyRequestId', moneyRequest._id),
       )
-      .take(2)
-    if (agreements.length !== 1) {
+      .take(MAX_MONEY_REQUEST_PAYER_COUNT + 1)
+    if (
+      agreements.length < 1 ||
+      agreements.length > MAX_MONEY_REQUEST_PAYER_COUNT
+    ) {
       safeError(
         'SERVICE_UNAVAILABLE',
         'Money Request details are temporarily unavailable.',

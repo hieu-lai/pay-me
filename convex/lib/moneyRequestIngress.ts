@@ -6,7 +6,7 @@ export type MoneyRequestIntent = {
   submissionKey: string
   amountCents: number
   description: string
-  payerId: Id<'users'>
+  payerIds: Id<'users'>[]
 }
 
 export type MoneyRequestTerms = Omit<MoneyRequestIntent, 'submissionKey'>
@@ -22,6 +22,8 @@ export type IngressAttestation = {
 export const MAX_ATTESTATION_AGE_MS = 60_000
 export const MIN_MONEY_REQUEST_AMOUNT_CENTS = 1
 export const MAX_MONEY_REQUEST_AMOUNT_CENTS = 1_000_000_000
+export const MIN_MONEY_REQUEST_PAYER_COUNT = 1
+export const MAX_MONEY_REQUEST_PAYER_COUNT = 5
 export const CANONICAL_UUID_V7_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 export const MONEY_REQUEST_DESCRIPTION_PATTERN = /^[\x20-\x7e]{1,140}$/
@@ -52,11 +54,25 @@ function base64UrlToBytes(value: string) {
 }
 
 function requestTermsTuple(intent: MoneyRequestTerms) {
-  return [intent.amountCents, intent.description, intent.payerId] as const
+  return [
+    intent.amountCents,
+    intent.description,
+    [...intent.payerIds].sort(),
+  ] as const
 }
 
 export function canonicalIntent(intent: MoneyRequestIntent) {
   return JSON.stringify([intent.submissionKey, ...requestTermsTuple(intent)])
+}
+
+export function isCanonicalMoneyRequestPayerSet(
+  payerIds: readonly Id<'users'>[],
+) {
+  return (
+    payerIds.length >= MIN_MONEY_REQUEST_PAYER_COUNT &&
+    payerIds.length <= MAX_MONEY_REQUEST_PAYER_COUNT &&
+    new Set(payerIds).size === payerIds.length
+  )
 }
 
 function canonicalRequestTerms(intent: MoneyRequestTerms) {
@@ -70,7 +86,8 @@ export function isCanonicalMoneyRequestIntent(intent: MoneyRequestIntent) {
     intent.amountCents >= MIN_MONEY_REQUEST_AMOUNT_CENTS &&
     intent.amountCents <= MAX_MONEY_REQUEST_AMOUNT_CENTS &&
     MONEY_REQUEST_DESCRIPTION_PATTERN.test(intent.description) &&
-    intent.description === intent.description.normalize('NFC').trim()
+    intent.description === intent.description.normalize('NFC').trim() &&
+    isCanonicalMoneyRequestPayerSet(intent.payerIds)
   )
 }
 

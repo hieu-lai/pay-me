@@ -19,7 +19,7 @@ function memoryStorage(): SubmissionKeyStorage {
 const terms = {
   amountCents: 12_345,
   description: 'Shared dinner',
-  payerId: 'payer-id' as Id<'users'>,
+  payerIds: ['payer-id' as Id<'users'>],
 }
 
 describe('Money Request pending submission key', () => {
@@ -56,6 +56,30 @@ describe('Money Request pending submission key', () => {
     )
 
     expect(changed).not.toBe(first)
+  })
+
+  test('reuses the key when only Payer selection order changes', async () => {
+    const storage = memoryStorage()
+    const firstPayerId = 'payer-a' as Id<'users'>
+    const secondPayerId = 'payer-b' as Id<'users'>
+    const createKey = vi
+      .fn()
+      .mockReturnValueOnce('018f22e2-7c00-7000-8000-000000000001')
+      .mockReturnValueOnce('018f22e2-7c00-7000-8000-000000000002')
+
+    const first = await getPendingSubmissionKey(
+      { ...terms, payerIds: [firstPayerId, secondPayerId] },
+      storage,
+      createKey,
+    )
+    const reordered = await getPendingSubmissionKey(
+      { ...terms, payerIds: [secondPayerId, firstPayerId] },
+      storage,
+      createKey,
+    )
+
+    expect(reordered).toBe(first)
+    expect(createKey).toHaveBeenCalledOnce()
   })
 
   test('does not let an older success clear a newer pending intent', async () => {

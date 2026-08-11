@@ -10,10 +10,13 @@ import type { Id } from '../../convex/_generated/dataModel'
 import {
   CANONICAL_UUID_V7_PATTERN,
   MAX_MONEY_REQUEST_AMOUNT_CENTS,
+  MAX_MONEY_REQUEST_PAYER_COUNT,
   MIN_MONEY_REQUEST_AMOUNT_CENTS,
+  MIN_MONEY_REQUEST_PAYER_COUNT,
   MONEY_REQUEST_DESCRIPTION_PATTERN,
   createIngressAttestation,
   isCanonicalIpv4,
+  isCanonicalMoneyRequestPayerSet,
 } from '../../convex/lib/moneyRequestIngress'
 
 export const moneyRequestIntentSchema = z
@@ -31,10 +34,16 @@ export const moneyRequestIntentSchema = z
         (value) => value === value.normalize('NFC').trim(),
         'Description must already be normalized.',
       ),
-    payerId: z
-      .string()
-      .min(1)
-      .transform((value) => value as Id<'users'>),
+    payerIds: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .transform((value) => value as Id<'users'>),
+      )
+      .min(MIN_MONEY_REQUEST_PAYER_COUNT)
+      .max(MAX_MONEY_REQUEST_PAYER_COUNT)
+      .refine(isCanonicalMoneyRequestPayerSet, 'Payers must be distinct.'),
   })
   .strict()
 
