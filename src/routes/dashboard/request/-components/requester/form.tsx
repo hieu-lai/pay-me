@@ -25,17 +25,18 @@ import {
 import { toast } from '#/components/ui/toast'
 import getInitials from '#/lib/get-initials'
 import { submitMoneyRequest } from '#/server-fns/money-requests'
+import type { Id } from '../../../../../../convex/_generated/dataModel'
 import { DollarSignIcon, XIcon } from 'lucide-react'
-import { useRef } from 'react'
-import { v7 as uuid } from 'uuid'
 
 import { MAX_RECIPIENTS } from './schema'
 import { SearchRecipients } from './search-recipients'
+import {
+  clearPendingSubmissionKey,
+  getPendingSubmissionKey,
+} from './submission-key'
 import { useRequestForm } from './use-request-form'
 
 export function Form() {
-  const submissionKeyRef = useRef<string | null>(null)
-
   const { mutate } = useMutation({
     mutationKey: ['moneyRequest'],
     mutationFn: submitMoneyRequest,
@@ -47,8 +48,11 @@ export function Form() {
         description: e.message,
       })
     },
-    onSuccess: () => {
-      submissionKeyRef.current = null
+    onSuccess: (_result, variables) => {
+      clearPendingSubmissionKey(
+        window.sessionStorage,
+        variables.data.submissionKey,
+      )
       toast.add({
         type: 'success',
         title: 'Money request sent',
@@ -58,14 +62,20 @@ export function Form() {
   })
 
   const form = useRequestForm({
-    onSubmit: (values) => {
-      submissionKeyRef.current ??= uuid({ msecs: Date.now() })
+    onSubmit: async (values) => {
+      const terms = {
+        amountCents: Number(values.amount),
+        description: values.description,
+        payerId: values.recipients[0].id as Id<'users'>,
+      }
+      const submissionKey = await getPendingSubmissionKey(
+        terms,
+        window.sessionStorage,
+      )
       mutate({
         data: {
-          amountCents: Number(values.amount),
-          description: values.description,
-          payerId: values.recipients[0].id,
-          submissionKey: submissionKeyRef.current,
+          ...terms,
+          submissionKey,
         },
       })
     },

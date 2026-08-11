@@ -12,6 +12,7 @@ import {
   query,
 } from './_generated/server'
 import {
+  fingerprintMoneyRequestTerms,
   isCanonicalIpv4,
   isCanonicalMoneyRequestIntent,
   verifyIngressAttestation,
@@ -164,6 +165,10 @@ export const submit = action({
       )
     }
 
+    const submissionFingerprint = await fingerprintMoneyRequestTerms(
+      args.intent,
+    )
+
     const preflight:
       | { kind: 'replay'; moneyRequestId: Id<'moneyRequests'> }
       | {
@@ -172,7 +177,7 @@ export const submit = action({
           payerDestinationId: Id<'paymentDestinations'>
         } = await ctx.runQuery(internal.moneyRequests.preflight, {
       intent: args.intent,
-      submissionFingerprint: args.attestation.intentDigest,
+      submissionFingerprint,
     })
     if (preflight.kind === 'replay') return preflight.moneyRequestId
 
@@ -180,7 +185,7 @@ export const submit = action({
       internal.moneyRequests.accept,
       {
         intent: args.intent,
-        submissionFingerprint: args.attestation.intentDigest,
+        submissionFingerprint,
         providerUid: uuid({ msecs: nowMs }),
         submittedAt: nowMs,
         expectedRequesterDestinationId: preflight.requesterDestinationId,

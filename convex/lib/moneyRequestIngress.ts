@@ -9,6 +9,8 @@ export type MoneyRequestIntent = {
   payerId: Id<'users'>
 }
 
+export type MoneyRequestTerms = Omit<MoneyRequestIntent, 'submissionKey'>
+
 export type IngressAttestation = {
   issuedAtMs: number
   clerkUserId: string
@@ -49,13 +51,16 @@ function base64UrlToBytes(value: string) {
   }
 }
 
+function requestTermsTuple(intent: MoneyRequestTerms) {
+  return [intent.amountCents, intent.description, intent.payerId] as const
+}
+
 export function canonicalIntent(intent: MoneyRequestIntent) {
-  return JSON.stringify([
-    intent.submissionKey,
-    intent.amountCents,
-    intent.description,
-    intent.payerId,
-  ])
+  return JSON.stringify([intent.submissionKey, ...requestTermsTuple(intent)])
+}
+
+function canonicalRequestTerms(intent: MoneyRequestTerms) {
+  return JSON.stringify([1, ...requestTermsTuple(intent)])
 }
 
 export function isCanonicalMoneyRequestIntent(intent: MoneyRequestIntent) {
@@ -69,12 +74,20 @@ export function isCanonicalMoneyRequestIntent(intent: MoneyRequestIntent) {
   )
 }
 
-export async function digestMoneyRequestIntent(intent: MoneyRequestIntent) {
+async function sha256(value: string) {
   const digest = await crypto.subtle.digest(
     'SHA-256',
-    textEncoder.encode(canonicalIntent(intent)),
+    textEncoder.encode(value),
   )
   return bytesToBase64Url(new Uint8Array(digest))
+}
+
+export async function digestMoneyRequestIntent(intent: MoneyRequestIntent) {
+  return await sha256(canonicalIntent(intent))
+}
+
+export async function fingerprintMoneyRequestTerms(intent: MoneyRequestTerms) {
+  return await sha256(canonicalRequestTerms(intent))
 }
 
 function attestationPayload(

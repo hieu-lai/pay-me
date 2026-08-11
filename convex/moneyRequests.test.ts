@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+import { handleMoneyRequestSubmission } from '../src/server-fns/money-requests'
 
 const modules = import.meta.glob('./**/*.ts')
 const encryptionKey = btoa('0123456789abcdef0123456789abcdef')
@@ -29,6 +30,14 @@ const payerIdentity = {
   issuer: 'https://clerk.example.test',
   email: 'payer@example.com',
   name: 'Paying User',
+} satisfies UserIdentity
+
+const otherRequesterIdentity = {
+  tokenIdentifier: 'https://clerk.example.test|requester_789',
+  subject: 'requester_789',
+  issuer: 'https://clerk.example.test',
+  email: 'other-requester@example.com',
+  name: 'Other Requesting User',
 } satisfies UserIdentity
 
 function bytesToBase64Url(bytes: Uint8Array) {
@@ -69,6 +78,7 @@ async function attestation(
     payerId: string
   },
   issuedAtMs: number,
+  identity = requesterIdentity,
 ) {
   const intentDigest = await sha256(
     JSON.stringify([
@@ -81,13 +91,13 @@ async function attestation(
   const payload = JSON.stringify([
     1,
     issuedAtMs,
-    requesterIdentity.subject,
+    identity.subject,
     trustedIp,
     intentDigest,
   ])
   return {
     issuedAtMs,
-    clerkUserId: requesterIdentity.subject,
+    clerkUserId: identity.subject,
     trustedIp,
     intentDigest,
     signature: await sign(payload),
@@ -124,6 +134,17 @@ async function setupUsers() {
   return { t, requester, payer, requesterUserId, payerUserId }
 }
 
+async function durableSubmissionState(
+  t: Awaited<ReturnType<typeof setupUsers>>['t'],
+) {
+  return await t.run(async (ctx) => ({
+    requests: await ctx.db.query('moneyRequests').take(3),
+    agreements: await ctx.db.query('payToAgreements').take(3),
+    evidence: await ctx.db.query('payToAgreementEvidence').take(3),
+    work: await ctx.db.query('payToAgreementWorkItems').take(3),
+  }))
+}
+
 function moneyRequestIntent(
   payerId: Id<'users'>,
   overrides: Partial<{
@@ -145,11 +166,30 @@ async function submit(
   requester: Awaited<ReturnType<typeof setupUsers>>['requester'],
   intent: ReturnType<typeof moneyRequestIntent>,
   issuedAtMs = Date.now(),
+  options: {
+    identity?: UserIdentity
+    loseResponse?: boolean
+  } = {},
 ) {
-  return await requester.action(api.moneyRequests.submit, {
-    intent,
-    attestation: await attestation(intent, issuedAtMs),
+  const identity = options.identity ?? requesterIdentity
+  const result = await handleMoneyRequestSubmission(intent, {
+    authenticate: async () => ({
+      clerkUserId: identity.subject,
+      token: 'test-convex-token',
+    }),
+    trustedIp: () => trustedIp,
+    now: () => issuedAtMs,
+    attestationSecret: ingressSecret,
+    submit: async ({ intent: submittedIntent, attestation: proof }) => {
+      const moneyRequestId = await requester.action(api.moneyRequests.submit, {
+        intent: submittedIntent,
+        attestation: proof,
+      })
+      if (options.loseResponse) throw new Error('Simulated response loss')
+      return moneyRequestId
+    },
   })
+  return result.moneyRequestId as Id<'moneyRequests'>
 }
 
 beforeEach(() => {
@@ -337,53 +377,97 @@ describe('Money Request submission and requester read', () => {
     },
   )
 
-  test('returns the same request for a replay and rejects a changed intent', async () => {
+  test('recovers from response loss without repeating destination preflight or durable work', async () => {
     const { t, requester, payerUserId } = await setup()
     const candidate = moneyRequestIntent(payerUserId)
 
-    const firstId = await submit(requester, candidate)
-    await expect(submit(requester, candidate)).resolves.toBe(firstId)
     await expect(
-      submit(requester, { ...candidate, amountCents: 12_346 }),
-    ).rejects.toThrow('already bound to another intent')
+      submit(requester, candidate, Date.now(), { loseResponse: true }),
+    ).rejects.toThrow('Simulated response loss')
+    await t.run(async (ctx) => {
+      const destinations = await ctx.db.query('paymentDestinations').take(3)
+      for (const destination of destinations) {
+        await ctx.db.delete('paymentDestinations', destination._id)
+      }
+    })
 
-    const durable = await t.run(async (ctx) => ({
-      requests: await ctx.db.query('moneyRequests').take(3),
-      agreements: await ctx.db.query('payToAgreements').take(3),
-      evidence: await ctx.db.query('payToAgreementEvidence').take(3),
-      work: await ctx.db.query('payToAgreementWorkItems').take(3),
-    }))
+    const recoveredId = await submit(requester, candidate)
+
+    await expect(
+      requester.query(api.moneyRequests.get, { moneyRequestId: recoveredId }),
+    ).resolves.toMatchObject({ id: recoveredId })
+    const durable = await durableSubmissionState(t)
     expect(durable.requests).toHaveLength(1)
     expect(durable.agreements).toHaveLength(1)
     expect(durable.evidence).toHaveLength(1)
     expect(durable.work).toHaveLength(1)
   })
 
+  test('rejects a submission key reused for changed intent', async () => {
+    const { requester, payerUserId } = await setup()
+    const candidate = moneyRequestIntent(payerUserId)
+
+    await submit(requester, candidate)
+    await expect(
+      submit(requester, { ...candidate, amountCents: 12_346 }),
+    ).rejects.toMatchObject({
+      data: expect.objectContaining({ code: 'SUBMISSION_CONFLICT' }),
+    })
+  })
+
+  test('scopes the same submission key independently to each Requester', async () => {
+    const { t, requester, requesterUserId, payerUserId } = await setup()
+    const otherRequesterUserId = await t.mutation(internal.users.addUser, {
+      tokenIdentifier: otherRequesterIdentity.tokenIdentifier,
+      clerkUserId: otherRequesterIdentity.subject,
+      email: otherRequesterIdentity.email,
+      name: otherRequesterIdentity.name,
+    })
+    const otherRequester = t.withIdentity(otherRequesterIdentity)
+    await otherRequester.action(api.paymentDestinations.create, {
+      destination: { type: 'bban', value: '111111-0000001' },
+    })
+    const candidate = moneyRequestIntent(payerUserId)
+
+    const firstId = await submit(requester, candidate)
+    const secondId = await submit(otherRequester, candidate, Date.now(), {
+      identity: otherRequesterIdentity,
+    })
+
+    expect(secondId).not.toBe(firstId)
+    const requests = await t.run(async (ctx) =>
+      ctx.db.query('moneyRequests').take(3),
+    )
+    expect(requests).toHaveLength(2)
+    expect(requests.map((request) => request.requesterUserId)).toEqual(
+      expect.arrayContaining([requesterUserId, otherRequesterUserId]),
+    )
+  })
+
   test('concurrent retries converge on one durable intent', async () => {
     const { t, requester, payerUserId } = await setup()
     const candidate = moneyRequestIntent(payerUserId)
-    const proof = await attestation(candidate, Date.now())
-
     const [firstId, secondId] = await Promise.all([
-      requester.action(api.moneyRequests.submit, {
-        intent: candidate,
-        attestation: proof,
-      }),
-      requester.action(api.moneyRequests.submit, {
-        intent: candidate,
-        attestation: proof,
-      }),
+      submit(requester, candidate),
+      submit(requester, candidate),
     ])
 
     expect(secondId).toBe(firstId)
-    const requests = await t.run(async (ctx) =>
-      ctx.db.query('moneyRequests').take(2),
-    )
-    expect(requests).toHaveLength(1)
+    const durable = await durableSubmissionState(t)
+    expect(durable.requests).toHaveLength(1)
+    expect(durable.agreements).toHaveLength(1)
+    expect(
+      new Set(durable.agreements.map((item) => item.providerUid)).size,
+    ).toBe(1)
+    expect(durable.evidence).toHaveLength(1)
+    expect(durable.work).toHaveLength(1)
+    await expect(
+      requester.query(api.moneyRequests.get, { moneyRequestId: firstId }),
+    ).resolves.toMatchObject({ id: firstId })
   })
 
   test('a new submission key creates a distinct otherwise-identical intent', async () => {
-    const { requester, payerUserId } = await setup()
+    const { t, requester, payerUserId } = await setup()
     const candidate = moneyRequestIntent(payerUserId)
 
     const firstId = await submit(requester, candidate)
@@ -393,6 +477,13 @@ describe('Money Request submission and requester read', () => {
     })
 
     expect(secondId).not.toBe(firstId)
+    const [first, second] = await t.run(async (ctx) =>
+      Promise.all([
+        ctx.db.get('moneyRequests', firstId),
+        ctx.db.get('moneyRequests', secondId),
+      ]),
+    )
+    expect(first?.submissionFingerprint).toBe(second?.submissionFingerprint)
   })
 
   test('retains immutable encrypted routing snapshots after destination deletion', async () => {
