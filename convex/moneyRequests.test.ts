@@ -432,6 +432,42 @@ describe('Money Request submission and requester read', () => {
     },
   )
 
+  test('does not synchronously revalidate the Bank Account baseline in a mixed PayID submission', async () => {
+    process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
+    process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
+      'payid-pseudonym-secret-at-least-32-bytes'
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: { display_name: 'Transient' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { t, requester, payer, requesterUserId, payerUserId } = await setup()
+    const requesterDestination = await t.run(async (ctx) =>
+      ctx.db
+        .query('paymentDestinations')
+        .withIndex('by_ownerUserId', (q) =>
+          q.eq('ownerUserId', requesterUserId),
+        )
+        .unique(),
+    )
+    if (!requesterDestination) throw new Error('Expected Requester destination')
+    await t.run(async (ctx) =>
+      ctx.db.patch('paymentDestinations', requesterDestination._id, {
+        ciphertext: btoa('legacy-invalid-ciphertext'),
+      }),
+    )
+    await payer.action(api.paymentDestinations.create, {
+      destination: { type: 'alias_email', value: 'payer@example.com' },
+      setAsDefault: true,
+    })
+
+    await expect(
+      submit(requester, moneyRequestIntent(payerUserId)),
+    ).resolves.toBeTruthy()
+    await removeQueuedMoneyRequestState(t)
+  })
+
   test('maps missing PayID provider configuration to a safe pre-commit failure', async () => {
     process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
     process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
@@ -604,6 +640,10 @@ describe('Money Request submission and requester read', () => {
   ] as const)(
     'classifies PayID lookup HTTP %i safely before commit',
     async (status, providerCode, expectedCode, retryable) => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      const errorLog = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined)
       process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
       process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
         'payid-pseudonym-secret-at-least-32-bytes'
@@ -627,14 +667,28 @@ describe('Money Request submission and requester read', () => {
         setAsDefault: true,
       })
 
-      await expect(
-        submit(requester, moneyRequestIntent(payerUserId)),
-      ).rejects.toMatchObject({
+      const submissionError = await submit(
+        requester,
+        moneyRequestIntent(payerUserId),
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      expect(submissionError).toMatchObject({
         data: expect.objectContaining({ code: expectedCode, retryable }),
       })
       const durable = await durableSubmissionState(t)
       expect(durable).toMatchObject({ requests: [], agreements: [], work: [] })
       expect(JSON.stringify(durable)).not.toContain('Sensitive provider detail')
+      expect(JSON.stringify(submissionError)).not.toContain(
+        'Sensitive provider detail',
+      )
+      expect(JSON.stringify(submissionError)).not.toContain(
+        'Never expose this alias detail',
+      )
+      expect(
+        JSON.stringify([...log.mock.calls, ...errorLog.mock.calls]),
+      ).not.toContain('Sensitive provider detail')
     },
   )
 

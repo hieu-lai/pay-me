@@ -282,6 +282,17 @@ function providerErrorCode(error: ZeptoClientError) {
     : undefined
 }
 
+function destinationUnavailable(role: 'requester' | 'payer'): never {
+  safeError(
+    role === 'requester'
+      ? 'REQUESTER_DESTINATION_UNAVAILABLE'
+      : 'PAYER_UNAVAILABLE',
+    role === 'requester'
+      ? 'Choose an available Default Destination.'
+      : 'A selected Payer is unavailable.',
+  )
+}
+
 function aliasResolutionFailure(
   error: unknown,
   role: 'requester' | 'payer',
@@ -318,14 +329,7 @@ function aliasResolutionFailure(
       'PayID validation is temporarily unavailable.',
     )
   }
-  safeError(
-    role === 'requester'
-      ? 'REQUESTER_DESTINATION_UNAVAILABLE'
-      : 'PAYER_UNAVAILABLE',
-    role === 'requester'
-      ? 'Choose an available Default Destination.'
-      : 'A selected Payer is unavailable.',
-  )
+  destinationUnavailable(role)
 }
 
 function destinationDecryptionFailure(
@@ -346,14 +350,7 @@ function destinationDecryptionFailure(
       'PayID validation is temporarily unavailable.',
     )
   }
-  safeError(
-    role === 'requester'
-      ? 'REQUESTER_DESTINATION_UNAVAILABLE'
-      : 'PAYER_UNAVAILABLE',
-    role === 'requester'
-      ? 'Choose an available Default Destination.'
-      : 'A selected Payer is unavailable.',
-  )
+  destinationUnavailable(role)
 }
 
 async function validatePayIdDestinations(
@@ -378,14 +375,7 @@ async function validatePayIdDestinations(
     const blocked = destinations.find(
       ({ snapshot }) => snapshot.kind !== 'bban',
     )!
-    safeError(
-      blocked.role === 'requester'
-        ? 'REQUESTER_DESTINATION_UNAVAILABLE'
-        : 'PAYER_UNAVAILABLE',
-      blocked.role === 'requester'
-        ? 'Choose an available Default Destination.'
-        : 'A selected Payer is unavailable.',
-    )
+    destinationUnavailable(blocked.role)
   }
   if (capability.kind === 'misconfigured') {
     safeError(
@@ -413,6 +403,7 @@ async function validatePayIdDestinations(
   }
   const resolved = new Set<string>()
   for (const destination of destinations) {
+    if (destination.snapshot.kind === 'bban') continue
     let decrypted: Awaited<ReturnType<typeof decryptPaymentDestination>>
     try {
       decrypted = await decryptPaymentDestination({
@@ -424,7 +415,7 @@ async function validatePayIdDestinations(
     } catch (error) {
       destinationDecryptionFailure(error, destination.role)
     }
-    if (decrypted.type === 'bban') continue
+    if (decrypted.type === 'bban') destinationUnavailable(destination.role)
     const key = `${decrypted.type}\u0000${decrypted.value}`
     if (resolved.has(key)) continue
     try {
