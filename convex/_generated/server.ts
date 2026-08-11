@@ -44,6 +44,7 @@ type Env = {
   readonly ZEPTO_ENVIRONMENT: "sandbox" | "production" | undefined;
   readonly ZEPTO_PERSONAL_ACCESS_TOKEN: string | undefined;
   readonly ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN: string | undefined;
+  readonly ZEPTO_WEBHOOK_SIGNING_SECRET: string | undefined;
 };
 
 /**

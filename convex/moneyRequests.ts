@@ -72,7 +72,7 @@ const publicAgreementValidator = v.object({
       v.literal('temporarilyUnavailable'),
       v.literal('ended'),
     ),
-    confidence: v.literal('provisional'),
+    confidence: v.union(v.literal('provisional'), v.literal('confirmed')),
     observedAt: v.number(),
   }),
   tracking: v.object({

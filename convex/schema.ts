@@ -92,7 +92,10 @@ export default defineSchema({
     ),
     creationUpdatedAt: v.number(),
     lifecycleState: providerAgreementStateValidator,
-    lifecycleConfidence: v.literal('provisional'),
+    lifecycleConfidence: v.union(
+      v.literal('provisional'),
+      v.literal('confirmed'),
+    ),
     lifecycleObservedAt: v.number(),
     trackingState: v.union(
       v.literal('verification_due'),
@@ -188,11 +191,44 @@ export default defineSchema({
         providerState: providerAgreementStateValidator,
         providerCreatedAt: v.number(),
       }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_webhook_observed'),
+        deliveryId: v.string(),
+        providerEventId: v.string(),
+        eventType: v.string(),
+        providerPublishedAt: v.number(),
+        outcome: v.union(
+          v.literal('applied'),
+          v.literal('unknown'),
+          v.literal('conflict'),
+        ),
+      }),
     ),
   ).index('by_payToAgreementId_and_observedAt', [
     'payToAgreementId',
     'observedAt',
   ]),
+
+  zeptoWebhookDeliveries: defineTable({
+    deliveryId: v.string(),
+    signatureTimestamp: v.number(),
+    receivedAt: v.number(),
+  }).index('by_deliveryId', ['deliveryId']),
+
+  zeptoWebhookEvents: defineTable({
+    providerEventId: v.string(),
+    deliveryId: v.string(),
+    eventType: v.string(),
+    resourceUid: v.string(),
+    providerPublishedAt: v.number(),
+    observedAt: v.number(),
+  }).index('by_providerEventId', ['providerEventId']),
+
+  payToAgreementReconciliationWorkItems: defineTable({
+    payToAgreementId: v.id('payToAgreements'),
+    state: v.literal('queued'),
+    availableAt: v.number(),
+  }).index('by_payToAgreementId', ['payToAgreementId']),
 
   payToAgreementWorkItems: defineTable({
     payToAgreementId: v.id('payToAgreements'),

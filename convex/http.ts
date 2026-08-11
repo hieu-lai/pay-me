@@ -3,6 +3,7 @@ import { httpRouter } from 'convex/server'
 
 import { internal } from './_generated/api'
 import { env, httpAction } from './_generated/server'
+import { verifyZeptoWebhookSignature } from './lib/zepto/webhook'
 
 type AddUserArgs = {
   tokenIdentifier: string
@@ -79,6 +80,109 @@ export async function handleClerkWebhook(
   return new Response(null, { status: 200 })
 }
 
+type ZeptoWebhookItem = {
+  providerEventId: string
+  eventType: string
+  resourceUid: string
+  providerPublishedAt: number
+}
+
+type ZeptoWebhookDependencies = {
+  signingSecret: string | undefined
+  nowMs: () => number
+  applyDelivery: (args: {
+    deliveryId: string
+    signatureTimestamp: number
+    receivedAt: number
+    items: ZeptoWebhookItem[]
+  }) => Promise<unknown>
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseZeptoWebhookPayload(value: unknown): ZeptoWebhookItem[] | null {
+  if (!isRecord(value) || !Array.isArray(value.data) || value.data.length < 1) {
+    return null
+  }
+  const items: ZeptoWebhookItem[] = []
+  for (const valueItem of value.data) {
+    if (!isRecord(valueItem)) return null
+    const { id, type, published_at, resource_uid, resource_type } = valueItem
+    const publishedAt =
+      typeof published_at === 'string' ? Date.parse(published_at) : Number.NaN
+    if (
+      typeof id !== 'string' ||
+      id.length < 1 ||
+      typeof type !== 'string' ||
+      type.length < 1 ||
+      typeof resource_uid !== 'string' ||
+      !/^[A-Za-z0-9._~-]{1,64}$/.test(resource_uid) ||
+      resource_type !== 'payto_agreement' ||
+      !Number.isFinite(publishedAt)
+    ) {
+      return null
+    }
+    items.push({
+      providerEventId: id,
+      eventType: type,
+      resourceUid: resource_uid,
+      providerPublishedAt: publishedAt,
+    })
+  }
+  return items
+}
+
+export async function handleZeptoWebhook(
+  request: Request,
+  dependencies: ZeptoWebhookDependencies,
+) {
+  const deliveryId = request.headers.get('split-request-id')?.trim()
+  const splitSignature = request.headers.get('split-signature')?.trim()
+  if (!deliveryId || !splitSignature) {
+    return new Response('Invalid Zepto webhook', { status: 400 })
+  }
+
+  const rawBody = await request.arrayBuffer()
+  let signatureTimestamp: number
+  try {
+    ;({ timestamp: signatureTimestamp } = await verifyZeptoWebhookSignature({
+      rawBody,
+      splitSignature,
+      secret: dependencies.signingSecret ?? '',
+      nowMs: dependencies.nowMs(),
+    }))
+  } catch (error) {
+    console.error('Zepto webhook verification failed', error)
+    return new Response('Invalid Zepto webhook', { status: 400 })
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(rawBody),
+    ) as unknown
+  } catch {
+    return new Response('Malformed Zepto webhook', { status: 400 })
+  }
+  const items = parseZeptoWebhookPayload(parsed)
+  if (!items) return new Response('Malformed Zepto webhook', { status: 400 })
+
+  try {
+    await dependencies.applyDelivery({
+      deliveryId,
+      signatureTimestamp,
+      receivedAt: dependencies.nowMs(),
+      items,
+    })
+  } catch (error) {
+    console.error('Failed to commit Zepto webhook', error)
+    return new Response('Unable to commit Zepto webhook', { status: 500 })
+  }
+  return new Response(null, { status: 200 })
+}
+
 const http = httpRouter()
 
 http.route({
@@ -92,6 +196,20 @@ http.route({
         await ctx.runMutation(internal.users.addUser, args)
       },
       randomFourDigitNumber,
+    }),
+  ),
+})
+
+http.route({
+  path: '/zepto/webhooks',
+  method: 'POST',
+  handler: httpAction((ctx, request) =>
+    handleZeptoWebhook(request, {
+      signingSecret: env.ZEPTO_WEBHOOK_SIGNING_SECRET,
+      nowMs: Date.now,
+      applyDelivery: async (args) => {
+        await ctx.runMutation(internal.zeptoWebhook.applyDelivery, args)
+      },
     }),
   ),
 })

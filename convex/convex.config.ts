@@ -17,6 +17,7 @@ const app = defineApp({
     ),
     ZEPTO_PERSONAL_ACCESS_TOKEN: v.optional(v.string()),
     ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN: v.optional(v.string()),
+    ZEPTO_WEBHOOK_SIGNING_SECRET: v.optional(v.string()),
   },
 })
 
