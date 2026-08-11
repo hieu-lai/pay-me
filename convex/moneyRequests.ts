@@ -1,3 +1,7 @@
+import {
+  paginationOptsValidator,
+  paginationResultValidator,
+} from 'convex/server'
 import { ConvexError, v } from 'convex/values'
 import { v7 as uuid } from 'uuid'
 
@@ -39,6 +43,72 @@ const attestationValidator = v.object({
   trustedIp: v.string(),
   intentDigest: v.string(),
   signature: v.string(),
+})
+const publicUserIdentityValidator = v.object({
+  name: v.string(),
+  username: v.optional(v.string()),
+  imageUrl: v.optional(v.string()),
+})
+const publicAgreementValidator = v.object({
+  payer: publicUserIdentityValidator,
+  creation: v.object({
+    state: v.literal('queued'),
+    updatedAt: v.number(),
+  }),
+  lifecycle: v.object({
+    meaning: v.literal('waitingForPayer'),
+    confidence: v.literal('provisional'),
+    observedAt: v.number(),
+  }),
+  tracking: v.object({
+    state: v.literal('verificationDue'),
+    updatedAt: v.number(),
+  }),
+})
+const moneyRequestFieldsValidator = v.object({
+  id: v.id('moneyRequests'),
+  amountCents: v.number(),
+  currency: v.literal('AUD'),
+  purpose: v.literal('other'),
+  description: v.string(),
+  submittedAt: v.number(),
+})
+const requesterDetailValidator = moneyRequestFieldsValidator.extend({
+  agreements: v.array(publicAgreementValidator),
+})
+const payerDetailValidator = moneyRequestFieldsValidator.extend({
+  requester: publicUserIdentityValidator,
+  agreement: publicAgreementValidator,
+})
+const publicProjectionSummaryValidator = v.object({
+  creation: v.object({
+    queued: v.number(),
+    submitting: v.number(),
+    verifying: v.number(),
+    retrying: v.number(),
+    needsReview: v.number(),
+    created: v.number(),
+    failed: v.number(),
+  }),
+  lifecycle: v.object({
+    waitingForPayer: v.number(),
+    ready: v.number(),
+    temporarilyUnavailable: v.number(),
+    ended: v.number(),
+    unknown: v.number(),
+  }),
+  tracking: v.object({
+    current: v.number(),
+    verificationDue: v.number(),
+    checking: v.number(),
+    retrying: v.number(),
+    needsReview: v.number(),
+    stopped: v.number(),
+  }),
+})
+const requestedHistoryItemValidator = moneyRequestFieldsValidator.extend({
+  payers: v.array(publicUserIdentityValidator),
+  summary: publicProjectionSummaryValidator,
 })
 function safeError(
   code:
@@ -390,78 +460,235 @@ export const accept = internalMutation({
   },
 })
 
+function publicUserIdentity(
+  submittedName: string,
+  currentUser: Doc<'users'> | null,
+) {
+  return {
+    name: submittedName,
+    ...(currentUser?.username === undefined
+      ? {}
+      : { username: currentUser.username }),
+    ...(currentUser?.imageUrl === undefined
+      ? {}
+      : { imageUrl: currentUser.imageUrl }),
+  }
+}
+
+function publicAgreement(
+  agreement: Doc<'payToAgreements'>,
+  currentPayer: Doc<'users'> | null,
+) {
+  return {
+    payer: publicUserIdentity(agreement.payerNameSnapshot, currentPayer),
+    creation: {
+      state: agreement.creationState,
+      updatedAt: agreement.creationUpdatedAt,
+    },
+    lifecycle: {
+      meaning: 'waitingForPayer' as const,
+      confidence: agreement.lifecycleConfidence,
+      observedAt: agreement.lifecycleObservedAt,
+    },
+    tracking: {
+      state: 'verificationDue' as const,
+      updatedAt: agreement.trackingUpdatedAt,
+    },
+  }
+}
+
+function publicMoneyRequest(moneyRequest: Doc<'moneyRequests'>) {
+  return {
+    id: moneyRequest._id,
+    amountCents: moneyRequest.amountCents,
+    currency: moneyRequest.currency,
+    purpose: moneyRequest.purpose,
+    description: moneyRequest.description,
+    submittedAt: moneyRequest.submittedAt,
+  }
+}
+
+function validatePageTarget(numItems: number) {
+  if (!Number.isInteger(numItems) || numItems < 1 || numItems > 50) {
+    throw new ConvexError({
+      code: 'INVALID_PAGINATION',
+      message: 'Money Request page targets must be integers from 1 through 50.',
+    })
+  }
+}
+
+function publicProjectionSummary(
+  agreements: Array<ReturnType<typeof publicAgreement>>,
+) {
+  const summary = {
+    creation: {
+      queued: 0,
+      submitting: 0,
+      verifying: 0,
+      retrying: 0,
+      needsReview: 0,
+      created: 0,
+      failed: 0,
+    },
+    lifecycle: {
+      waitingForPayer: 0,
+      ready: 0,
+      temporarilyUnavailable: 0,
+      ended: 0,
+      unknown: 0,
+    },
+    tracking: {
+      current: 0,
+      verificationDue: 0,
+      checking: 0,
+      retrying: 0,
+      needsReview: 0,
+      stopped: 0,
+    },
+  }
+  for (const agreement of agreements) {
+    summary.creation[agreement.creation.state] += 1
+    summary.lifecycle[agreement.lifecycle.meaning] += 1
+    summary.tracking[agreement.tracking.state] += 1
+  }
+  return summary
+}
+
+async function requesterAgreementProjections(
+  ctx: Pick<QueryCtx, 'db'>,
+  moneyRequestId: Id<'moneyRequests'>,
+) {
+  const agreements = await ctx.db
+    .query('payToAgreements')
+    .withIndex('by_moneyRequestId', (q) =>
+      q.eq('moneyRequestId', moneyRequestId),
+    )
+    .take(MAX_MONEY_REQUEST_PAYER_COUNT + 1)
+  if (
+    agreements.length < 1 ||
+    agreements.length > MAX_MONEY_REQUEST_PAYER_COUNT
+  ) {
+    safeError(
+      'SERVICE_UNAVAILABLE',
+      'Money Request information is temporarily unavailable.',
+    )
+  }
+  const currentPayers = await Promise.all(
+    agreements.map((agreement) => ctx.db.get('users', agreement.payerUserId)),
+  )
+  return agreements.map((agreement, index) =>
+    publicAgreement(agreement, currentPayers[index]),
+  )
+}
+
 export const get = query({
   args: { moneyRequestId: v.id('moneyRequests') },
-  returns: v.object({
-    id: v.id('moneyRequests'),
-    amountCents: v.number(),
-    currency: v.literal('AUD'),
-    purpose: v.literal('other'),
-    description: v.string(),
-    submittedAt: v.number(),
-    agreements: v.array(
-      v.object({
-        payer: v.object({ name: v.string() }),
-        creation: v.object({
-          state: v.literal('queued'),
-          updatedAt: v.number(),
-        }),
-        lifecycle: v.object({
-          meaning: v.literal('waitingForPayer'),
-          confidence: v.literal('provisional'),
-          observedAt: v.number(),
-        }),
-        tracking: v.object({
-          state: v.literal('verificationDue'),
-          updatedAt: v.number(),
-        }),
-      }),
-    ),
-  }),
+  returns: v.union(requesterDetailValidator, payerDetailValidator),
   handler: async (ctx, args) => {
-    const requester = await requireUser(ctx)
+    const viewer = await requireUser(ctx)
     const moneyRequest = await ctx.db.get('moneyRequests', args.moneyRequestId)
-    if (!moneyRequest || moneyRequest.requesterUserId !== requester._id) {
+    if (!moneyRequest) {
       safeError('MONEY_REQUEST_NOT_FOUND', 'The Money Request was not found.')
     }
+    const moneyRequestFields = publicMoneyRequest(moneyRequest)
+    if (moneyRequest.requesterUserId === viewer._id) {
+      return {
+        ...moneyRequestFields,
+        agreements: await requesterAgreementProjections(ctx, moneyRequest._id),
+      }
+    }
+
+    const agreement = await ctx.db
+      .query('payToAgreements')
+      .withIndex('by_moneyRequestId_and_payerUserId', (q) =>
+        q.eq('moneyRequestId', moneyRequest._id).eq('payerUserId', viewer._id),
+      )
+      .unique()
+    if (!agreement) {
+      safeError('MONEY_REQUEST_NOT_FOUND', 'The Money Request was not found.')
+    }
+    const currentRequester = await ctx.db.get(
+      'users',
+      moneyRequest.requesterUserId,
+    )
+    return {
+      ...moneyRequestFields,
+      requester: publicUserIdentity(
+        moneyRequest.requesterNameSnapshot,
+        currentRequester,
+      ),
+      agreement: publicAgreement(agreement, viewer),
+    }
+  },
+})
+
+export const listRequestedByMe = query({
+  args: { paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(requestedHistoryItemValidator),
+  handler: async (ctx, args) => {
+    validatePageTarget(args.paginationOpts.numItems)
+    const requester = await requireUser(ctx)
+    const requests = await ctx.db
+      .query('moneyRequests')
+      .withIndex('by_requesterUserId', (q) =>
+        q.eq('requesterUserId', requester._id),
+      )
+      .order('desc')
+      .paginate(args.paginationOpts)
+    const page = await Promise.all(
+      requests.page.map(async (moneyRequest) => {
+        const agreements = await requesterAgreementProjections(
+          ctx,
+          moneyRequest._id,
+        )
+        return {
+          ...publicMoneyRequest(moneyRequest),
+          payers: agreements.map(({ payer }) => payer),
+          summary: publicProjectionSummary(agreements),
+        }
+      }),
+    )
+    return { ...requests, page }
+  },
+})
+
+export const listAssignedToMe = query({
+  args: { paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(payerDetailValidator),
+  handler: async (ctx, args) => {
+    validatePageTarget(args.paginationOpts.numItems)
+    const payer = await requireUser(ctx)
     const agreements = await ctx.db
       .query('payToAgreements')
-      .withIndex('by_moneyRequestId', (q) =>
-        q.eq('moneyRequestId', moneyRequest._id),
-      )
-      .take(MAX_MONEY_REQUEST_PAYER_COUNT + 1)
-    if (
-      agreements.length < 1 ||
-      agreements.length > MAX_MONEY_REQUEST_PAYER_COUNT
-    ) {
-      safeError(
-        'SERVICE_UNAVAILABLE',
-        'Money Request details are temporarily unavailable.',
-      )
-    }
-    return {
-      id: moneyRequest._id,
-      amountCents: moneyRequest.amountCents,
-      currency: moneyRequest.currency,
-      purpose: moneyRequest.purpose,
-      description: moneyRequest.description,
-      submittedAt: moneyRequest.submittedAt,
-      agreements: agreements.map((agreement) => ({
-        payer: { name: agreement.payerNameSnapshot },
-        creation: {
-          state: agreement.creationState,
-          updatedAt: agreement.creationUpdatedAt,
-        },
-        lifecycle: {
-          meaning: 'waitingForPayer' as const,
-          confidence: agreement.lifecycleConfidence,
-          observedAt: agreement.lifecycleObservedAt,
-        },
-        tracking: {
-          state: 'verificationDue' as const,
-          updatedAt: agreement.trackingUpdatedAt,
-        },
-      })),
-    }
+      .withIndex('by_payerUserId', (q) => q.eq('payerUserId', payer._id))
+      .order('desc')
+      .paginate(args.paginationOpts)
+    const page = await Promise.all(
+      agreements.page.map(async (agreement) => {
+        const moneyRequest = await ctx.db.get(
+          'moneyRequests',
+          agreement.moneyRequestId,
+        )
+        if (!moneyRequest) {
+          safeError(
+            'SERVICE_UNAVAILABLE',
+            'Money Request history is temporarily unavailable.',
+          )
+        }
+        const currentRequester = await ctx.db.get(
+          'users',
+          moneyRequest.requesterUserId,
+        )
+        return {
+          ...publicMoneyRequest(moneyRequest),
+          requester: publicUserIdentity(
+            moneyRequest.requesterNameSnapshot,
+            currentRequester,
+          ),
+          agreement: publicAgreement(agreement, payer),
+        }
+      }),
+    )
+    return { ...agreements, page }
   },
 })

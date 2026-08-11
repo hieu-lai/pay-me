@@ -311,6 +311,9 @@ describe('Money Request submission and requester read', () => {
     const accepted = await requester.query(api.moneyRequests.get, {
       moneyRequestId,
     })
+    if (!('agreements' in accepted)) {
+      throw new Error('Expected Requester detail')
+    }
     expect(accepted.agreements).toHaveLength(5)
     expect(accepted.agreements.map(({ payer }) => payer.name)).toEqual(
       expect.arrayContaining([
@@ -330,6 +333,210 @@ describe('Money Request submission and requester read', () => {
     expect(
       new Set(durable.agreements.map(({ providerUid }) => providerUid)).size,
     ).toBe(5)
+  })
+
+  test('shows a Payer only their agreement and the Requester safe identity', async () => {
+    const { t, requester, payer, requesterUserId, payerUserId } = await setup()
+    const sibling = await addPayer(t, 2)
+    const moneyRequestId = await submit(requester, {
+      ...moneyRequestIntent(payerUserId),
+      payerIds: [payerUserId, sibling.payerUserId],
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch('users', requesterUserId, {
+        name: 'Current Requester Name',
+        username: 'requester-now',
+        imageUrl: 'https://example.com/requester.png',
+      })
+      await ctx.db.patch('users', payerUserId, {
+        username: 'payer-now',
+        imageUrl: 'https://example.com/payer.png',
+      })
+    })
+
+    const detail = await payer.query(api.moneyRequests.get, { moneyRequestId })
+
+    expect(detail).toEqual({
+      id: moneyRequestId,
+      amountCents: 12_345,
+      currency: 'AUD',
+      purpose: 'other',
+      description: 'Shared dinner',
+      submittedAt: expect.any(Number),
+      requester: {
+        name: requesterIdentity.name,
+        username: 'requester-now',
+        imageUrl: 'https://example.com/requester.png',
+      },
+      agreement: {
+        payer: {
+          name: payerIdentity.name,
+          username: 'payer-now',
+          imageUrl: 'https://example.com/payer.png',
+        },
+        creation: { state: 'queued', updatedAt: expect.any(Number) },
+        lifecycle: {
+          meaning: 'waitingForPayer',
+          confidence: 'provisional',
+          observedAt: expect.any(Number),
+        },
+        tracking: { state: 'verificationDue', updatedAt: expect.any(Number) },
+      },
+    })
+    expect(JSON.stringify(detail)).not.toContain(sibling.identity.name)
+    expect(detail).not.toHaveProperty('agreements')
+  })
+
+  test('lists Money Requests requested by me newest first across cursor pages', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const submittedIds: Id<'moneyRequests'>[] = []
+    for (const [index, description] of ['First', 'Second', 'Third'].entries()) {
+      submittedIds.push(
+        await submit(
+          requester,
+          moneyRequestIntent(payerUserId, {
+            submissionKey: `018f22e2-7c00-7000-8000-00000000001${index}`,
+            description,
+          }),
+        ),
+      )
+    }
+    await t.run(async (ctx) => {
+      await ctx.db.patch('users', payerUserId, {
+        username: 'payer-now',
+        imageUrl: 'https://example.com/payer.png',
+      })
+    })
+
+    const firstPage = await requester.query(
+      api.moneyRequests.listRequestedByMe,
+      { paginationOpts: { numItems: 2, cursor: null } },
+    )
+    const secondPage = await requester.query(
+      api.moneyRequests.listRequestedByMe,
+      {
+        paginationOpts: {
+          numItems: 2,
+          cursor: firstPage.continueCursor,
+        },
+      },
+    )
+
+    expect([...firstPage.page, ...secondPage.page].map(({ id }) => id)).toEqual(
+      [...submittedIds].reverse(),
+    )
+    expect(firstPage.isDone).toBe(false)
+    expect(secondPage.isDone).toBe(true)
+    expect(firstPage.page[0]).toMatchObject({
+      id: submittedIds[2],
+      description: 'Third',
+      payers: [
+        {
+          name: payerIdentity.name,
+          username: 'payer-now',
+          imageUrl: 'https://example.com/payer.png',
+        },
+      ],
+      summary: {
+        creation: { queued: 1 },
+        lifecycle: { waitingForPayer: 1 },
+        tracking: { verificationDue: 1 },
+      },
+    })
+    expect(JSON.stringify(firstPage)).not.toContain('providerUid')
+    expect(JSON.stringify(firstPage)).not.toContain('debtorSnapshot')
+  })
+
+  test('lists only my assigned projection without sibling information', async () => {
+    const { t, requester, payer, requesterUserId, payerUserId } = await setup()
+    const sibling = await addPayer(t, 2)
+    const firstId = await submit(requester, {
+      ...moneyRequestIntent(payerUserId),
+      payerIds: [payerUserId, sibling.payerUserId],
+    })
+    const secondId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId, {
+        submissionKey: '018f22e2-7c00-7000-8000-000000000020',
+        description: 'Second request',
+      }),
+    )
+    await t.run(async (ctx) => {
+      await ctx.db.patch('users', requesterUserId, {
+        username: 'requester-now',
+        imageUrl: 'https://example.com/requester.png',
+      })
+    })
+
+    const firstPage = await payer.query(api.moneyRequests.listAssignedToMe, {
+      paginationOpts: { numItems: 1, cursor: null },
+    })
+    const secondPage = await payer.query(api.moneyRequests.listAssignedToMe, {
+      paginationOpts: { numItems: 1, cursor: firstPage.continueCursor },
+    })
+    const items = [...firstPage.page, ...secondPage.page]
+
+    expect(items.map(({ id }) => id)).toEqual([secondId, firstId])
+    expect(items[0]).toMatchObject({
+      requester: {
+        name: requesterIdentity.name,
+        username: 'requester-now',
+        imageUrl: 'https://example.com/requester.png',
+      },
+      agreement: {
+        payer: { name: payerIdentity.name },
+        creation: { state: 'queued' },
+        lifecycle: { meaning: 'waitingForPayer' },
+        tracking: { state: 'verificationDue' },
+      },
+    })
+    const serialized = JSON.stringify(items)
+    expect(serialized).not.toContain(sibling.identity.name)
+    expect(serialized).not.toContain('payers')
+    expect(serialized).not.toContain('summary')
+    expect(serialized).not.toContain('providerUid')
+  })
+
+  test.each([
+    ['requested', api.moneyRequests.listRequestedByMe],
+    ['assigned', api.moneyRequests.listAssignedToMe],
+  ] as const)(
+    'bounds %s history page targets from one through fifty',
+    async (_kind, historyQuery) => {
+      const { requester } = await setup()
+
+      for (const numItems of [0, 1.5, 51]) {
+        await expect(
+          requester.query(historyQuery, {
+            paginationOpts: { numItems, cursor: null },
+          }),
+        ).rejects.toMatchObject({
+          data: expect.objectContaining({ code: 'INVALID_PAGINATION' }),
+        })
+      }
+    },
+  )
+
+  test('requires authentication for detail and both histories', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const moneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId),
+    )
+
+    await expect(
+      t.query(api.moneyRequests.get, { moneyRequestId }),
+    ).rejects.toThrow('signed in')
+    await expect(
+      t.query(api.moneyRequests.listRequestedByMe, {
+        paginationOpts: { numItems: 20, cursor: null },
+      }),
+    ).rejects.toThrow('signed in')
+    await expect(
+      t.query(api.moneyRequests.listAssignedToMe, {
+        paginationOpts: { numItems: 20, cursor: null },
+      }),
+    ).rejects.toThrow('signed in')
   })
 
   test('rejects empty, duplicate, oversized, and self-inclusive Payer groups without durable records', async () => {
@@ -829,7 +1036,14 @@ describe('Money Request submission and requester read', () => {
   })
 
   test('makes missing and unauthorized requester reads indistinguishable', async () => {
-    const { t, requester, payer, payerUserId } = await setup()
+    const { t, requester, payerUserId } = await setup()
+    await t.mutation(internal.users.addUser, {
+      tokenIdentifier: otherRequesterIdentity.tokenIdentifier,
+      clerkUserId: otherRequesterIdentity.subject,
+      email: otherRequesterIdentity.email,
+      name: otherRequesterIdentity.name,
+    })
+    const unauthorized = t.withIdentity(otherRequesterIdentity)
     const moneyRequestId = await submit(
       requester,
       moneyRequestIntent(payerUserId),
@@ -864,7 +1078,7 @@ describe('Money Request submission and requester read', () => {
     })
 
     await expect(
-      payer.query(api.moneyRequests.get, { moneyRequestId }),
+      unauthorized.query(api.moneyRequests.get, { moneyRequestId }),
     ).rejects.toThrow('Money Request was not found')
     await expect(
       requester.query(api.moneyRequests.get, { moneyRequestId: missingId }),
