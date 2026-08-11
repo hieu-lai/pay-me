@@ -38,10 +38,13 @@ type Env = {
   readonly CLERK_SECRET_KEY: string;
   readonly CLERK_WEBHOOK_SIGNING_SECRET: string;
   readonly MONEY_REQUEST_INGRESS_ATTESTATION_SECRET: string;
+  readonly MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET: string | undefined;
   readonly PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION: string;
   readonly PAYMENT_DESTINATION_ENCRYPTION_KEYS: string;
   readonly PAYMENT_DESTINATION_FINGERPRINT_KEY: string;
+  readonly PAYME_RELEASE_COMMIT: string | undefined;
   readonly ZEPTO_ENVIRONMENT: "sandbox" | "production" | undefined;
+  readonly ZEPTO_PAYID_CAPABILITY: string | undefined;
   readonly ZEPTO_PERSONAL_ACCESS_TOKEN: string | undefined;
   readonly ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN: string | undefined;
   readonly ZEPTO_WEBHOOK_SIGNING_SECRET: string | undefined;

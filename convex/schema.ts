@@ -2,14 +2,15 @@ import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 
 import {
-  bankAccountRoutingSnapshotValidator,
   providerAgreementStateValidator,
+  routingSnapshotValidator,
 } from './validators/payToAgreements'
 import {
   zeptoWebhookDeliveryValidator,
   zeptoWebhookEventValidator,
   zeptoWebhookEvidenceValidator,
 } from './validators/zeptoWebhook'
+import { paymentDestinationTypeConvexValidator } from './validators/paymentDestinations'
 
 const agreementEvidenceBaseValidator = v.object({
   payToAgreementId: v.id('payToAgreements'),
@@ -35,13 +36,7 @@ export default defineSchema({
 
   paymentDestinations: defineTable({
     ownerUserId: v.id('users'),
-    type: v.union(
-      v.literal('bban'),
-      v.literal('alias_phone'),
-      v.literal('alias_email'),
-      v.literal('alias_abn'),
-      v.literal('alias_organisation_identifier'),
-    ),
+    type: paymentDestinationTypeConvexValidator,
     label: v.optional(v.string()),
     searchLabel: v.string(),
     maskedDisplay: v.string(),
@@ -67,7 +62,7 @@ export default defineSchema({
     submissionKey: v.string(),
     submissionFingerprint: v.string(),
     sourceCreditorPaymentDestinationId: v.id('paymentDestinations'),
-    creditorSnapshot: bankAccountRoutingSnapshotValidator,
+    creditorSnapshot: routingSnapshotValidator,
     submittedAt: v.number(),
   })
     .index('by_requesterUserId', ['requesterUserId'])
@@ -81,7 +76,7 @@ export default defineSchema({
     payerUserId: v.id('users'),
     payerNameSnapshot: v.string(),
     sourceDebtorPaymentDestinationId: v.id('paymentDestinations'),
-    debtorSnapshot: bankAccountRoutingSnapshotValidator,
+    debtorSnapshot: routingSnapshotValidator,
     provider: v.literal('zepto'),
     environment: v.literal('sandbox'),
     apiVersion: v.literal('20260101'),

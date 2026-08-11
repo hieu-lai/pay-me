@@ -16,6 +16,21 @@ const fingerprintKey = btoa('fingerprint-key-32-bytes-long!!xx')
 const ingressSecret = 'test-ingress-attestation-secret-32-bytes'
 const submissionKey = '018f22e2-7c00-7000-8000-000000000001'
 const trustedIp = '203.0.113.42'
+const certifiedPayIdCapability = JSON.stringify({
+  enabled: true,
+  trustedIpv4: true,
+  payToAliasesScope: true,
+  liveAliasResolution: true,
+  privacyAssertions: true,
+  aliasKinds: [
+    'alias_phone',
+    'alias_email',
+    'alias_abn',
+    'alias_organisation_identifier',
+  ],
+  fraudLimits: { account: 100, remoteIp: 20, requester: 20 },
+  certificationCommit: 'a'.repeat(40),
+})
 
 const requesterIdentity = {
   tokenIdentifier: 'https://clerk.example.test|requester_123',
@@ -185,6 +200,23 @@ async function durableSubmissionState(
   }))
 }
 
+async function removeQueuedMoneyRequestState(
+  t: Awaited<ReturnType<typeof setupUsers>>['t'],
+) {
+  await t.run(async (ctx) => {
+    for (const table of [
+      'payToAgreementEvidence',
+      'payToAgreementWorkItems',
+      'payToAgreements',
+      'moneyRequests',
+    ] as const) {
+      for (const document of await ctx.db.query(table).collect()) {
+        await ctx.db.delete(table, document._id)
+      }
+    }
+  })
+}
+
 async function agreementForMoneyRequest(
   t: Awaited<ReturnType<typeof setupUsers>>['t'],
   moneyRequestId: Id<'moneyRequests'>,
@@ -307,6 +339,9 @@ beforeEach(() => {
   process.env.MONEY_REQUEST_INGRESS_ATTESTATION_SECRET = ingressSecret
   process.env.ZEPTO_ENVIRONMENT = 'sandbox'
   process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-test-token'
+  delete process.env.ZEPTO_PAYID_CAPABILITY
+  process.env.PAYME_RELEASE_COMMIT = 'a'.repeat(40)
+  delete process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET
 })
 
 afterEach(() => {
@@ -314,6 +349,329 @@ afterEach(() => {
 })
 
 describe('Money Request submission and requester read', () => {
+  test('rejects a PayID before commit while its independent capability is disabled', async () => {
+    const { t, requester, payer, payerUserId } = await setup()
+    await payer.action(api.paymentDestinations.create, {
+      destination: { type: 'alias_email', value: 'payer@example.com' },
+      setAsDefault: true,
+    })
+    const fetch = vi.spyOn(globalThis, 'fetch')
+
+    await expect(
+      submit(requester, moneyRequestIntent(payerUserId)),
+    ).rejects.toMatchObject({
+      data: expect.objectContaining({ code: 'PAYER_UNAVAILABLE' }),
+    })
+    expect(fetch).not.toHaveBeenCalled()
+    await expect(durableSubmissionState(t)).resolves.toMatchObject({
+      requests: [],
+      agreements: [],
+      evidence: [],
+      work: [],
+    })
+  })
+
+  test.each([
+    ['alias_phone', '+61-411222333'],
+    ['alias_email', 'payer@example.com'],
+    ['alias_abn', '51824753556'],
+    ['alias_organisation_identifier', 'example-campaign'],
+  ] as const)(
+    'validates and snapshots an enabled %s without retaining its display name',
+    async (type, value) => {
+      process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
+      process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
+        'payid-pseudonym-secret-at-least-32-bytes'
+      const requests: Request[] = []
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+        requests.push(new Request(request).clone())
+        return new Response(
+          JSON.stringify({ data: { display_name: 'Never Persist This Name' } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      })
+      const { t, requester, payer, payerUserId } = await setup()
+      await payer.action(api.paymentDestinations.create, {
+        destination: { type, value },
+        setAsDefault: true,
+      })
+
+      const moneyRequestId = await submit(
+        requester,
+        moneyRequestIntent(payerUserId),
+      )
+
+      expect(requests).toHaveLength(1)
+      const lookup = (await requests[0]?.json()) as {
+        type: string
+        value: string
+        requester: { id: string; remote_ip: string }
+      }
+      expect(lookup).toMatchObject({
+        type,
+        value,
+        requester: { remote_ip: trustedIp },
+      })
+      expect(lookup.requester.id).toMatch(/^payme_[A-Za-z0-9_-]{43}$/)
+      expect(lookup.requester.id).not.toContain(requesterIdentity.subject)
+      const durable = await t.run(async (ctx) => ({
+        request: await ctx.db.get('moneyRequests', moneyRequestId),
+        agreement: await ctx.db
+          .query('payToAgreements')
+          .withIndex('by_moneyRequestId', (q) =>
+            q.eq('moneyRequestId', moneyRequestId),
+          )
+          .unique(),
+        evidence: await ctx.db.query('payToAgreementEvidence').take(10),
+      }))
+      expect(durable.agreement?.debtorSnapshot.kind).toBe(type)
+      expect(JSON.stringify(durable)).not.toContain('Never Persist This Name')
+      expect(JSON.stringify(durable)).not.toContain(value)
+      expect(JSON.stringify(durable)).not.toContain(trustedIp)
+      await removeQueuedMoneyRequestState(t)
+    },
+  )
+
+  test('maps missing PayID provider configuration to a safe pre-commit failure', async () => {
+    process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
+    process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
+      'payid-pseudonym-secret-at-least-32-bytes'
+    delete process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN
+    const { t, requester, payer, payerUserId } = await setup()
+    await payer.action(api.paymentDestinations.create, {
+      destination: { type: 'alias_email', value: 'payer@example.com' },
+      setAsDefault: true,
+    })
+
+    await expect(
+      submit(requester, moneyRequestIntent(payerUserId)),
+    ).rejects.toMatchObject({
+      data: expect.objectContaining({
+        code: 'SERVICE_UNAVAILABLE',
+        retryable: true,
+      }),
+    })
+    await expect(durableSubmissionState(t)).resolves.toMatchObject({
+      requests: [],
+      agreements: [],
+      work: [],
+    })
+  })
+
+  test.each([
+    [
+      'corrupt ciphertext',
+      { ciphertext: btoa('corrupt') },
+      'PAYER_UNAVAILABLE',
+    ],
+    [
+      'missing encryption key',
+      { keyVersion: 'missing' },
+      'SERVICE_UNAVAILABLE',
+    ],
+  ] as const)(
+    'classifies PayID %s safely before commit',
+    async (_case, patch, expectedCode) => {
+      process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
+      process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
+        'payid-pseudonym-secret-at-least-32-bytes'
+      const { t, requester, payer, payerUserId } = await setup()
+      const destinationId = await payer.action(api.paymentDestinations.create, {
+        destination: { type: 'alias_email', value: 'payer@example.com' },
+        setAsDefault: true,
+      })
+      await t.run(async (ctx) =>
+        ctx.db.patch('paymentDestinations', destinationId, patch),
+      )
+
+      await expect(
+        submit(requester, moneyRequestIntent(payerUserId)),
+      ).rejects.toMatchObject({
+        data: expect.objectContaining({ code: expectedCode }),
+      })
+      await expect(durableSubmissionState(t)).resolves.toMatchObject({
+        requests: [],
+        agreements: [],
+        work: [],
+      })
+    },
+  )
+
+  test('resolves one Creditor PayID once and reuses it across the bounded Payer set', async () => {
+    process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
+    process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
+      'payid-pseudonym-secret-at-least-32-bytes'
+    const lookups: Request[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      lookups.push(new Request(request).clone())
+      return new Response(
+        JSON.stringify({ data: { display_name: 'Transient' } }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
+    })
+    const users = await setup()
+    const second = await addPayer(users.t, 100)
+    await users.requester.action(api.paymentDestinations.create, {
+      destination: { type: 'alias_email', value: 'requester@example.com' },
+      setAsDefault: true,
+    })
+    await submit(users.requester, {
+      ...moneyRequestIntent(users.payerUserId),
+      payerIds: [users.payerUserId, second.payerUserId],
+    })
+    expect(lookups).toHaveLength(1)
+    expect((await lookups[0].json()).type).toBe('alias_email')
+    await removeQueuedMoneyRequestState(users.t)
+  })
+
+  test('resolves each distinct Debtor once, skips lookup on replay, and keeps no cross-submission cache', async () => {
+    process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
+    process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
+      'payid-pseudonym-secret-at-least-32-bytes'
+    const lookups: Array<{ type: string; value: string }> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      const providerRequest = new Request(request)
+      const body = (await providerRequest.clone().json()) as {
+        type: string
+        value: string
+        uid?: string
+      }
+      if (providerRequest.url.endsWith('/payto/alias_resolution')) {
+        lookups.push({ type: body.type, value: body.value })
+        return new Response(
+          JSON.stringify({ data: { display_name: 'Transient' } }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            uid: body.uid,
+            state: 'pending',
+            created_at: '2026-08-11T09:30:00+10:00',
+            mms_agreement_id: null,
+          },
+        }),
+        {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
+    })
+    const users = await setup()
+    await users.payer.action(api.paymentDestinations.create, {
+      destination: { type: 'alias_email', value: 'payer@example.com' },
+      setAsDefault: true,
+    })
+    const second = await addPayer(users.t, 101, false)
+    await second.payer.action(api.paymentDestinations.create, {
+      destination: { type: 'alias_phone', value: '+61-411222333' },
+      setAsDefault: true,
+    })
+    const firstIntent = {
+      ...moneyRequestIntent(users.payerUserId),
+      payerIds: [users.payerUserId, second.payerUserId],
+    }
+
+    await submit(users.requester, firstIntent)
+    await submit(users.requester, firstIntent)
+    expect(lookups).toEqual([
+      { type: 'alias_email', value: 'payer@example.com' },
+      { type: 'alias_phone', value: '+61-411222333' },
+    ])
+
+    await submit(users.requester, {
+      ...firstIntent,
+      submissionKey: '018f22e2-7c00-7000-8000-000000000077',
+    })
+    expect(lookups).toHaveLength(4)
+    expect(lookups.slice(2)).toEqual(lookups.slice(0, 2))
+    await removeQueuedMoneyRequestState(users.t)
+  })
+
+  test.each([
+    [503, 'ZPADD98', 'VALIDATION_UNAVAILABLE', true],
+    [401, undefined, 'SERVICE_UNAVAILABLE', true],
+    [403, undefined, 'SERVICE_UNAVAILABLE', true],
+    [422, 'ZPUNP09', 'SERVICE_UNAVAILABLE', true],
+    [422, 'ZPADD01', 'PAYER_UNAVAILABLE', false],
+  ] as const)(
+    'classifies PayID lookup HTTP %i safely before commit',
+    async (status, providerCode, expectedCode, retryable) => {
+      process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
+      process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
+        'payid-pseudonym-secret-at-least-32-bytes'
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            errors: [
+              {
+                title: 'Sensitive provider detail',
+                detail: 'Never expose this alias detail',
+                ...(providerCode === undefined ? {} : { code: providerCode }),
+              },
+            ],
+          }),
+          { status, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      const { t, requester, payer, payerUserId } = await setup()
+      await payer.action(api.paymentDestinations.create, {
+        destination: { type: 'alias_email', value: 'payer@example.com' },
+        setAsDefault: true,
+      })
+
+      await expect(
+        submit(requester, moneyRequestIntent(payerUserId)),
+      ).rejects.toMatchObject({
+        data: expect.objectContaining({ code: expectedCode, retryable }),
+      })
+      const durable = await durableSubmissionState(t)
+      expect(durable).toMatchObject({ requests: [], agreements: [], work: [] })
+      expect(JSON.stringify(durable)).not.toContain('Sensitive provider detail')
+    },
+  )
+
+  test('rechecks a PayID Default Destination after lookup and rolls back a race', async () => {
+    process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
+    process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
+      'payid-pseudonym-secret-at-least-32-bytes'
+    const { t, requester, payer, payerUserId } = await setup()
+    await payer.action(api.paymentDestinations.create, {
+      destination: { type: 'alias_email', value: 'payer@example.com' },
+      setAsDefault: true,
+    })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await payer.action(api.paymentDestinations.create, {
+        destination: { type: 'bban', value: '111222-0033333' },
+        setAsDefault: true,
+      })
+      return new Response(
+        JSON.stringify({ data: { display_name: 'Transient' } }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      )
+    })
+
+    await expect(
+      submit(requester, moneyRequestIntent(payerUserId)),
+    ).rejects.toMatchObject({
+      data: expect.objectContaining({ code: 'PAYER_UNAVAILABLE' }),
+    })
+    await expect(durableSubmissionState(t)).resolves.toMatchObject({
+      requests: [],
+      agreements: [],
+      work: [],
+    })
+  })
   test(
     'reactively exposes a created sandbox agreement after bounded provider work completes',
     createdAgreementTest,
@@ -1851,7 +2209,8 @@ describe('Money Request submission and requester read', () => {
           submissionFingerprint: proof.intentDigest,
           agreementAllocations: [
             {
-              ...preflight.payerDestinations[0],
+              payerId: preflight.payerDestinations[0].payerId,
+              destinationId: preflight.payerDestinations[0].destinationId,
               providerUid: '018f22e2-7c00-7000-8000-000000000099',
             },
           ],
@@ -1894,8 +2253,9 @@ describe('Money Request submission and requester read', () => {
         intent: candidate,
         submissionFingerprint: proof.intentDigest,
         agreementAllocations: preflight.payerDestinations.map(
-          (payerDestination, index) => ({
-            ...payerDestination,
+          ({ payerId, destinationId }, index) => ({
+            payerId,
+            destinationId,
             providerUid: `018f22e2-7c00-7000-8000-00000000009${index}`,
           }),
         ),
@@ -1942,8 +2302,9 @@ describe('Money Request submission and requester read', () => {
         intent: candidate,
         submissionFingerprint: proof.intentDigest,
         agreementAllocations: preflight.payerDestinations.map(
-          (payerDestination, index) => ({
-            ...payerDestination,
+          ({ payerId, destinationId }, index) => ({
+            payerId,
+            destinationId,
             providerUid:
               index === 1
                 ? existingAgreement.providerUid

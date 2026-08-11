@@ -33,7 +33,6 @@ import {
 import { SheetClose, SheetFooter } from '#/components/ui/sheet'
 import { Spinner } from '#/components/ui/spinner'
 import { toast } from '#/components/ui/toast'
-import { aliasResolution } from '#/server-fns/alias-resolution'
 import type { ConvexError } from 'convex/values'
 import {
   Building2,
@@ -284,45 +283,6 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                   children={(payIdTypeField) => (
                     <form.Field
                       name="value"
-                      validators={{
-                        onChangeAsyncDebounceMs: 500,
-                        onChangeAsync: async ({ value, fieldApi }) => {
-                          const aliasType = payIdTypeField.state.value
-
-                          if (!value || !aliasType) return
-
-                          fieldApi.setMeta((prev) => ({
-                            ...prev,
-                            isValidating: true,
-                          }))
-
-                          try {
-                            const result = await aliasResolution({
-                              data: {
-                                type: aliasType,
-                                value:
-                                  aliasType === 'alias_phone'
-                                    ? value
-                                        .replace(/[\s()-]/g, '')
-                                        .replace(/^0/, '+61')
-                                        .replace(/^\+61/, '+61-')
-                                    : value,
-                              },
-                            })
-
-                            if (result) return undefined
-
-                            return { message: 'Invalid PayID' }
-                          } catch (e) {
-                            return { message: 'Cannot validate PayID' }
-                          } finally {
-                            fieldApi.setMeta((prev) => ({
-                              ...prev,
-                              isValidating: false,
-                            }))
-                          }
-                        },
-                      }}
                       children={(valueField) => {
                         const isInvalid =
                           valueField.state.meta.isTouched &&

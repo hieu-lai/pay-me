@@ -7,10 +7,7 @@ import type { MutationCtx } from './_generated/server'
 import { internalAction, internalMutation } from './_generated/server'
 import { agreementCreationPool } from './lib/agreementCreationPool'
 import { decryptPaymentDestination } from './lib/paymentDestinationCrypto'
-import {
-  createBankAccountAgreement,
-  getAgreementByUid,
-} from './lib/zepto/agreement'
+import { createAgreement, getAgreementByUid } from './lib/zepto/agreement'
 import { createSandboxZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import {
@@ -25,8 +22,8 @@ import {
   recoveryClassForProviderError,
 } from './payToAgreementCreationState'
 import {
-  bankAccountRoutingSnapshotValidator,
   providerAgreementStateValidator,
+  routingSnapshotValidator,
 } from './validators/payToAgreements'
 
 const LEASE_DURATION_MS = 3 * 60_000
@@ -80,9 +77,9 @@ const creationInputValidator = v.object({
   amountCents: v.number(),
   description: v.string(),
   creditorName: v.string(),
-  creditorSnapshot: bankAccountRoutingSnapshotValidator,
+  creditorSnapshot: routingSnapshotValidator,
   debtorName: v.string(),
-  debtorSnapshot: bankAccountRoutingSnapshotValidator,
+  debtorSnapshot: routingSnapshotValidator,
 })
 type CreationInput = Infer<typeof creationInputValidator>
 
@@ -841,7 +838,6 @@ export const create = internalAction({
           keyVersion: input.debtorSnapshot.keyVersion,
         }),
       ])
-      if (creditor.type !== 'bban' || debtor.type !== 'bban') unavailable()
       const client = createSandboxZeptoClientFromEnv({
         onAttempt: async ({ method, attempt }) => {
           if (method !== 'POST') return
@@ -858,17 +854,17 @@ export const create = internalAction({
           if (!recorded) unavailable()
         },
       })
-      const created = await createBankAccountAgreement(client, {
+      const created = await createAgreement(client, {
         providerUid: input.providerUid,
         amountCents: input.amountCents,
         description: input.description,
         creditor: {
           name: input.creditorName,
-          accountIdentifier: creditor.value,
+          accountIdentifier: creditor,
         },
         debtor: {
           name: input.debtorName,
-          accountIdentifier: debtor.value,
+          accountIdentifier: debtor,
         },
       })
       const recorded: boolean = await ctx.runMutation(
