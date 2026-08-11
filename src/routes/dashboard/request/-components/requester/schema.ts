@@ -5,11 +5,11 @@ export const MAX_PAYERS = 5
 const amountSchema = z
   .string({ error: 'Enter an amount.' })
   .trim()
-  .regex(/^\d+(?:\.\d+)?$/, 'Enter a valid amount.')
+  .regex(/^\d+(?:\.\d{1,2})?$/, 'Enter a valid amount.')
   .refine((value) => Number(value) >= 1, 'Amount must be at least 1.')
   .refine(
-    (value) => Number(value) <= 1_000_000_000,
-    'Amount must be 1,000,000,000 or less.',
+    (value) => Number(value) <= 10_000_000,
+    'Amount must be 10,000,000 or less.',
   )
 
 const descriptionSchema = z

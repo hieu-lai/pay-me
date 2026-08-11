@@ -24,10 +24,16 @@ import {
 } from '#/components/ui/item'
 import { toast } from '#/components/ui/toast'
 import getInitials from '#/lib/get-initials'
+import { pluralize } from '#/lib/utils'
 import { submitMoneyRequest } from '#/server-fns/money-requests'
 import { DollarSignIcon, XIcon } from 'lucide-react'
 
 import type { Id } from '../../../../../../convex/_generated/dataModel'
+import {
+  dollarsToCents,
+  formatDollarAmount,
+  normalizeDollarAmount,
+} from './amount'
 import { MAX_PAYERS } from './schema'
 import { SearchPayers } from './search-payers'
 import {
@@ -48,14 +54,11 @@ export function Form() {
         description: e.message,
       })
     },
-    onSuccess: (_result, variables) => {
-      clearPendingSubmissionKey(
-        window.sessionStorage,
-        variables.data.submissionKey,
-      )
+    onSuccess: (_result, { data: { submissionKey, payerIds } }) => {
+      clearPendingSubmissionKey(window.sessionStorage, submissionKey)
       toast.add({
         type: 'success',
-        title: 'Money request sent',
+        title: `Money ${pluralize('request', payerIds.length)} sent`,
       })
       form.reset()
     },
@@ -64,7 +67,7 @@ export function Form() {
   const form = useRequestForm({
     onSubmit: async (values) => {
       const terms = {
-        amountCents: Number(values.amount),
+        amountCents: dollarsToCents(values.amount),
         description: values.description,
         payerIds: values.payers.map((payer) => payer.id as Id<'users'>),
       }
@@ -106,11 +109,14 @@ export function Form() {
                   <InputGroupInput
                     id={field.name}
                     name={field.name}
-                    value={field.state.value}
+                    value={formatDollarAmount(field.state.value)}
                     onBlur={field.handleBlur}
-                    onChange={(e) => field.handleChange(e.target.value)}
+                    onChange={(e) =>
+                      field.handleChange(normalizeDollarAmount(e.target.value))
+                    }
                     aria-invalid={isInvalid}
                     placeholder="0.00"
+                    inputMode="decimal"
                     className="text-right"
                   />
                 </InputGroup>
