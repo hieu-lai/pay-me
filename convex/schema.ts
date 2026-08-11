@@ -1,6 +1,14 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 
+const bankAccountRoutingSnapshot = v.object({
+  kind: v.literal('bban'),
+  maskedDisplay: v.string(),
+  ciphertext: v.string(),
+  nonce: v.string(),
+  keyVersion: v.string(),
+})
+
 export default defineSchema({
   users: defineTable({
     tokenIdentifier: v.string(),
@@ -41,4 +49,65 @@ export default defineSchema({
       searchField: 'searchLabel',
       filterFields: ['ownerUserId'],
     }),
+
+  moneyRequests: defineTable({
+    requesterUserId: v.id('users'),
+    requesterNameSnapshot: v.string(),
+    amountCents: v.number(),
+    currency: v.literal('AUD'),
+    purpose: v.literal('other'),
+    description: v.string(),
+    submissionKey: v.string(),
+    submissionFingerprint: v.string(),
+    sourceCreditorPaymentDestinationId: v.id('paymentDestinations'),
+    creditorSnapshot: bankAccountRoutingSnapshot,
+    submittedAt: v.number(),
+  })
+    .index('by_requesterUserId', ['requesterUserId'])
+    .index('by_requesterUserId_and_submissionKey', [
+      'requesterUserId',
+      'submissionKey',
+    ]),
+
+  payToAgreements: defineTable({
+    moneyRequestId: v.id('moneyRequests'),
+    payerUserId: v.id('users'),
+    payerNameSnapshot: v.string(),
+    sourceDebtorPaymentDestinationId: v.id('paymentDestinations'),
+    debtorSnapshot: bankAccountRoutingSnapshot,
+    provider: v.literal('zepto'),
+    environment: v.literal('sandbox'),
+    apiVersion: v.literal('20260101'),
+    providerUid: v.string(),
+    creationState: v.literal('queued'),
+    creationUpdatedAt: v.number(),
+    lifecycleState: v.literal('pending'),
+    lifecycleConfidence: v.literal('provisional'),
+    lifecycleObservedAt: v.number(),
+    trackingState: v.literal('verification_due'),
+    trackingUpdatedAt: v.number(),
+  })
+    .index('by_moneyRequestId', ['moneyRequestId'])
+    .index('by_payerUserId', ['payerUserId'])
+    .index('by_moneyRequestId_and_payerUserId', [
+      'moneyRequestId',
+      'payerUserId',
+    ])
+    .index('by_environment_and_providerUid', ['environment', 'providerUid']),
+
+  payToAgreementEvidence: defineTable({
+    payToAgreementId: v.id('payToAgreements'),
+    kind: v.literal('local_accepted'),
+    observedAt: v.number(),
+  }).index('by_payToAgreementId_and_observedAt', [
+    'payToAgreementId',
+    'observedAt',
+  ]),
+
+  payToAgreementWorkItems: defineTable({
+    payToAgreementId: v.id('payToAgreements'),
+    kind: v.literal('create'),
+    state: v.literal('queued'),
+    availableAt: v.number(),
+  }).index('by_payToAgreementId', ['payToAgreementId']),
 })

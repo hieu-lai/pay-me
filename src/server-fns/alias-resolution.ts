@@ -1,7 +1,6 @@
 import { auth } from '@clerk/tanstack-react-start/server'
 import { createServerFn } from '@tanstack/react-start'
 import { getRequestHeader } from '@tanstack/react-start/server'
-import { sleep } from '#/lib/utils'
 import { z } from 'zod'
 
 const phoneAliasValueSchema = z
@@ -58,7 +57,7 @@ export const aliasResolutionParamsSchema = z.discriminatedUnion('type', [
 
 export const aliasResolution = createServerFn({ method: 'GET' })
   .validator(aliasResolutionParamsSchema)
-  .handler(async ({ data: { type, value } }) => {
+  .handler(async ({ data: { value } }) => {
     const { userId } = await auth()
 
     if (!userId) {

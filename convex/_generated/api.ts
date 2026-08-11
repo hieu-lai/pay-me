@@ -9,6 +9,7 @@
  */
 
 import type * as http from "../http.js";
+import type * as lib_moneyRequestIngress from "../lib/moneyRequestIngress.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
@@ -27,6 +28,7 @@ import type * as lib_zepto_index from "../lib/zepto/index.js";
 import type * as lib_zepto_pagination from "../lib/zepto/pagination.js";
 import type * as lib_zepto_webhook from "../lib/zepto/webhook.js";
 import type * as migrations from "../migrations.js";
+import type * as moneyRequests from "../moneyRequests.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as seed from "../seed.js";
 import type * as users from "../users.js";
@@ -42,6 +44,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   http: typeof http;
+  "lib/moneyRequestIngress": typeof lib_moneyRequestIngress;
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
@@ -60,6 +63,7 @@ const fullApi: ApiFromModules<{
   "lib/zepto/pagination": typeof lib_zepto_pagination;
   "lib/zepto/webhook": typeof lib_zepto_webhook;
   migrations: typeof migrations;
+  moneyRequests: typeof moneyRequests;
   paymentDestinations: typeof paymentDestinations;
   seed: typeof seed;
   users: typeof users;
