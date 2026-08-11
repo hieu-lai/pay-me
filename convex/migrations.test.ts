@@ -8,6 +8,7 @@ import { v } from 'convex/values'
 import { expect, test } from 'vitest'
 
 import { components, internal } from './_generated/api'
+import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
 const encryptedValue = v.object({
@@ -176,5 +177,124 @@ test('backfills missing user search text from name and optional username', async
   ).resolves.toMatchObject({
     namedUser: { searchText: 'Searchable User' },
     usernameUser: { searchText: 'Username User payme-user' },
+  })
+})
+
+test('deletes all money request and PayTo agreement data', async () => {
+  const t = convexTest(schema, modules)
+  migrationComponent.register(t)
+
+  await t.run(async (ctx) => {
+    const requesterUserId = await ctx.db.insert('users', {
+      tokenIdentifier: 'issuer|cleanup-requester',
+      clerkUserId: 'cleanup-requester',
+      email: 'requester@example.com',
+      name: 'Cleanup Requester',
+      searchText: 'Cleanup Requester',
+    })
+    const payerUserId = await ctx.db.insert('users', {
+      tokenIdentifier: 'issuer|cleanup-payer',
+      clerkUserId: 'cleanup-payer',
+      email: 'payer@example.com',
+      name: 'Cleanup Payer',
+      searchText: 'Cleanup Payer',
+    })
+    const routingDestination = {
+      ownerUserId: requesterUserId,
+      type: 'bban' as const,
+      searchLabel: 'Everyday',
+      maskedDisplay: 'Bank account •••1234',
+      fingerprint: 'cleanup-fingerprint',
+      ciphertext: 'ciphertext',
+      nonce: 'nonce',
+      keyVersion: 'v1',
+    }
+    const creditorDestinationId = await ctx.db.insert(
+      'paymentDestinations',
+      routingDestination,
+    )
+    const debtorDestinationId = await ctx.db.insert('paymentDestinations', {
+      ...routingDestination,
+      ownerUserId: payerUserId,
+      fingerprint: 'cleanup-payer-fingerprint',
+    })
+    const routingSnapshot = {
+      kind: 'bban' as const,
+      maskedDisplay: 'Bank account •••1234',
+      ciphertext: 'ciphertext',
+      nonce: 'nonce',
+      keyVersion: 'v1',
+    }
+    const moneyRequestId = await ctx.db.insert('moneyRequests', {
+      requesterUserId,
+      requesterNameSnapshot: 'Cleanup Requester',
+      amountCents: 1000,
+      currency: 'AUD',
+      purpose: 'other',
+      description: 'Cleanup test',
+      submissionKey: 'cleanup-key',
+      submissionFingerprint: 'cleanup-submission-fingerprint',
+      sourceCreditorPaymentDestinationId: creditorDestinationId,
+      creditorSnapshot: routingSnapshot,
+      submittedAt: 1,
+    })
+    const payToAgreementId = await ctx.db.insert('payToAgreements', {
+      moneyRequestId,
+      payerUserId,
+      payerNameSnapshot: 'Cleanup Payer',
+      sourceDebtorPaymentDestinationId: debtorDestinationId,
+      debtorSnapshot: routingSnapshot,
+      provider: 'zepto',
+      environment: 'sandbox',
+      apiVersion: '20260101',
+      providerUid: 'cleanup-provider-uid',
+      creationState: 'queued',
+      creationUpdatedAt: 1,
+      lifecycleState: 'pending',
+      lifecycleConfidence: 'provisional',
+      lifecycleObservedAt: 1,
+      trackingState: 'verification_due',
+      trackingUpdatedAt: 1,
+    })
+    await ctx.db.insert('payToAgreementEvidence', {
+      payToAgreementId,
+      kind: 'local_accepted',
+      observedAt: 1,
+    })
+    await ctx.db.insert('payToAgreementWorkItems', {
+      payToAgreementId,
+      kind: 'create',
+      state: 'queued',
+      availableAt: 1,
+    })
+  })
+
+  for (const migration of [
+    internal.migrations.deleteAllPayToAgreementEvidence,
+    internal.migrations.deleteAllPayToAgreementWorkItems,
+    internal.migrations.deleteAllPayToAgreements,
+    internal.migrations.deleteAllMoneyRequests,
+  ]) {
+    await t.run(async (ctx) => {
+      await runToCompletion(ctx, components.migrations, migration)
+    })
+  }
+
+  await expect(
+    t.run(async (ctx) => ({
+      moneyRequests: await ctx.db.query('moneyRequests').take(1),
+      agreements: await ctx.db.query('payToAgreements').take(1),
+      evidence: await ctx.db.query('payToAgreementEvidence').take(1),
+      workItems: await ctx.db.query('payToAgreementWorkItems').take(1),
+      users: await ctx.db.query('users').take(3),
+      paymentDestinations: await ctx.db.query('paymentDestinations').take(3),
+    })),
+  ).resolves.toMatchObject({
+    moneyRequests: [],
+    agreements: [],
+    evidence: [],
+    workItems: [],
+    users: [{}, {}],
+    paymentDestinations: [{}, {}],
   })
 })

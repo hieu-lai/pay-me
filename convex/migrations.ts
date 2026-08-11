@@ -44,3 +44,38 @@ export const backfillUserSearchText = migrations.define({
 export const runBackfillUserSearchText = migrations.runner(
   internal.migrations.backfillUserSearchText,
 )
+
+export const deleteAllPayToAgreementEvidence = migrations.define({
+  table: 'payToAgreementEvidence',
+  migrateOne: async (ctx, evidence) => {
+    await ctx.db.delete('payToAgreementEvidence', evidence._id)
+  },
+})
+
+export const deleteAllPayToAgreementWorkItems = migrations.define({
+  table: 'payToAgreementWorkItems',
+  migrateOne: async (ctx, workItem) => {
+    await ctx.db.delete('payToAgreementWorkItems', workItem._id)
+  },
+})
+
+export const deleteAllPayToAgreements = migrations.define({
+  table: 'payToAgreements',
+  migrateOne: async (ctx, agreement) => {
+    await ctx.db.delete('payToAgreements', agreement._id)
+  },
+})
+
+export const deleteAllMoneyRequests = migrations.define({
+  table: 'moneyRequests',
+  migrateOne: async (ctx, moneyRequest) => {
+    await ctx.db.delete('moneyRequests', moneyRequest._id)
+  },
+})
+
+export const runDeleteAllMoneyRequestData = migrations.runner([
+  internal.migrations.deleteAllPayToAgreementEvidence,
+  internal.migrations.deleteAllPayToAgreementWorkItems,
+  internal.migrations.deleteAllPayToAgreements,
+  internal.migrations.deleteAllMoneyRequests,
+])
