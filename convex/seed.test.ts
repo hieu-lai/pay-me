@@ -1,12 +1,22 @@
 /// <reference types="vite/client" />
 
 import { convexTest } from 'convex-test'
-import { expect, test } from 'vitest'
+import { beforeEach, expect, test } from 'vitest'
 
 import { internal } from './_generated/api'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
+const encryptionKey = btoa('0123456789abcdef0123456789abcdef')
+const fingerprintKey = btoa('fingerprint-key-32-bytes-long!!xx')
+
+beforeEach(() => {
+  process.env.PAYMENT_DESTINATION_ENCRYPTION_KEYS = JSON.stringify({
+    v1: encryptionKey,
+  })
+  process.env.PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION = 'v1'
+  process.env.PAYMENT_DESTINATION_FINGERPRINT_KEY = fingerprintKey
+})
 
 test('seeds exactly ten users and is safe to rerun', async () => {
   const t = convexTest(schema, modules)
@@ -37,4 +47,46 @@ test('seeds exactly ten users and is safe to rerun', async () => {
     'mock_user_009',
     'mock_user_010',
   ])
+})
+
+test('seeds one encrypted default payment destination per requested user', async () => {
+  const t = convexTest(schema, modules)
+  await t.mutation(internal.seed.users, {})
+  const users = await t.run(async (ctx) => ctx.db.query('users').take(6))
+  const ownerUserIds = users.map((user) => user._id)
+
+  await expect(
+    t.action(internal.seed.paymentDestinations, { ownerUserIds }),
+  ).resolves.toEqual({ inserted: 6, existing: 0, total: 6 })
+  await expect(
+    t.action(internal.seed.paymentDestinations, { ownerUserIds }),
+  ).resolves.toEqual({ inserted: 0, existing: 6, total: 6 })
+
+  const destinations = await t.run(async (ctx) =>
+    ctx.db.query('paymentDestinations').take(7),
+  )
+  expect(destinations).toHaveLength(6)
+  expect(destinations).toEqual(
+    expect.arrayContaining(
+      ownerUserIds.map((ownerUserId) =>
+        expect.objectContaining({
+          ownerUserId,
+          label: 'Mock account',
+          type: 'bban',
+          keyVersion: 'v1',
+        }),
+      ),
+    ),
+  )
+  for (const user of users) {
+    const storedUser = await t.run(async (ctx) => ctx.db.get('users', user._id))
+    expect(storedUser?.defaultPaymentDestinationId).toBeDefined()
+    expect(
+      destinations.some(
+        (destination) =>
+          destination._id === storedUser?.defaultPaymentDestinationId &&
+          destination.ownerUserId === user._id,
+      ),
+    ).toBe(true)
+  }
 })

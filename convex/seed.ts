@@ -1,6 +1,9 @@
-import { v } from 'convex/values'
+import { ConvexError, v } from 'convex/values'
 
-import { internalMutation } from './_generated/server'
+import { internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
+import { internalAction, internalMutation } from './_generated/server'
+import { protectPaymentDestination } from './lib/paymentDestinationCrypto'
 import { userSearchText } from './lib/userSearch'
 
 const mockUsers = [
@@ -101,5 +104,59 @@ export const users = internalMutation({
     }
 
     return { inserted, existing, total: mockUsers.length }
+  },
+})
+
+function mockAccountNumber(ownerUserId: Id<'users'>): string {
+  let hash = 2_166_136_261
+  for (const character of ownerUserId) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16_777_619) >>> 0
+  }
+  return String(10_000_000 + (hash % 90_000_000))
+}
+
+/** Add one encrypted, default mock bank account to each requested user. */
+export const paymentDestinations = internalAction({
+  args: { ownerUserIds: v.array(v.id('users')) },
+  returns: v.object({
+    inserted: v.number(),
+    existing: v.number(),
+    total: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    let inserted = 0
+    let existing = 0
+
+    for (const ownerUserId of new Set(args.ownerUserIds)) {
+      const protectedDestination = await protectPaymentDestination({
+        type: 'bban',
+        value: `123456-${mockAccountNumber(ownerUserId)}`,
+      })
+
+      try {
+        await ctx.runMutation(internal.paymentDestinations.insertProtected, {
+          ownerUserId,
+          protectedDestination,
+          label: 'Mock account',
+          setAsDefault: true,
+        })
+        inserted += 1
+      } catch (error) {
+        if (
+          error instanceof ConvexError &&
+          typeof error.data === 'object' &&
+          error.data !== null &&
+          'code' in error.data &&
+          error.data.code === 'PAYMENT_DESTINATION_ALREADY_EXISTS'
+        ) {
+          existing += 1
+          continue
+        }
+        throw error
+      }
+    }
+
+    return { inserted, existing, total: inserted + existing }
   },
 })
