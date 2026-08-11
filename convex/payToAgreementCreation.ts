@@ -2,7 +2,7 @@ import type { Infer } from 'convex/values'
 import { ConvexError, v } from 'convex/values'
 
 import { internal } from './_generated/api'
-import type { Id } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalAction, internalMutation } from './_generated/server'
 import { agreementCreationPool } from './lib/agreementCreationPool'
@@ -16,6 +16,7 @@ import { ZeptoClientError } from './lib/zepto/error'
 import {
   canRecordLeaseOutcome,
   claimDecision,
+  creationFailureKind,
   creationStateForPostFailure,
   decideAfterNotFound,
   decideAfterVerificationFailure,
@@ -29,6 +30,47 @@ import {
 } from './validators/payToAgreements'
 
 const LEASE_DURATION_MS = 3 * 60_000
+
+type CurrentFailureKind = NonNullable<
+  Doc<'payToAgreements'>['currentFailure']
+>['kind']
+
+function currentFailure(kind: CurrentFailureKind, observedAt: number) {
+  return { kind, observedAt }
+}
+
+function postFailureProjection(
+  state: ReturnType<typeof creationStateForPostFailure>,
+  observedAt: number,
+) {
+  const failure = (trackingState: 'checking' | 'retrying') => {
+    const kind = creationFailureKind(state, trackingState)
+    if (!kind) unavailable()
+    return currentFailure(kind, observedAt)
+  }
+  switch (state) {
+    case 'verifying':
+      return {
+        trackingState: 'checking' as const,
+        currentFailure: failure('checking'),
+      }
+    case 'retry_wait':
+      return {
+        trackingState: 'retrying' as const,
+        currentFailure: failure('retrying'),
+      }
+    case 'manual_hold':
+      return {
+        trackingState: 'needs_review' as const,
+        currentFailure: currentFailure(creationFailureKind(state)!, observedAt),
+      }
+    case 'failed':
+      return {
+        trackingState: 'stopped' as const,
+        currentFailure: currentFailure(creationFailureKind(state)!, observedAt),
+      }
+  }
+}
 
 const creationInputValidator = v.object({
   kind: v.union(v.literal('post'), v.literal('verify')),
@@ -122,6 +164,7 @@ export const claimWork = internalMutation({
         creationUpdatedAt: args.nowMs,
         trackingState: 'checking',
         trackingUpdatedAt: args.nowMs,
+        currentFailure: undefined,
       })
       await ctx.db.insert('payToAgreementEvidence', {
         payToAgreementId: agreement._id,
@@ -148,6 +191,10 @@ export const claimWork = internalMutation({
         creationUpdatedAt: args.nowMs,
         trackingState: 'checking',
         trackingUpdatedAt: args.nowMs,
+        currentFailure: currentFailure(
+          'provider_outcome_uncertain',
+          args.nowMs,
+        ),
       })
       if (decision.recoveredExpiredLease) {
         await ctx.db.insert('payToAgreementEvidence', {
@@ -325,6 +372,7 @@ export const recordCreated = internalMutation({
       lifecycleObservedAt: args.observedAt,
       trackingState: 'verification_due',
       trackingUpdatedAt: args.observedAt,
+      currentFailure: undefined,
       providerCreatedAt: args.result.providerCreatedAt,
       providerMmsAgreementId: args.result.providerMmsAgreementId,
     })
@@ -388,19 +436,14 @@ export const recordPostFailure = internalMutation({
         : nextState === 'manual_hold'
           ? 'held'
           : 'failed'
+    const projection = postFailureProjection(nextState, args.observedAt)
     enforceTransition(agreement.creationState, nextState)
     await ctx.db.patch('payToAgreements', agreement._id, {
       creationState: nextState,
       creationUpdatedAt: args.observedAt,
-      trackingState:
-        nextState === 'verifying'
-          ? 'checking'
-          : nextState === 'retry_wait'
-            ? 'retrying'
-            : nextState === 'manual_hold'
-              ? 'needs_review'
-              : 'stopped',
+      trackingState: projection.trackingState,
       trackingUpdatedAt: args.observedAt,
+      currentFailure: projection.currentFailure,
     })
     const runAfter =
       nextState === 'retry_wait'
@@ -496,6 +539,10 @@ export const recordVerificationAbsent = internalMutation({
         creationUpdatedAt: args.observedAt,
         trackingState: 'needs_review',
         trackingUpdatedAt: args.observedAt,
+        currentFailure: currentFailure(
+          'operator_review_required',
+          args.observedAt,
+        ),
       })
       await ctx.db.patch('payToAgreementWorkItems', workItem._id, {
         state: 'held',
@@ -515,12 +562,17 @@ export const recordVerificationAbsent = internalMutation({
     const delayMs = decision.kind === 'post_again' ? 0 : decision.delayMs
     const nextState =
       decision.kind === 'post_again' ? 'retry_wait' : 'verifying'
+    const nextTrackingState =
+      nextState === 'retry_wait' ? ('retrying' as const) : ('checking' as const)
+    const failureKind = creationFailureKind(nextState, nextTrackingState)
+    if (!failureKind) unavailable()
     enforceTransition(agreement.creationState, nextState)
     await ctx.db.patch('payToAgreements', agreement._id, {
       creationState: nextState,
       creationUpdatedAt: args.observedAt,
-      trackingState: nextState === 'retry_wait' ? 'retrying' : 'checking',
+      trackingState: nextTrackingState,
       trackingUpdatedAt: args.observedAt,
+      currentFailure: currentFailure(failureKind, args.observedAt),
     })
     await ctx.db.patch('payToAgreementWorkItems', workItem._id, {
       state: 'waiting',
@@ -587,6 +639,10 @@ export const recordVerificationFailure = internalMutation({
         creationUpdatedAt: args.observedAt,
         trackingState: 'needs_review',
         trackingUpdatedAt: args.observedAt,
+        currentFailure: currentFailure(
+          'operator_review_required',
+          args.observedAt,
+        ),
       })
       await ctx.db.patch('payToAgreementWorkItems', workItem._id, {
         state: 'held',
@@ -607,6 +663,10 @@ export const recordVerificationFailure = internalMutation({
       creationUpdatedAt: args.observedAt,
       trackingState: 'retrying',
       trackingUpdatedAt: args.observedAt,
+      currentFailure: currentFailure(
+        'provider_temporarily_unavailable',
+        args.observedAt,
+      ),
     })
     await ctx.db.patch('payToAgreementWorkItems', workItem._id, {
       state: 'waiting',
@@ -657,6 +717,10 @@ export const reopenManualHold = internalMutation({
       creationUpdatedAt: nowMs,
       trackingState: args.mode === 'queued' ? 'retrying' : 'checking',
       trackingUpdatedAt: nowMs,
+      currentFailure:
+        args.mode === 'queued'
+          ? undefined
+          : currentFailure('provider_outcome_uncertain', nowMs),
     })
     await ctx.db.patch('payToAgreementWorkItems', workItem._id, {
       state: 'waiting',

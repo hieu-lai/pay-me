@@ -177,6 +177,14 @@ async function durableSubmissionState(
   }))
 }
 
+function publicAgreementsByPayerName<
+  TAgreement extends { payer: { name: string } },
+>(agreements: TAgreement[]) {
+  return new Map(
+    agreements.map((agreement) => [agreement.payer.name, agreement]),
+  )
+}
+
 function moneyRequestIntent(
   payerId: Id<'users'>,
   overrides: Partial<{
@@ -706,6 +714,389 @@ describe('Money Request submission and requester read', () => {
     expect(
       new Set(durable.agreements.map(({ providerUid }) => providerUid)).size,
     ).toBe(5)
+  })
+
+  test('durably backpressures accepted work beyond the provider concurrency bound', async () => {
+    const releases: Array<() => void> = []
+    const trackedProviderUids = new Set<string>()
+    let activeProviderRequests = 0
+    let maximumActiveProviderRequests = 0
+    let providerRequestCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      const providerRequest = new Request(request)
+      if (providerRequest.method !== 'POST') {
+        throw new Error('Expected only agreement creation requests')
+      }
+      const body = (await providerRequest.json()) as { uid: string }
+      const successResponse = () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              uid: body.uid,
+              state: 'pending',
+              created_at: '2026-08-11T09:30:00+10:00',
+              mms_agreement_id: null,
+            },
+          }),
+          {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        )
+      if (!trackedProviderUids.has(body.uid)) return successResponse()
+      providerRequestCount += 1
+      activeProviderRequests += 1
+      maximumActiveProviderRequests = Math.max(
+        maximumActiveProviderRequests,
+        activeProviderRequests,
+      )
+      return await new Promise<Response>((resolve) => {
+        releases.push(() => {
+          activeProviderRequests -= 1
+          resolve(successResponse())
+        })
+      })
+    })
+    const { t, requester, payerUserId } = await setup()
+    const addedPayers = await Promise.all(
+      [2, 3, 4, 5].map((index) => addPayer(t, index)),
+    )
+    const saturatedMoneyRequestId = await submit(requester, {
+      ...moneyRequestIntent(payerUserId),
+      payerIds: [payerUserId, ...addedPayers.map((payer) => payer.payerUserId)],
+    })
+    const saturatedAgreements = await t.run(async (ctx) =>
+      ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', saturatedMoneyRequestId),
+        )
+        .take(5),
+    )
+    for (const agreement of saturatedAgreements) {
+      trackedProviderUids.add(agreement.providerUid)
+    }
+    const waitForProviderRequestCount = async (expected: number) => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (providerRequestCount === expected) return
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      }
+      expect(providerRequestCount).toBe(expected)
+    }
+    const drain = t.finishAllScheduledFunctions(() => {})
+    await waitForProviderRequestCount(5)
+
+    const backpressuredMoneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId, {
+        submissionKey: '018f22e2-7c00-7000-8000-000000000002',
+      }),
+    )
+    const acceptedBackpressure = await t.run(async (ctx) => {
+      const agreement = await ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', backpressuredMoneyRequestId),
+        )
+        .unique()
+      if (!agreement) throw new Error('Expected backpressured agreement')
+      trackedProviderUids.add(agreement.providerUid)
+      return {
+        agreement,
+        workItem: await ctx.db
+          .query('payToAgreementWorkItems')
+          .withIndex('by_payToAgreementId', (q) =>
+            q.eq('payToAgreementId', agreement._id),
+          )
+          .unique(),
+      }
+    })
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(providerRequestCount).toBe(5)
+    expect(maximumActiveProviderRequests).toBe(5)
+    expect(acceptedBackpressure.agreement.creationState).toBe('queued')
+    expect(acceptedBackpressure.workItem?.state).toBe('queued')
+
+    for (let completed = 0; completed < 5; completed += 1) {
+      releases.shift()?.()
+    }
+    await t.finishInProgressScheduledFunctions()
+    const backlogDrains: Array<Promise<void>> = []
+    for (
+      let attempt = 0;
+      attempt < 10 && providerRequestCount < 6;
+      attempt += 1
+    ) {
+      backlogDrains.push(t.finishAllScheduledFunctions(() => {}))
+      for (let turn = 0; turn < 20 && providerRequestCount < 6; turn += 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      }
+    }
+    expect(providerRequestCount).toBe(6)
+    expect(maximumActiveProviderRequests).toBe(5)
+    while (releases.length > 0) releases.shift()?.()
+    await t.finishInProgressScheduledFunctions()
+    await Promise.all([drain, ...backlogDrains])
+
+    const drained = await requester.query(api.moneyRequests.get, {
+      moneyRequestId: backpressuredMoneyRequestId,
+    })
+    expect(drained).toMatchObject({
+      agreements: [{ creation: { state: 'created' } }],
+    })
+  })
+
+  test('preserves five independent mixed outcomes through delay and targeted recovery', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const addedPayers = await Promise.all(
+      [2, 3, 4, 5].map((index) => addPayer(t, index)),
+    )
+    const moneyRequestId = await submit(requester, {
+      ...moneyRequestIntent(payerUserId),
+      payerIds: [payerUserId, ...addedPayers.map((payer) => payer.payerUserId)],
+    })
+    const agreements = await t.run(async (ctx) =>
+      ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', moneyRequestId),
+        )
+        .take(5),
+    )
+    const byPayerName = new Map(
+      agreements.map((agreement) => [agreement.payerNameSnapshot, agreement]),
+    )
+    const createdAgreement = byPayerName.get(payerIdentity.name)
+    const failedAgreement = byPayerName.get(addedPayers[0].identity.name)
+    const ambiguousAgreement = byPayerName.get(addedPayers[1].identity.name)
+    const delayedAgreement = byPayerName.get(addedPayers[2].identity.name)
+    if (
+      !createdAgreement ||
+      !failedAgreement ||
+      !ambiguousAgreement ||
+      !delayedAgreement
+    ) {
+      throw new Error('Expected every mixed-outcome agreement')
+    }
+
+    const nowMs = Date.now()
+    const claim = async (
+      agreement: (typeof agreements)[number],
+      leaseToken: string,
+    ) => {
+      const result = await t.mutation(
+        internal.payToAgreementCreation.claimWork,
+        { payToAgreementId: agreement._id, leaseToken, nowMs },
+      )
+      expect(result?.kind).toBe('post')
+    }
+    await claim(createdAgreement, 'created-worker')
+    await t.mutation(internal.payToAgreementCreation.recordCreated, {
+      payToAgreementId: createdAgreement._id,
+      leaseToken: 'created-worker',
+      result: {
+        providerState: 'pending',
+        providerCreatedAt: nowMs,
+        providerMmsAgreementId: null,
+      },
+      observedAt: nowMs,
+    })
+    await claim(failedAgreement, 'failed-worker')
+    await t.mutation(internal.payToAgreementCreation.recordPostFailure, {
+      payToAgreementId: failedAgreement._id,
+      leaseToken: 'failed-worker',
+      recoveryClass: 'fail',
+      category: 'http_422_raw-provider-detail',
+      observedAt: nowMs,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(failedAgreement._id, { currentFailure: undefined })
+    })
+    await claim(ambiguousAgreement, 'ambiguous-worker')
+    await t.mutation(internal.payToAgreementCreation.recordPostFailure, {
+      payToAgreementId: ambiguousAgreement._id,
+      leaseToken: 'ambiguous-worker',
+      recoveryClass: 'verify',
+      category: 'network_raw-provider-detail',
+      observedAt: nowMs,
+    })
+    await claim(delayedAgreement, 'delayed-worker')
+    await t.mutation(internal.payToAgreementCreation.recordPostFailure, {
+      payToAgreementId: delayedAgreement._id,
+      leaseToken: 'delayed-worker',
+      recoveryClass: 'retry',
+      category: 'http_422_raw-provider-detail',
+      observedAt: nowMs,
+    })
+
+    const mixed = await requester.query(api.moneyRequests.get, {
+      moneyRequestId,
+    })
+    if (!('agreements' in mixed)) throw new Error('Expected Requester detail')
+    const mixedByPayerName = publicAgreementsByPayerName(mixed.agreements)
+    expect(mixedByPayerName.get(payerIdentity.name)).toMatchObject({
+      creation: { state: 'created' },
+    })
+    expect(mixedByPayerName.get(addedPayers[0].identity.name)).toMatchObject({
+      creation: { state: 'failed' },
+      tracking: { state: 'stopped' },
+      failure: {
+        code: 'requestRejected',
+        message:
+          'This PayTo Agreement could not be created. Submit a new Money Request after checking the Payer details.',
+        retryable: false,
+      },
+    })
+    expect(mixedByPayerName.get(addedPayers[1].identity.name)).toMatchObject({
+      creation: { state: 'verifying' },
+      tracking: { state: 'checking' },
+      failure: {
+        code: 'providerOutcomeUncertain',
+        message: 'The provider outcome is being verified safely.',
+        retryable: true,
+      },
+    })
+    expect(mixedByPayerName.get(addedPayers[2].identity.name)).toMatchObject({
+      creation: { state: 'retrying' },
+      tracking: { state: 'retrying' },
+      failure: {
+        code: 'providerTemporarilyUnavailable',
+        message:
+          'PayTo Agreement creation is delayed and will retry automatically.',
+        retryable: true,
+      },
+    })
+    expect(mixedByPayerName.get(addedPayers[3].identity.name)).toMatchObject({
+      creation: { state: 'queued' },
+      tracking: { state: 'verificationDue' },
+    })
+    expect(JSON.stringify(mixed)).not.toContain('raw-provider-detail')
+
+    const verificationRetryClaim = await t.mutation(
+      internal.payToAgreementCreation.claimWork,
+      {
+        payToAgreementId: ambiguousAgreement._id,
+        leaseToken: 'verification-retry-worker',
+        nowMs,
+      },
+    )
+    expect(verificationRetryClaim?.kind).toBe('verify')
+    await t.mutation(
+      internal.payToAgreementCreation.recordVerificationFailure,
+      {
+        payToAgreementId: ambiguousAgreement._id,
+        leaseToken: 'verification-retry-worker',
+        category: 'network_raw-provider-detail',
+        observedAt: nowMs,
+      },
+    )
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ambiguousAgreement._id, {
+        currentFailure: undefined,
+      })
+    })
+    const verificationRetry = await requester.query(api.moneyRequests.get, {
+      moneyRequestId,
+    })
+    if (!('agreements' in verificationRetry)) {
+      throw new Error('Expected Requester detail')
+    }
+    const verificationRetryByPayerName = publicAgreementsByPayerName(
+      verificationRetry.agreements,
+    )
+    expect(
+      verificationRetryByPayerName.get(addedPayers[1].identity.name),
+    ).toMatchObject({
+      creation: { state: 'verifying' },
+      tracking: { state: 'retrying' },
+      failure: {
+        code: 'providerTemporarilyUnavailable',
+        message:
+          'PayTo Agreement creation is delayed and will retry automatically.',
+        retryable: true,
+      },
+    })
+    expect(JSON.stringify(verificationRetry)).not.toContain(
+      'raw-provider-detail',
+    )
+
+    const heldAgreement = byPayerName.get(addedPayers[3].identity.name)
+    if (!heldAgreement) throw new Error('Expected held agreement')
+    await claim(heldAgreement, 'held-worker')
+    await t.mutation(internal.payToAgreementCreation.recordPostFailure, {
+      payToAgreementId: heldAgreement._id,
+      leaseToken: 'held-worker',
+      recoveryClass: 'hold',
+      category: 'configuration_raw-provider-detail',
+      observedAt: nowMs,
+    })
+    const held = await requester.query(api.moneyRequests.get, {
+      moneyRequestId,
+    })
+    if (!('agreements' in held)) throw new Error('Expected Requester detail')
+    const heldByPayerName = publicAgreementsByPayerName(held.agreements)
+    expect(heldByPayerName.get(addedPayers[3].identity.name)).toMatchObject({
+      creation: { state: 'needsReview' },
+      tracking: { state: 'needsReview' },
+      failure: {
+        code: 'operatorReviewRequired',
+        message:
+          'PayTo Agreement creation needs review before it can continue.',
+        retryable: false,
+      },
+    })
+    expect(heldByPayerName.get(payerIdentity.name)).toMatchObject({
+      creation: { state: 'created' },
+    })
+    expect(JSON.stringify(held)).not.toContain('raw-provider-detail')
+
+    const recoveryClaim = await t.mutation(
+      internal.payToAgreementCreation.claimWork,
+      {
+        payToAgreementId: ambiguousAgreement._id,
+        leaseToken: 'recovery-worker',
+        nowMs,
+      },
+    )
+    expect(recoveryClaim?.kind).toBe('verify')
+    await t.mutation(internal.payToAgreementCreation.recordCreated, {
+      payToAgreementId: ambiguousAgreement._id,
+      leaseToken: 'recovery-worker',
+      result: {
+        providerState: 'pending',
+        providerCreatedAt: nowMs,
+        providerMmsAgreementId: null,
+      },
+      observedAt: nowMs,
+    })
+
+    const recovered = await requester.query(api.moneyRequests.get, {
+      moneyRequestId,
+    })
+    if (!('agreements' in recovered)) {
+      throw new Error('Expected Requester detail')
+    }
+    const recoveredByPayerName = publicAgreementsByPayerName(
+      recovered.agreements,
+    )
+    expect(recoveredByPayerName.get(payerIdentity.name)).toMatchObject({
+      creation: { state: 'created' },
+    })
+    expect(
+      recoveredByPayerName.get(addedPayers[1].identity.name),
+    ).toMatchObject({ creation: { state: 'created' } })
+    expect(
+      recoveredByPayerName.get(addedPayers[1].identity.name),
+    ).not.toHaveProperty('failure')
+    expect(
+      recoveredByPayerName.get(addedPayers[0].identity.name),
+    ).toMatchObject({ creation: { state: 'failed' } })
+    expect(
+      recoveredByPayerName.get(addedPayers[2].identity.name),
+    ).toMatchObject({ creation: { state: 'retrying' } })
+    expect(
+      recoveredByPayerName.get(addedPayers[3].identity.name),
+    ).toMatchObject({ creation: { state: 'needsReview' } })
   })
 
   test('shows a Payer only their agreement and the Requester safe identity', async () => {

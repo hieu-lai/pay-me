@@ -10,6 +10,34 @@ export const creationStates = [
 
 export type CreationState = (typeof creationStates)[number]
 
+export type CreationFailureKind =
+  | 'provider_outcome_uncertain'
+  | 'provider_temporarily_unavailable'
+  | 'operator_review_required'
+  | 'immutable_request_rejected'
+
+export function creationFailureKind(
+  state: CreationState,
+  trackingState?: 'checking' | 'retrying',
+): CreationFailureKind | undefined {
+  switch (state) {
+    case 'verifying':
+      return trackingState === 'retrying'
+        ? 'provider_temporarily_unavailable'
+        : 'provider_outcome_uncertain'
+    case 'retry_wait':
+      return 'provider_temporarily_unavailable'
+    case 'manual_hold':
+      return 'operator_review_required'
+    case 'failed':
+      return 'immutable_request_rejected'
+    case 'queued':
+    case 'submitting':
+    case 'created':
+      return undefined
+  }
+}
+
 const transitions: Readonly<Record<CreationState, ReadonlySet<CreationState>>> =
   {
     queued: new Set(['submitting']),

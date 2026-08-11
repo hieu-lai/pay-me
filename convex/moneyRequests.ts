@@ -24,6 +24,7 @@ import {
 } from './lib/moneyRequestIngress'
 import { agreementCreationPool } from './lib/agreementCreationPool'
 import { requireUser } from './lib/requireUser'
+import { creationFailureKind } from './payToAgreementCreationState'
 
 const intentValidator = v.object({
   submissionKey: v.string(),
@@ -84,6 +85,19 @@ const publicAgreementValidator = v.object({
     ),
     updatedAt: v.number(),
   }),
+  failure: v.optional(
+    v.object({
+      code: v.union(
+        v.literal('providerOutcomeUncertain'),
+        v.literal('providerTemporarilyUnavailable'),
+        v.literal('operatorReviewRequired'),
+        v.literal('requestRejected'),
+      ),
+      message: v.string(),
+      retryable: v.boolean(),
+      observedAt: v.number(),
+    }),
+  ),
 })
 const moneyRequestFieldsValidator = v.object({
   id: v.id('moneyRequests'),
@@ -506,6 +520,7 @@ function publicAgreement(
   agreement: Doc<'payToAgreements'>,
   currentPayer: Doc<'users'> | null,
 ) {
+  const failure = agreement.currentFailure ?? legacyAgreementFailure(agreement)
   return {
     payer: publicUserIdentity(agreement.payerNameSnapshot, currentPayer),
     creation: {
@@ -523,20 +538,69 @@ function publicAgreement(
       observedAt: agreement.lifecycleObservedAt,
     },
     tracking: {
-      state:
-        agreement.creationState === 'submitting' ||
-        agreement.creationState === 'verifying'
-          ? ('checking' as const)
-          : agreement.creationState === 'retry_wait'
-            ? ('retrying' as const)
-            : agreement.creationState === 'manual_hold'
-              ? ('needsReview' as const)
-              : agreement.creationState === 'failed'
-                ? ('stopped' as const)
-                : ('verificationDue' as const),
+      state: publicTrackingState(agreement.trackingState),
       updatedAt: agreement.trackingUpdatedAt,
     },
+    ...(failure === undefined
+      ? {}
+      : { failure: publicAgreementFailure(failure) }),
   }
+}
+
+function publicTrackingState(state: Doc<'payToAgreements'>['trackingState']) {
+  switch (state) {
+    case 'verification_due':
+      return 'verificationDue' as const
+    case 'checking':
+    case 'retrying':
+    case 'stopped':
+      return state
+    case 'needs_review':
+      return 'needsReview' as const
+  }
+}
+
+function legacyAgreementFailure(agreement: Doc<'payToAgreements'>) {
+  const kind = creationFailureKind(
+    agreement.creationState,
+    agreement.trackingState === 'checking' ||
+      agreement.trackingState === 'retrying'
+      ? agreement.trackingState
+      : undefined,
+  )
+  return kind === undefined
+    ? undefined
+    : { kind, observedAt: agreement.creationUpdatedAt }
+}
+
+function publicAgreementFailure(
+  failure: NonNullable<Doc<'payToAgreements'>['currentFailure']>,
+) {
+  const projection = {
+    provider_outcome_uncertain: {
+      code: 'providerOutcomeUncertain',
+      message: 'The provider outcome is being verified safely.',
+      retryable: true,
+    },
+    provider_temporarily_unavailable: {
+      code: 'providerTemporarilyUnavailable',
+      message:
+        'PayTo Agreement creation is delayed and will retry automatically.',
+      retryable: true,
+    },
+    operator_review_required: {
+      code: 'operatorReviewRequired',
+      message: 'PayTo Agreement creation needs review before it can continue.',
+      retryable: false,
+    },
+    immutable_request_rejected: {
+      code: 'requestRejected',
+      message:
+        'This PayTo Agreement could not be created. Submit a new Money Request after checking the Payer details.',
+      retryable: false,
+    },
+  } as const
+  return { ...projection[failure.kind], observedAt: failure.observedAt }
 }
 
 function publicLifecycleMeaning(

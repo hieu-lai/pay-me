@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest'
 import {
   canRecordLeaseOutcome,
   claimDecision,
+  creationFailureKind,
   creationStateForPostFailure,
   decideAfterNotFound,
   decideAfterVerificationFailure,
@@ -12,6 +13,20 @@ import {
 } from './payToAgreementCreationState'
 
 describe('PayTo Agreement creation state model', () => {
+  test.each([
+    ['verifying', 'checking', 'provider_outcome_uncertain'],
+    ['verifying', 'retrying', 'provider_temporarily_unavailable'],
+    ['retry_wait', undefined, 'provider_temporarily_unavailable'],
+    ['manual_hold', undefined, 'operator_review_required'],
+    ['failed', undefined, 'immutable_request_rejected'],
+    ['created', undefined, undefined],
+  ] as const)(
+    'maps %s with %s tracking to safe failure %s',
+    (state, trackingState, expected) => {
+      expect(creationFailureKind(state, trackingState)).toBe(expected)
+    },
+  )
+
   test.each([
     ['queued', 'submitting'],
     ['submitting', 'created'],

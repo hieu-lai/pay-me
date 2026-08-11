@@ -102,6 +102,17 @@ export default defineSchema({
       v.literal('stopped'),
     ),
     trackingUpdatedAt: v.number(),
+    currentFailure: v.optional(
+      v.object({
+        kind: v.union(
+          v.literal('provider_outcome_uncertain'),
+          v.literal('provider_temporarily_unavailable'),
+          v.literal('operator_review_required'),
+          v.literal('immutable_request_rejected'),
+        ),
+        observedAt: v.number(),
+      }),
+    ),
     providerCreatedAt: v.optional(v.number()),
     providerMmsAgreementId: v.optional(v.union(v.string(), v.null())),
   })
