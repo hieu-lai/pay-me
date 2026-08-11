@@ -25,9 +25,9 @@ import {
 import { toast } from '#/components/ui/toast'
 import getInitials from '#/lib/get-initials'
 import { submitMoneyRequest } from '#/server-fns/money-requests'
-import type { Id } from '../../../../../../convex/_generated/dataModel'
 import { DollarSignIcon, XIcon } from 'lucide-react'
 
+import type { Id } from '../../../../../../convex/_generated/dataModel'
 import { MAX_RECIPIENTS } from './schema'
 import { SearchRecipients } from './search-recipients'
 import {
@@ -72,6 +72,7 @@ export function Form() {
         terms,
         window.sessionStorage,
       )
+
       mutate({
         data: {
           ...terms,
