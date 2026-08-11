@@ -39,6 +39,7 @@ import type * as users from "../users.js";
 import type * as validators_payToAgreements from "../validators/payToAgreements.js";
 import type * as validators_paymentDestinations from "../validators/paymentDestinations.js";
 import type * as validators_users from "../validators/users.js";
+import type * as validators_zeptoWebhook from "../validators/zeptoWebhook.js";
 import type * as zeptoWebhook from "../zeptoWebhook.js";
 
 import type {
@@ -80,6 +81,7 @@ const fullApi: ApiFromModules<{
   "validators/payToAgreements": typeof validators_payToAgreements;
   "validators/paymentDestinations": typeof validators_paymentDestinations;
   "validators/users": typeof validators_users;
+  "validators/zeptoWebhook": typeof validators_zeptoWebhook;
   zeptoWebhook: typeof zeptoWebhook;
 }> = anyApi as any;
 

@@ -4,6 +4,7 @@ import { httpRouter } from 'convex/server'
 import { internal } from './_generated/api'
 import { env, httpAction } from './_generated/server'
 import { verifyZeptoWebhookSignature } from './lib/zepto/webhook'
+import type { ZeptoWebhookItem } from './validators/zeptoWebhook'
 
 type AddUserArgs = {
   tokenIdentifier: string
@@ -80,13 +81,6 @@ export async function handleClerkWebhook(
   return new Response(null, { status: 200 })
 }
 
-type ZeptoWebhookItem = {
-  providerEventId: string
-  eventType: string
-  resourceUid: string
-  providerPublishedAt: number
-}
-
 type ZeptoWebhookDependencies = {
   signingSecret: string | undefined
   nowMs: () => number
@@ -102,6 +96,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function parseRfc3339DateTime(value: unknown): number | null {
+  if (typeof value !== 'string') return null
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+      value,
+    )
+  if (!match) return null
+  const [
+    ,
+    yearValue,
+    monthValue,
+    dayValue,
+    hourValue,
+    minuteValue,
+    secondValue,
+  ] = match
+  const year = Number(yearValue)
+  const month = Number(monthValue)
+  const day = Number(dayValue)
+  const hour = Number(hourValue)
+  const minute = Number(minuteValue)
+  const second = Number(secondValue)
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  if (month < 1 || month > 12) return null
+  const daysInMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ][month - 1]
+  if (day < 1 || day > daysInMonth || hour > 23 || minute > 59 || second > 59) {
+    return null
+  }
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function parseZeptoWebhookPayload(value: unknown): ZeptoWebhookItem[] | null {
   if (!isRecord(value) || !Array.isArray(value.data) || value.data.length < 1) {
     return null
@@ -110,8 +149,7 @@ function parseZeptoWebhookPayload(value: unknown): ZeptoWebhookItem[] | null {
   for (const valueItem of value.data) {
     if (!isRecord(valueItem)) return null
     const { id, type, published_at, resource_uid, resource_type } = valueItem
-    const publishedAt =
-      typeof published_at === 'string' ? Date.parse(published_at) : Number.NaN
+    const publishedAt = parseRfc3339DateTime(published_at)
     if (
       typeof id !== 'string' ||
       id.length < 1 ||
@@ -120,7 +158,7 @@ function parseZeptoWebhookPayload(value: unknown): ZeptoWebhookItem[] | null {
       typeof resource_uid !== 'string' ||
       !/^[A-Za-z0-9._~-]{1,64}$/.test(resource_uid) ||
       resource_type !== 'payto_agreement' ||
-      !Number.isFinite(publishedAt)
+      publishedAt === null
     ) {
       return null
     }

@@ -223,6 +223,7 @@ describe('POST /zepto/webhooks', () => {
     expect(durable.reconciliation).toEqual([
       expect.objectContaining({
         payToAgreementId,
+        providerUid: 'agreement_webhook_1',
         state: 'queued',
       }),
     ])
@@ -294,6 +295,31 @@ describe('POST /zepto/webhooks', () => {
     expect(
       (await t.fetch('/zepto/webhooks', { method: 'POST', ...malformed }))
         .status,
+    ).toBe(400)
+    expect(await durableWebhookState(t)).toMatchObject({
+      deliveries: [],
+      events: [],
+      evidence: [],
+      reconciliation: [],
+    })
+  })
+
+  test('rejects a non-RFC3339 provider timestamp without durable changes', async () => {
+    const { t } = await setupAgreement()
+    const request = await signedDelivery('delivery-bad-timestamp', {
+      data: [
+        {
+          id: 'event-bad-timestamp',
+          type: 'payto_agreement.activated',
+          published_at: '0',
+          resource_uid: 'agreement_webhook_1',
+          resource_type: 'payto_agreement',
+        },
+      ],
+    })
+
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...request })).status,
     ).toBe(400)
     expect(await durableWebhookState(t)).toMatchObject({
       deliveries: [],
@@ -382,5 +408,49 @@ describe('POST /zepto/webhooks', () => {
       expect.objectContaining({ outcome: 'conflict' }),
     ])
     expect(durable.reconciliation).toHaveLength(1)
+  })
+
+  test('does not let an older provisional signal overwrite a newer one', async () => {
+    const { t, payToAgreementId } = await setupAgreement()
+    const request = await signedDelivery('delivery-out-of-order', {
+      data: [
+        {
+          id: 'event-newer-cancelled',
+          type: 'payto_agreement.cancelled',
+          published_at: '2026-08-11T01:02:04.000Z',
+          resource_uid: 'agreement_webhook_1',
+          resource_type: 'payto_agreement',
+        },
+        {
+          id: 'event-older-activated',
+          type: 'payto_agreement.activated',
+          published_at: '2026-08-11T01:02:03.000Z',
+          resource_uid: 'agreement_webhook_1',
+          resource_type: 'payto_agreement',
+        },
+      ],
+    })
+
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...request })).status,
+    ).toBe(200)
+    const durable = await t.run(async (ctx) => ({
+      agreement: await ctx.db.get('payToAgreements', payToAgreementId),
+      evidence: await ctx.db.query('payToAgreementEvidence').collect(),
+    }))
+    expect(durable.agreement).toMatchObject({
+      lifecycleState: 'cancelled',
+      lifecycleProviderPublishedAt: Date.parse('2026-08-11T01:02:04.000Z'),
+    })
+    expect(durable.evidence).toEqual([
+      expect.objectContaining({
+        providerEventId: 'event-newer-cancelled',
+        outcome: 'applied',
+      }),
+      expect.objectContaining({
+        providerEventId: 'event-older-activated',
+        outcome: 'conflict',
+      }),
+    ])
   })
 })

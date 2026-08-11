@@ -3,13 +3,7 @@ import { v } from 'convex/values'
 import type { Id } from './_generated/dataModel'
 import { internalMutation } from './_generated/server'
 import type { ProviderAgreementState } from './validators/payToAgreements'
-
-const webhookItemValidator = v.object({
-  providerEventId: v.string(),
-  eventType: v.string(),
-  resourceUid: v.string(),
-  providerPublishedAt: v.number(),
-})
+import { applyZeptoWebhookDeliveryValidator } from './validators/zeptoWebhook'
 
 const lifecycleStateByEventType: Partial<
   Record<string, ProviderAgreementState>
@@ -31,12 +25,7 @@ const terminalLifecycleStates = new Set([
 ])
 
 export const applyDelivery = internalMutation({
-  args: {
-    deliveryId: v.string(),
-    signatureTimestamp: v.number(),
-    receivedAt: v.number(),
-    items: v.array(webhookItemValidator),
-  },
+  args: applyZeptoWebhookDeliveryValidator.fields,
   returns: v.object({ duplicate: v.boolean(), appliedItems: v.number() }),
   handler: async (ctx, args) => {
     const existingDelivery = await ctx.db
@@ -53,7 +42,7 @@ export const applyDelivery = internalMutation({
 
     let appliedItems = 0
     const eventIdsInDelivery = new Set<string>()
-    const reconciliationIds = new Set<Id<'payToAgreements'>>()
+    const reconciliationByAgreementId = new Map<Id<'payToAgreements'>, string>()
     for (const item of args.items) {
       if (eventIdsInDelivery.has(item.providerEventId)) continue
       eventIdsInDelivery.add(item.providerEventId)
@@ -86,17 +75,31 @@ export const applyDelivery = internalMutation({
         agreement.lifecycleConfidence === 'confirmed' &&
         terminalLifecycleStates.has(agreement.lifecycleState) &&
         nextState !== agreement.lifecycleState
+      const conflictsWithNewerProvisionalSignal =
+        nextState !== undefined &&
+        agreement.lifecycleProviderPublishedAt !== undefined &&
+        (item.providerPublishedAt < agreement.lifecycleProviderPublishedAt ||
+          (item.providerPublishedAt ===
+            agreement.lifecycleProviderPublishedAt &&
+            nextState !== agreement.lifecycleState))
       const outcome =
         nextState === undefined
           ? 'unknown'
-          : conflictsWithConfirmedTerminal
+          : conflictsWithConfirmedTerminal ||
+              conflictsWithNewerProvisionalSignal
             ? 'conflict'
             : 'applied'
       if (
         nextState !== undefined &&
         !conflictsWithConfirmedTerminal &&
+        !conflictsWithNewerProvisionalSignal &&
         !(
           agreement.lifecycleConfidence === 'confirmed' &&
+          nextState === agreement.lifecycleState
+        ) &&
+        !(
+          agreement.lifecycleProviderPublishedAt !== undefined &&
+          item.providerPublishedAt === agreement.lifecycleProviderPublishedAt &&
           nextState === agreement.lifecycleState
         )
       ) {
@@ -104,6 +107,7 @@ export const applyDelivery = internalMutation({
           lifecycleState: nextState,
           lifecycleConfidence: 'provisional',
           lifecycleObservedAt: args.receivedAt,
+          lifecycleProviderPublishedAt: item.providerPublishedAt,
           trackingState: 'verification_due',
           trackingUpdatedAt: args.receivedAt,
         })
@@ -118,10 +122,10 @@ export const applyDelivery = internalMutation({
         outcome,
         observedAt: args.receivedAt,
       })
-      reconciliationIds.add(agreement._id)
+      reconciliationByAgreementId.set(agreement._id, agreement.providerUid)
     }
 
-    for (const payToAgreementId of reconciliationIds) {
+    for (const [payToAgreementId, providerUid] of reconciliationByAgreementId) {
       const existing = await ctx.db
         .query('payToAgreementReconciliationWorkItems')
         .withIndex('by_payToAgreementId', (q) =>
@@ -133,6 +137,7 @@ export const applyDelivery = internalMutation({
           'payToAgreementReconciliationWorkItems',
           existing._id,
           {
+            providerUid,
             state: 'queued',
             availableAt: Math.min(existing.availableAt, args.receivedAt),
           },
@@ -140,6 +145,7 @@ export const applyDelivery = internalMutation({
       } else {
         await ctx.db.insert('payToAgreementReconciliationWorkItems', {
           payToAgreementId,
+          providerUid,
           state: 'queued',
           availableAt: args.receivedAt,
         })
