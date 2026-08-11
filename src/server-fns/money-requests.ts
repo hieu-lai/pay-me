@@ -1,8 +1,12 @@
 import { auth } from '@clerk/tanstack-react-start/server'
 import { createServerFn } from '@tanstack/react-start'
 import { getRequestIP } from '@tanstack/react-start/server'
-import type { Id } from '../../convex/_generated/dataModel'
+import { ConvexHttpClient } from 'convex/browser'
+import { ConvexError } from 'convex/values'
+import { z } from 'zod'
+
 import { api } from '../../convex/_generated/api'
+import type { Id } from '../../convex/_generated/dataModel'
 import {
   CANONICAL_UUID_V7_PATTERN,
   MAX_MONEY_REQUEST_AMOUNT_CENTS,
@@ -11,9 +15,6 @@ import {
   createIngressAttestation,
   isCanonicalIpv4,
 } from '../../convex/lib/moneyRequestIngress'
-import { ConvexHttpClient } from 'convex/browser'
-import { ConvexError } from 'convex/values'
-import { z } from 'zod'
 
 export const moneyRequestIntentSchema = z
   .object({
@@ -39,6 +40,23 @@ export const moneyRequestIntentSchema = z
 
 type MoneyRequestIntent = z.output<typeof moneyRequestIntentSchema>
 
+type MoneyRequestSubmissionErrorCode =
+  | 'UNAUTHORIZED'
+  | 'FORBIDDEN'
+  | 'VALIDATION_UNAVAILABLE'
+  | 'SERVICE_UNAVAILABLE'
+
+export class MoneyRequestSubmissionError extends Error {
+  constructor(
+    message: string,
+    readonly code: MoneyRequestSubmissionErrorCode,
+    readonly retryable = false,
+  ) {
+    super(message)
+    this.name = 'MoneyRequestSubmissionError'
+  }
+}
+
 type SubmissionDependencies = {
   authenticate: () => Promise<{
     clerkUserId: string | null
@@ -60,21 +78,15 @@ export async function handleMoneyRequestSubmission(
 ) {
   const { clerkUserId, token } = await dependencies.authenticate()
   if (!clerkUserId || !token) {
-    throw new Response('Unauthorized', { status: 401 })
+    throw new MoneyRequestSubmissionError('Unauthorized', 'UNAUTHORIZED')
   }
 
   const trustedIp = dependencies.trustedIp()
   if (!trustedIp || !isCanonicalIpv4(trustedIp)) {
-    throw new Response(
-      JSON.stringify({
-        code: 'VALIDATION_UNAVAILABLE',
-        message: 'A trusted IPv4 address is required to submit this request.',
-        retryable: true,
-      }),
-      {
-        status: 503,
-        headers: { 'content-type': 'application/json' },
-      },
+    throw new MoneyRequestSubmissionError(
+      'A trusted IPv4 address is required to submit this request.',
+      'VALIDATION_UNAVAILABLE',
+      true,
     )
   }
 
@@ -87,18 +99,13 @@ export async function handleMoneyRequestSubmission(
       secret: dependencies.attestationSecret,
     })
   } catch {
-    throw new Response(
-      JSON.stringify({
-        code: 'SERVICE_UNAVAILABLE',
-        message: 'Money Request submission is temporarily unavailable.',
-        retryable: true,
-      }),
-      {
-        status: 503,
-        headers: { 'content-type': 'application/json' },
-      },
+    throw new MoneyRequestSubmissionError(
+      'Money Request submission is temporarily unavailable.',
+      'SERVICE_UNAVAILABLE',
+      true,
     )
   }
+
   let moneyRequestId
   try {
     moneyRequestId = await dependencies.submit({ token, intent, attestation })
@@ -110,7 +117,7 @@ export async function handleMoneyRequestSubmission(
       'code' in error.data &&
       error.data.code === 'INGRESS_TRUST_INVALID'
     ) {
-      throw new Response('Forbidden', { status: 403 })
+      throw new MoneyRequestSubmissionError('Forbidden', 'FORBIDDEN')
     }
     throw error
   }

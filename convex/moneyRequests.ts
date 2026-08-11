@@ -1,4 +1,5 @@
 import { ConvexError, v } from 'convex/values'
+import { v7 as uuid } from 'uuid'
 
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -58,22 +59,6 @@ function validateIntent(intent: {
       'Use a canonical submission key, integer AUD cents, and a normalized printable-ASCII description.',
     )
   }
-}
-
-function generateUuidV7(nowMs: number) {
-  const bytes = new Uint8Array(16)
-  const random = crypto.getRandomValues(new Uint8Array(10))
-  let timestamp = BigInt(nowMs)
-  for (let index = 5; index >= 0; index -= 1) {
-    bytes[index] = Number(timestamp & 0xffn)
-    timestamp >>= 8n
-  }
-  bytes[6] = 0x70 | (random[0] & 0x0f)
-  bytes[7] = random[1]
-  bytes[8] = 0x80 | (random[2] & 0x3f)
-  bytes.set(random.slice(3), 9)
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0'))
-  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`
 }
 
 function bankAccountSnapshot(destination: Doc<'paymentDestinations'>) {
@@ -196,7 +181,7 @@ export const submit = action({
       {
         intent: args.intent,
         submissionFingerprint: args.attestation.intentDigest,
-        providerUid: generateUuidV7(nowMs),
+        providerUid: uuid({ msecs: nowMs }),
         submittedAt: nowMs,
         expectedRequesterDestinationId: preflight.requesterDestinationId,
         expectedPayerDestinationId: preflight.payerDestinationId,

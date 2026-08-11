@@ -3,6 +3,7 @@ import { ConvexError } from 'convex/values'
 
 import {
   handleMoneyRequestSubmission,
+  MoneyRequestSubmissionError,
   moneyRequestIntentSchema,
 } from './money-requests'
 
@@ -54,9 +55,9 @@ describe('submitMoneyRequest trusted server ingress', () => {
 
     await expect(
       handleMoneyRequestSubmission(intent, deps),
-    ).rejects.toMatchObject({
-      status: 401,
-    })
+    ).rejects.toEqual(
+      new MoneyRequestSubmissionError('Unauthorized', 'UNAUTHORIZED'),
+    )
     expect(deps.submit).not.toHaveBeenCalled()
   })
 
@@ -67,7 +68,10 @@ describe('submitMoneyRequest trusted server ingress', () => {
 
       await expect(
         handleMoneyRequestSubmission(intent, deps),
-      ).rejects.toMatchObject({ status: 503 })
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_UNAVAILABLE',
+        retryable: true,
+      })
       expect(deps.submit).not.toHaveBeenCalled()
     },
   )
@@ -78,7 +82,8 @@ describe('submitMoneyRequest trusted server ingress', () => {
     await expect(
       handleMoneyRequestSubmission(intent, deps),
     ).rejects.toMatchObject({
-      status: 503,
+      code: 'SERVICE_UNAVAILABLE',
+      retryable: true,
     })
     expect(deps.submit).not.toHaveBeenCalled()
   })
@@ -95,9 +100,9 @@ describe('submitMoneyRequest trusted server ingress', () => {
 
     await expect(
       handleMoneyRequestSubmission(intent, deps),
-    ).rejects.toMatchObject({
-      status: 403,
-    })
+    ).rejects.toEqual(
+      new MoneyRequestSubmissionError('Forbidden', 'FORBIDDEN'),
+    )
   })
 
   test.each([

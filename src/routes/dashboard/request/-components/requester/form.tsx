@@ -1,3 +1,4 @@
+import { useMutation } from '@tanstack/react-query'
 import { Avatar, AvatarFallback, AvatarImage } from '#/components/ui/avatar'
 import { Button } from '#/components/ui/button'
 import {
@@ -21,15 +22,54 @@ import {
   ItemMedia,
   ItemTitle,
 } from '#/components/ui/item'
+import { toast } from '#/components/ui/toast'
 import getInitials from '#/lib/get-initials'
+import { submitMoneyRequest } from '#/server-fns/money-requests'
 import { DollarSignIcon, XIcon } from 'lucide-react'
+import { useRef } from 'react'
+import { v7 as uuid } from 'uuid'
 
 import { MAX_RECIPIENTS } from './schema'
 import { SearchRecipients } from './search-recipients'
 import { useRequestForm } from './use-request-form'
 
 export function Form() {
-  const form = useRequestForm({ onSubmit: (values) => console.log({ values }) })
+  const submissionKeyRef = useRef<string | null>(null)
+
+  const { mutate } = useMutation({
+    mutationKey: ['moneyRequest'],
+    mutationFn: submitMoneyRequest,
+    onError: (e: Error) => {
+      console.log({ e })
+      toast.add({
+        type: 'error',
+        title: 'Something went wrong',
+        description: e.message,
+      })
+    },
+    onSuccess: () => {
+      submissionKeyRef.current = null
+      toast.add({
+        type: 'success',
+        title: 'Money request sent',
+      })
+      form.reset()
+    },
+  })
+
+  const form = useRequestForm({
+    onSubmit: (values) => {
+      submissionKeyRef.current ??= uuid({ msecs: Date.now() })
+      mutate({
+        data: {
+          amountCents: Number(values.amount),
+          description: values.description,
+          payerId: values.recipients[0].id,
+          submissionKey: submissionKeyRef.current,
+        },
+      })
+    },
+  })
 
   return (
     <form
