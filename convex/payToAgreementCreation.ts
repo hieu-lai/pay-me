@@ -386,6 +386,30 @@ export const recordCreated = internalMutation({
       leaseToken: undefined,
       leaseExpiresAt: undefined,
     })
+    const reconciliationWorkItem = await ctx.db
+      .query('payToAgreementReconciliationWorkItems')
+      .withIndex('by_payToAgreementId', (q) =>
+        q.eq('payToAgreementId', agreement._id),
+      )
+      .unique()
+    if (reconciliationWorkItem) {
+      await ctx.db.patch(
+        'payToAgreementReconciliationWorkItems',
+        reconciliationWorkItem._id,
+        {
+          providerUid: agreement.providerUid,
+          state: 'queued',
+          availableAt: args.observedAt + 30 * 60_000,
+        },
+      )
+    } else {
+      await ctx.db.insert('payToAgreementReconciliationWorkItems', {
+        payToAgreementId: agreement._id,
+        providerUid: agreement.providerUid,
+        state: 'queued',
+        availableAt: args.observedAt + 30 * 60_000,
+      })
+    }
     return true
   },
 })

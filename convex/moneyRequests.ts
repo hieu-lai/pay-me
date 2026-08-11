@@ -83,6 +83,7 @@ const publicAgreementValidator = v.object({
       v.literal('ready'),
       v.literal('temporarilyUnavailable'),
       v.literal('ended'),
+      v.literal('unknown'),
     ),
     confidence: v.union(v.literal('provisional'), v.literal('confirmed')),
     observedAt: v.number(),
@@ -90,6 +91,7 @@ const publicAgreementValidator = v.object({
   tracking: v.object({
     state: v.union(
       v.literal('verificationDue'),
+      v.literal('current'),
       v.literal('checking'),
       v.literal('retrying'),
       v.literal('needsReview'),
@@ -104,6 +106,9 @@ const publicAgreementValidator = v.object({
         v.literal('providerTemporarilyUnavailable'),
         v.literal('operatorReviewRequired'),
         v.literal('requestRejected'),
+        v.literal('lifecycleTrackingOutage'),
+        v.literal('lifecycleUnknown'),
+        v.literal('lifecycleContradiction'),
       ),
       message: v.string(),
       retryable: v.boolean(),
@@ -742,6 +747,7 @@ function publicTrackingState(state: Doc<'payToAgreements'>['trackingState']) {
     case 'verification_due':
       return 'verificationDue' as const
     case 'checking':
+    case 'current':
     case 'retrying':
     case 'stopped':
       return state
@@ -789,6 +795,23 @@ function publicAgreementFailure(
         'This PayTo Agreement could not be created. Submit a new Money Request after checking the Payer details.',
       retryable: false,
     },
+    lifecycle_tracking_outage: {
+      code: 'lifecycleTrackingOutage',
+      message:
+        'The last confirmed provider outcome is being retained while tracking recovers.',
+      retryable: true,
+    },
+    lifecycle_unknown: {
+      code: 'lifecycleUnknown',
+      message:
+        'The provider outcome needs review before PayMe can describe it.',
+      retryable: false,
+    },
+    lifecycle_contradiction: {
+      code: 'lifecycleContradiction',
+      message: 'Conflicting provider evidence needs operator review.',
+      retryable: false,
+    },
   } as const
   return { ...projection[failure.kind], observedAt: failure.observedAt }
 }
@@ -809,6 +832,8 @@ function publicLifecycleMeaning(
     case 'failed':
     case 'expired':
       return 'ended' as const
+    case 'unknown':
+      return 'unknown' as const
   }
 }
 

@@ -91,7 +91,11 @@ export default defineSchema({
       v.literal('failed'),
     ),
     creationUpdatedAt: v.number(),
-    lifecycleState: providerAgreementStateValidator,
+    lifecycleState: v.union(
+      providerAgreementStateValidator,
+      v.literal('unknown'),
+    ),
+    lifecycleRawState: v.optional(v.string()),
     lifecycleConfidence: v.union(
       v.literal('provisional'),
       v.literal('confirmed'),
@@ -100,6 +104,7 @@ export default defineSchema({
     lifecycleProviderPublishedAt: v.optional(v.number()),
     trackingState: v.union(
       v.literal('verification_due'),
+      v.literal('current'),
       v.literal('checking'),
       v.literal('retrying'),
       v.literal('needs_review'),
@@ -113,6 +118,9 @@ export default defineSchema({
           v.literal('provider_temporarily_unavailable'),
           v.literal('operator_review_required'),
           v.literal('immutable_request_rejected'),
+          v.literal('lifecycle_tracking_outage'),
+          v.literal('lifecycle_unknown'),
+          v.literal('lifecycle_contradiction'),
         ),
         observedAt: v.number(),
       }),
@@ -196,6 +204,41 @@ export default defineSchema({
         kind: v.literal('provider_webhook_observed'),
         ...zeptoWebhookEvidenceValidator.fields,
       }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('reconciliation_lease_claimed'),
+        replacedExpiredLease: v.boolean(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('reconciliation_lease_expired'),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_lifecycle_get_observed'),
+        providerState: v.string(),
+        outcome: v.union(
+          v.literal('confirmed'),
+          v.literal('unknown'),
+          v.literal('contradiction'),
+        ),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_lifecycle_get_failed'),
+        category: v.string(),
+        consecutiveFailures: v.number(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('reconciliation_recovered'),
+        previousFailureCount: v.number(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_history_investigated'),
+        eventCount: v.number(),
+        eventTypes: v.array(v.string()),
+        latestProviderPublishedAt: v.optional(v.number()),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_history_investigation_failed'),
+        category: v.string(),
+      }),
     ),
   ).index('by_payToAgreementId_and_observedAt', [
     'payToAgreementId',
@@ -215,9 +258,21 @@ export default defineSchema({
   payToAgreementReconciliationWorkItems: defineTable({
     payToAgreementId: v.id('payToAgreements'),
     providerUid: v.string(),
-    state: v.literal('queued'),
+    state: v.union(
+      v.literal('queued'),
+      v.literal('running'),
+      v.literal('stopped'),
+    ),
     availableAt: v.number(),
-  }).index('by_payToAgreementId', ['payToAgreementId']),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    consecutiveFailures: v.optional(v.number()),
+    failureStartedAt: v.optional(v.number()),
+    lastSuccessAt: v.optional(v.number()),
+  })
+    .index('by_payToAgreementId', ['payToAgreementId'])
+    .index('by_state_and_availableAt', ['state', 'availableAt'])
+    .index('by_state_and_leaseExpiresAt', ['state', 'leaseExpiresAt']),
 
   payToAgreementWorkItems: defineTable({
     payToAgreementId: v.id('payToAgreements'),

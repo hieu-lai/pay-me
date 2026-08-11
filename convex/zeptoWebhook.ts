@@ -105,11 +105,25 @@ export const applyDelivery = internalMutation({
       ) {
         await ctx.db.patch('payToAgreements', agreement._id, {
           lifecycleState: nextState,
+          lifecycleRawState: undefined,
           lifecycleConfidence: 'provisional',
           lifecycleObservedAt: args.receivedAt,
           lifecycleProviderPublishedAt: item.providerPublishedAt,
           trackingState: 'verification_due',
           trackingUpdatedAt: args.receivedAt,
+        })
+      } else {
+        await ctx.db.patch('payToAgreements', agreement._id, {
+          trackingState: 'verification_due',
+          trackingUpdatedAt: args.receivedAt,
+          ...(outcome === 'conflict'
+            ? {
+                currentFailure: {
+                  kind: 'lifecycle_contradiction' as const,
+                  observedAt: args.receivedAt,
+                },
+              }
+            : {}),
         })
       }
       await ctx.db.insert('payToAgreementEvidence', {

@@ -8,14 +8,17 @@
  * @module
  */
 
+import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as lib_agreementCreationPool from "../lib/agreementCreationPool.js";
 import type * as lib_moneyRequestIngress from "../lib/moneyRequestIngress.js";
+import type * as lib_payIdCapability from "../lib/payIdCapability.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
 import type * as lib_userSearch from "../lib/userSearch.js";
 import type * as lib_zepto_agreement from "../lib/zepto/agreement.js";
+import type * as lib_zepto_aliasResolution from "../lib/zepto/aliasResolution.js";
 import type * as lib_zepto_client from "../lib/zepto/client.js";
 import type * as lib_zepto_env from "../lib/zepto/env.js";
 import type * as lib_zepto_error from "../lib/zepto/error.js";
@@ -28,11 +31,14 @@ import type * as lib_zepto_generated_notifications from "../lib/zepto/generated/
 import type * as lib_zepto_generated_payTo from "../lib/zepto/generated/payTo.js";
 import type * as lib_zepto_index from "../lib/zepto/index.js";
 import type * as lib_zepto_pagination from "../lib/zepto/pagination.js";
+import type * as lib_zepto_reconciliation from "../lib/zepto/reconciliation.js";
 import type * as lib_zepto_webhook from "../lib/zepto/webhook.js";
 import type * as migrations from "../migrations.js";
 import type * as moneyRequests from "../moneyRequests.js";
 import type * as payToAgreementCreation from "../payToAgreementCreation.js";
 import type * as payToAgreementCreationState from "../payToAgreementCreationState.js";
+import type * as payToAgreementReconciliation from "../payToAgreementReconciliation.js";
+import type * as payToAgreementReconciliationState from "../payToAgreementReconciliationState.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as seed from "../seed.js";
 import type * as users from "../users.js";
@@ -50,14 +56,17 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
+  crons: typeof crons;
   http: typeof http;
   "lib/agreementCreationPool": typeof lib_agreementCreationPool;
   "lib/moneyRequestIngress": typeof lib_moneyRequestIngress;
+  "lib/payIdCapability": typeof lib_payIdCapability;
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
   "lib/userSearch": typeof lib_userSearch;
   "lib/zepto/agreement": typeof lib_zepto_agreement;
+  "lib/zepto/aliasResolution": typeof lib_zepto_aliasResolution;
   "lib/zepto/client": typeof lib_zepto_client;
   "lib/zepto/env": typeof lib_zepto_env;
   "lib/zepto/error": typeof lib_zepto_error;
@@ -70,11 +79,14 @@ const fullApi: ApiFromModules<{
   "lib/zepto/generated/payTo": typeof lib_zepto_generated_payTo;
   "lib/zepto/index": typeof lib_zepto_index;
   "lib/zepto/pagination": typeof lib_zepto_pagination;
+  "lib/zepto/reconciliation": typeof lib_zepto_reconciliation;
   "lib/zepto/webhook": typeof lib_zepto_webhook;
   migrations: typeof migrations;
   moneyRequests: typeof moneyRequests;
   payToAgreementCreation: typeof payToAgreementCreation;
   payToAgreementCreationState: typeof payToAgreementCreationState;
+  payToAgreementReconciliation: typeof payToAgreementReconciliation;
+  payToAgreementReconciliationState: typeof payToAgreementReconciliationState;
   paymentDestinations: typeof paymentDestinations;
   seed: typeof seed;
   users: typeof users;
