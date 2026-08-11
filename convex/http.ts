@@ -142,11 +142,12 @@ function parseRfc3339DateTime(value: unknown): number | null {
 }
 
 function parseZeptoWebhookPayload(value: unknown): ZeptoWebhookItem[] | null {
-  if (!isRecord(value) || !Array.isArray(value.data) || value.data.length < 1) {
-    return null
-  }
+  if (!isRecord(value)) return null
+  const data = Array.isArray(value.data) ? value.data : [value.data]
+  if (data.length < 1) return null
+
   const items: ZeptoWebhookItem[] = []
-  for (const valueItem of value.data) {
+  for (const valueItem of data) {
     if (!isRecord(valueItem)) return null
     const { id, type, published_at, resource_uid, resource_type } = valueItem
     const publishedAt = parseRfc3339DateTime(published_at)
@@ -178,6 +179,7 @@ export async function handleZeptoWebhook(
 ) {
   const deliveryId = request.headers.get('split-request-id')?.trim()
   const splitSignature = request.headers.get('split-signature')?.trim()
+
   if (!deliveryId || !splitSignature) {
     return new Response('Invalid Zepto webhook', { status: 400 })
   }
@@ -204,6 +206,7 @@ export async function handleZeptoWebhook(
   } catch {
     return new Response('Malformed Zepto webhook', { status: 400 })
   }
+
   const items = parseZeptoWebhookPayload(parsed)
   if (!items) return new Response('Malformed Zepto webhook', { status: 400 })
 

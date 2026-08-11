@@ -149,6 +149,47 @@ beforeEach(() => {
 })
 
 describe('POST /zepto/webhooks', () => {
+  test('accepts Zepto PayTo webhook deliveries with a single data object', async () => {
+    const providerUid = '019ff0c0-b888-7c66-af96-63972ad43d51'
+    const { t } = await setupAgreement(providerUid)
+    const request = await signedDelivery('delivery-single-event', {
+      data: {
+        id: '019ff0c0-be3a-7565-90a9-6692c017fd33',
+        body: {
+          mms_agreement_id: '019ff0c0be2a1018855ca8ad15a339e8',
+        },
+        type: 'payto_agreement.activated',
+        published_at: '2026-08-11T22:16:31.290+10:00',
+        resource_uid: providerUid,
+        resource_type: 'payto_agreement',
+        resource_metadata: {},
+      },
+      links: {
+        resource: `https://api.sandbox.zeptopayments.com/payto/agreements/${providerUid}`,
+      },
+    })
+
+    const response = await t.fetch('/zepto/webhooks', {
+      method: 'POST',
+      ...request,
+    })
+
+    expect(response.status).toBe(200)
+    expect(await durableWebhookState(t)).toMatchObject({
+      deliveries: [
+        expect.objectContaining({ deliveryId: 'delivery-single-event' }),
+      ],
+      events: [
+        expect.objectContaining({
+          providerEventId: '019ff0c0-be3a-7565-90a9-6692c017fd33',
+          resourceUid: providerUid,
+        }),
+      ],
+      evidence: [expect.objectContaining({ outcome: 'applied' })],
+      reconciliation: [expect.objectContaining({ providerUid })],
+    })
+  })
+
   test('atomically applies a verified multi-item lifecycle delivery and schedules reconciliation', async () => {
     const { t, requester, moneyRequestId, payToAgreementId } =
       await setupAgreement()
