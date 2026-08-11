@@ -41,6 +41,14 @@ const otherRequesterIdentity = {
   name: 'Other Requesting User',
 } satisfies UserIdentity
 
+const operatorIdentity = {
+  tokenIdentifier: 'https://clerk.example.test|operator_101',
+  subject: 'operator_101',
+  issuer: 'https://clerk.example.test',
+  email: 'operator@example.test',
+  name: 'Operations User',
+} satisfies UserIdentity
+
 function bytesToBase64Url(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes))
     .replaceAll('+', '-')
@@ -174,6 +182,64 @@ async function durableSubmissionState(
     agreements: await ctx.db.query('payToAgreements').take(6),
     evidence: await ctx.db.query('payToAgreementEvidence').take(6),
     work: await ctx.db.query('payToAgreementWorkItems').take(6),
+  }))
+}
+
+async function agreementForMoneyRequest(
+  t: Awaited<ReturnType<typeof setupUsers>>['t'],
+  moneyRequestId: Id<'moneyRequests'>,
+) {
+  const agreement = await t.run(async (ctx) =>
+    ctx.db
+      .query('payToAgreements')
+      .withIndex('by_moneyRequestId', (q) =>
+        q.eq('moneyRequestId', moneyRequestId),
+      )
+      .unique(),
+  )
+  if (!agreement) throw new Error('Expected PayTo Agreement')
+  return agreement
+}
+
+async function placeAgreementOnManualHold(
+  t: Awaited<ReturnType<typeof setupUsers>>['t'],
+  payToAgreementId: Id<'payToAgreements'>,
+  workOverrides: Partial<{
+    absenceCount: number
+    lastPostAt: number
+    postCycle: number
+  }> = {},
+) {
+  await t.run(async (ctx) => {
+    const workItem = await ctx.db
+      .query('payToAgreementWorkItems')
+      .withIndex('by_payToAgreementId', (q) =>
+        q.eq('payToAgreementId', payToAgreementId),
+      )
+      .unique()
+    if (!workItem) throw new Error('Expected creation work item')
+    await ctx.db.patch('payToAgreements', payToAgreementId, {
+      creationState: 'manual_hold',
+    })
+    await ctx.db.patch('payToAgreementWorkItems', workItem._id, {
+      state: 'held',
+      ...workOverrides,
+    })
+  })
+}
+
+async function recoveryStateForAgreement(
+  t: Awaited<ReturnType<typeof setupUsers>>['t'],
+  payToAgreementId: Id<'payToAgreements'>,
+) {
+  return await t.run(async (ctx) => ({
+    agreement: await ctx.db.get('payToAgreements', payToAgreementId),
+    evidence: await ctx.db
+      .query('payToAgreementEvidence')
+      .withIndex('by_payToAgreementId_and_observedAt', (q) =>
+        q.eq('payToAgreementId', payToAgreementId),
+      )
+      .take(10),
   }))
 }
 
@@ -623,55 +689,174 @@ describe('Money Request submission and requester read', () => {
       requester,
       moneyRequestIntent(payerUserId),
     )
-    const agreement = await t.run(async (ctx) =>
+    const agreement = await agreementForMoneyRequest(t, moneyRequestId)
+    await placeAgreementOnManualHold(t, agreement._id, { postCycle: 2 })
+
+    await t.mutation(internal.payToAgreementCreation.reopenManualHold, {
+      payToAgreementId: agreement._id,
+      operatorIdentity: `  ${operatorIdentity.tokenIdentifier}  `,
+      reason: '  Investigate ambiguous sandbox response  ',
+    })
+
+    const state = await recoveryStateForAgreement(t, agreement._id)
+    expect(state.agreement?.creationState).toBe('verifying')
+    expect(state.evidence.at(-1)).toMatchObject({
+      kind: 'operator_reopened',
+      operatorIdentity: operatorIdentity.tokenIdentifier,
+      reason: 'Investigate ambiguous sandbox response',
+      mode: 'verifying',
+    })
+  })
+
+  test('requires an authenticated operator and a non-empty recovery reason', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const moneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId),
+    )
+    const agreement = await agreementForMoneyRequest(t, moneyRequestId)
+    await placeAgreementOnManualHold(t, agreement._id)
+
+    await expect(
+      t.mutation(internal.payToAgreementCreation.reopenManualHold, {
+        payToAgreementId: agreement._id,
+        operatorIdentity: '   ',
+        reason: 'Investigate provider response',
+      }),
+    ).rejects.toThrow('PayTo Agreement creation is temporarily unavailable')
+    await expect(
+      t.mutation(internal.payToAgreementCreation.reopenManualHold, {
+        payToAgreementId: agreement._id,
+        operatorIdentity: operatorIdentity.tokenIdentifier,
+        reason: '   ',
+      }),
+    ).rejects.toThrow('PayTo Agreement creation is temporarily unavailable')
+
+    const state = await recoveryStateForAgreement(t, agreement._id)
+    expect(state.agreement?.creationState).toBe('manual_hold')
+    expect(state.evidence.map(({ kind }) => kind)).not.toContain(
+      'operator_reopened',
+    )
+  })
+
+  test('queues a manually held agreement only after absence is established', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const moneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId),
+    )
+    const agreement = await agreementForMoneyRequest(t, moneyRequestId)
+    await placeAgreementOnManualHold(t, agreement._id, {
+      absenceCount: 2,
+      postCycle: 1,
+      lastPostAt: 0,
+    })
+
+    await t.mutation(internal.payToAgreementCreation.reopenManualHold, {
+      payToAgreementId: agreement._id,
+      operatorIdentity: operatorIdentity.tokenIdentifier,
+      reason: 'Provider lookup established absence',
+    })
+
+    const state = await recoveryStateForAgreement(t, agreement._id)
+    expect(state.agreement).toMatchObject({
+      creationState: 'queued',
+      trackingState: 'retrying',
+      providerUid: agreement.providerUid,
+    })
+    expect(state.evidence.at(-1)).toMatchObject({
+      kind: 'operator_reopened',
+      mode: 'queued',
+      operatorIdentity: operatorIdentity.tokenIdentifier,
+      reason: 'Provider lookup established absence',
+    })
+  })
+
+  test.each(['created', 'failed'] as const)(
+    'refuses to recover a terminal %s agreement',
+    async (terminalState) => {
+      const { t, requester, payerUserId } = await setup()
+      const moneyRequestId = await submit(
+        requester,
+        moneyRequestIntent(payerUserId),
+      )
+      const agreement = await agreementForMoneyRequest(t, moneyRequestId)
+      await t.run(async (ctx) => {
+        await ctx.db.patch('payToAgreements', agreement._id, {
+          creationState: terminalState,
+        })
+      })
+
+      await expect(
+        t.mutation(internal.payToAgreementCreation.reopenManualHold, {
+          payToAgreementId: agreement._id,
+          operatorIdentity: operatorIdentity.tokenIdentifier,
+          reason: 'Retry terminal agreement',
+        }),
+      ).rejects.toThrow('PayTo Agreement creation is temporarily unavailable')
+      expect(
+        await t.run(async (ctx) =>
+          ctx.db.get('payToAgreements', agreement._id),
+        ),
+      ).toMatchObject({
+        creationState: terminalState,
+        providerUid: agreement.providerUid,
+      })
+    },
+  )
+
+  test('preserves evidence and the provider UID without mutating sibling agreements', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const siblingPayer = await addPayer(t, 2)
+    const moneyRequestId = await submit(requester, {
+      ...moneyRequestIntent(payerUserId),
+      payerIds: [payerUserId, siblingPayer.payerUserId],
+    })
+    const agreements = await t.run(async (ctx) =>
       ctx.db
         .query('payToAgreements')
         .withIndex('by_moneyRequestId', (q) =>
           q.eq('moneyRequestId', moneyRequestId),
         )
-        .unique(),
+        .take(2),
     )
-    if (!agreement) throw new Error('Expected PayTo Agreement')
-    await t.run(async (ctx) => {
-      const workItem = await ctx.db
-        .query('payToAgreementWorkItems')
-        .withIndex('by_payToAgreementId', (q) =>
-          q.eq('payToAgreementId', agreement._id),
-        )
-        .unique()
-      if (!workItem) throw new Error('Expected creation work item')
-      await ctx.db.patch('payToAgreements', agreement._id, {
-        creationState: 'manual_hold',
-      })
-      await ctx.db.patch('payToAgreementWorkItems', workItem._id, {
-        state: 'held',
-        postCycle: 2,
-      })
+    const target = agreements.find(({ payerUserId: id }) => id === payerUserId)
+    const sibling = agreements.find(
+      ({ payerUserId: id }) => id === siblingPayer.payerUserId,
+    )
+    if (!target || !sibling) throw new Error('Expected sibling agreements')
+    await placeAgreementOnManualHold(t, target._id)
+    const before = await t.run(async (ctx) => {
+      return {
+        sibling: await ctx.db.get('payToAgreements', sibling._id),
+        evidence: await ctx.db
+          .query('payToAgreementEvidence')
+          .withIndex('by_payToAgreementId_and_observedAt', (q) =>
+            q.eq('payToAgreementId', target._id),
+          )
+          .take(10),
+      }
     })
 
     await t.mutation(internal.payToAgreementCreation.reopenManualHold, {
-      payToAgreementId: agreement._id,
-      operatorIdentity: 'operator@example.test',
-      reason: 'Investigate ambiguous sandbox response',
-      mode: 'verifying',
+      payToAgreementId: target._id,
+      operatorIdentity: operatorIdentity.tokenIdentifier,
+      reason: 'Resume target only',
     })
 
-    const state = await t.run(async (ctx) => ({
-      agreement: await ctx.db.get('payToAgreements', agreement._id),
-      evidence: await ctx.db
-        .query('payToAgreementEvidence')
-        .withIndex('by_payToAgreementId_and_observedAt', (q) =>
-          q.eq('payToAgreementId', agreement._id),
-        )
-        .take(10),
-    }))
-    expect(state.agreement?.creationState).toBe('verifying')
-    expect(state.evidence.at(-1)).toMatchObject({
-      kind: 'operator_reopened',
-      operatorIdentity: 'operator@example.test',
-      reason: 'Investigate ambiguous sandbox response',
-      mode: 'verifying',
+    const [after, siblingAfter] = await Promise.all([
+      recoveryStateForAgreement(t, target._id),
+      t.run(async (ctx) => ctx.db.get('payToAgreements', sibling._id)),
+    ])
+    expect(after.agreement).toMatchObject({
+      creationState: 'verifying',
+      providerUid: target.providerUid,
     })
+    expect(siblingAfter).toEqual(before.sibling)
+    expect(after.evidence.slice(0, before.evidence.length)).toEqual(
+      before.evidence,
+    )
+    expect(after.evidence.at(-1)).toMatchObject({ kind: 'operator_reopened' })
   })
 
   test('atomically queues five independent Payer agreements and exposes every projection', async () => {

@@ -685,7 +685,6 @@ export const reopenManualHold = internalMutation({
     payToAgreementId: v.id('payToAgreements'),
     operatorIdentity: v.string(),
     reason: v.string(),
-    mode: v.union(v.literal('queued'), v.literal('verifying')),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -709,16 +708,18 @@ export const reopenManualHold = internalMutation({
       workItem.postCycle < 2 &&
       workItem.lastPostAt !== undefined &&
       nowMs - workItem.lastPostAt >= 5 * 60_000
-    if (args.mode === 'queued' && !absenceEstablished) unavailable()
-    enforceTransition(agreement.creationState, args.mode)
+    const mode = absenceEstablished
+      ? ('queued' as const)
+      : ('verifying' as const)
+    enforceTransition(agreement.creationState, mode)
 
     await ctx.db.patch('payToAgreements', agreement._id, {
-      creationState: args.mode,
+      creationState: mode,
       creationUpdatedAt: nowMs,
-      trackingState: args.mode === 'queued' ? 'retrying' : 'checking',
+      trackingState: mode === 'queued' ? 'retrying' : 'checking',
       trackingUpdatedAt: nowMs,
       currentFailure:
-        args.mode === 'queued'
+        mode === 'queued'
           ? undefined
           : currentFailure('provider_outcome_uncertain', nowMs),
     })
@@ -733,7 +734,7 @@ export const reopenManualHold = internalMutation({
       kind: 'operator_reopened',
       operatorIdentity,
       reason,
-      mode: args.mode,
+      mode,
       observedAt: nowMs,
     })
     await enqueueCreation(ctx, agreement._id, 0)
