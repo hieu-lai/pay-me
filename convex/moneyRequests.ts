@@ -2,11 +2,10 @@ import {
   paginationOptsValidator,
   paginationResultValidator,
 } from 'convex/server'
-import { Workpool } from '@convex-dev/workpool'
 import { ConvexError, v } from 'convex/values'
 import { v7 as uuid } from 'uuid'
 
-import { components, internal } from './_generated/api'
+import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import {
@@ -23,6 +22,7 @@ import {
   isCanonicalMoneyRequestIntent,
   verifyIngressAttestation,
 } from './lib/moneyRequestIngress'
+import { agreementCreationPool } from './lib/agreementCreationPool'
 import { requireUser } from './lib/requireUser'
 
 const intentValidator = v.object({
@@ -45,13 +45,6 @@ const attestationValidator = v.object({
   intentDigest: v.string(),
   signature: v.string(),
 })
-const agreementCreationPool = new Workpool(
-  components.agreementCreationWorkpool,
-  {
-    maxParallelism: 5,
-    retryActionsByDefault: false,
-  },
-)
 const publicUserIdentityValidator = v.object({
   name: v.string(),
   username: v.optional(v.string()),
@@ -63,7 +56,11 @@ const publicAgreementValidator = v.object({
     state: v.union(
       v.literal('queued'),
       v.literal('submitting'),
+      v.literal('verifying'),
+      v.literal('retrying'),
+      v.literal('needsReview'),
       v.literal('created'),
+      v.literal('failed'),
     ),
     updatedAt: v.number(),
   }),
@@ -78,7 +75,13 @@ const publicAgreementValidator = v.object({
     observedAt: v.number(),
   }),
   tracking: v.object({
-    state: v.literal('verificationDue'),
+    state: v.union(
+      v.literal('verificationDue'),
+      v.literal('checking'),
+      v.literal('retrying'),
+      v.literal('needsReview'),
+      v.literal('stopped'),
+    ),
     updatedAt: v.number(),
   }),
 })
@@ -506,7 +509,12 @@ function publicAgreement(
   return {
     payer: publicUserIdentity(agreement.payerNameSnapshot, currentPayer),
     creation: {
-      state: agreement.creationState,
+      state:
+        agreement.creationState === 'retry_wait'
+          ? ('retrying' as const)
+          : agreement.creationState === 'manual_hold'
+            ? ('needsReview' as const)
+            : agreement.creationState,
       updatedAt: agreement.creationUpdatedAt,
     },
     lifecycle: {
@@ -515,7 +523,17 @@ function publicAgreement(
       observedAt: agreement.lifecycleObservedAt,
     },
     tracking: {
-      state: 'verificationDue' as const,
+      state:
+        agreement.creationState === 'submitting' ||
+        agreement.creationState === 'verifying'
+          ? ('checking' as const)
+          : agreement.creationState === 'retry_wait'
+            ? ('retrying' as const)
+            : agreement.creationState === 'manual_hold'
+              ? ('needsReview' as const)
+              : agreement.creationState === 'failed'
+                ? ('stopped' as const)
+                : ('verificationDue' as const),
       updatedAt: agreement.trackingUpdatedAt,
     },
   }

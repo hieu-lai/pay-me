@@ -33,6 +33,36 @@ function invalidCreateResponse(): never {
   })
 }
 
+function normalizeAgreement(
+  agreement:
+    | {
+        uid?: unknown
+        state?: unknown
+        created_at?: unknown
+        mms_agreement_id?: unknown
+      }
+    | null
+    | undefined,
+  expectedUid: string,
+): CreatedAgreement {
+  if (
+    agreement?.uid !== expectedUid ||
+    !agreementStates.has(agreement.state as ProviderAgreementState) ||
+    typeof agreement.created_at !== 'string' ||
+    Number.isNaN(Date.parse(agreement.created_at)) ||
+    (agreement.mms_agreement_id !== null &&
+      typeof agreement.mms_agreement_id !== 'string')
+  ) {
+    invalidCreateResponse()
+  }
+
+  return {
+    state: agreement.state as ProviderAgreementState,
+    createdAt: agreement.created_at,
+    mmsAgreementId: agreement.mms_agreement_id,
+  }
+}
+
 export async function createBankAccountAgreement(
   client: ZeptoClient,
   input: CreateBankAccountAgreementInput,
@@ -67,21 +97,15 @@ export async function createBankAccountAgreement(
     },
   })
 
-  const agreement = data?.data
-  if (
-    agreement?.uid !== input.providerUid ||
-    !agreementStates.has(agreement.state) ||
-    typeof agreement.created_at !== 'string' ||
-    Number.isNaN(Date.parse(agreement.created_at)) ||
-    (agreement.mms_agreement_id !== null &&
-      typeof agreement.mms_agreement_id !== 'string')
-  ) {
-    invalidCreateResponse()
-  }
+  return normalizeAgreement(data?.data, input.providerUid)
+}
 
-  return {
-    state: agreement.state,
-    createdAt: agreement.created_at,
-    mmsAgreementId: agreement.mms_agreement_id,
-  }
+export async function getAgreementByUid(
+  client: ZeptoClient,
+  providerUid: string,
+): Promise<CreatedAgreement> {
+  const { data } = await client.payTo.GET('/payto/agreements/{agreement_uid}', {
+    params: { path: { agreement_uid: providerUid } },
+  })
+  return normalizeAgreement(data?.data, providerUid)
 }

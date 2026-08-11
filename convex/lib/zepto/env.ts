@@ -1,6 +1,6 @@
 import { env } from '../../_generated/server'
 import { createZeptoClient } from './client'
-import type { ZeptoClient } from './client'
+import type { CreateZeptoClientOptions, ZeptoClient } from './client'
 import { ZeptoClientError } from './error'
 
 /** Create the client from optional typed Convex environment variables. */
@@ -20,7 +20,9 @@ export function createZeptoClientFromEnv(): ZeptoClient {
 }
 
 /** Create the client used by sandbox-only provider workers. */
-export function createSandboxZeptoClientFromEnv(): ZeptoClient {
+export function createSandboxZeptoClientFromEnv(
+  options: Pick<CreateZeptoClientOptions, 'onAttempt'> = {},
+): ZeptoClient {
   if (env.ZEPTO_ENVIRONMENT !== 'sandbox') {
     throw new ZeptoClientError({
       kind: 'sandbox_only',
@@ -38,5 +40,6 @@ export function createSandboxZeptoClientFromEnv(): ZeptoClient {
   return createZeptoClient({
     environment: 'sandbox',
     accessToken: env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN,
+    onAttempt: options.onAttempt,
   })
 }

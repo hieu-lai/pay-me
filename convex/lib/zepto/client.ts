@@ -14,7 +14,7 @@ export const ZEPTO_API_VERSION = '20260101'
 const DEFAULT_TIMEOUT_MS = 10_000
 const DEFAULT_MAX_RETRIES = 2
 const MAX_RETRY_AFTER_MS = 30_000
-const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504])
 const CORE_IDEMPOTENT_PATHS = new Set([
   '/payments',
   '/payment_requests',
@@ -39,6 +39,11 @@ const CLIENT_REQUEST_METHODS = new Set([
 
 export type ZeptoEnvironment = 'sandbox' | 'production'
 export type ZeptoFetch = (request: Request) => Promise<Response>
+export type ZeptoRequestAttempt = {
+  method: string
+  path: string
+  attempt: number
+}
 
 export type CreateZeptoClientOptions = {
   environment: ZeptoEnvironment
@@ -46,6 +51,7 @@ export type CreateZeptoClientOptions = {
   fetch?: ZeptoFetch
   timeoutMs?: number
   maxRetries?: number
+  onAttempt?: (attempt: ZeptoRequestAttempt) => void | Promise<void>
 }
 
 export type ZeptoClient = {
@@ -239,6 +245,7 @@ function createZeptoFetch(options: {
   fetch: ZeptoFetch
   timeoutMs: number
   maxRetries: number
+  onAttempt?: (attempt: ZeptoRequestAttempt) => void | Promise<void>
 }): ZeptoFetch {
   return async (inputRequest) => {
     if (new URL(inputRequest.url).origin !== options.baseUrl) {
@@ -271,6 +278,11 @@ function createZeptoFetch(options: {
     const retryableRequest = await canRetry(request)
 
     for (let retry = 0; ; retry += 1) {
+      await options.onAttempt?.({
+        method: request.method,
+        path,
+        attempt: retry + 1,
+      })
       let response: Response
       try {
         response = await fetchAttempt(options.fetch, request, options.timeoutMs)
@@ -391,6 +403,7 @@ export function createZeptoClient(
     fetch: options.fetch ?? ((request) => globalThis.fetch(request)),
     timeoutMs,
     maxRetries,
+    onAttempt: options.onAttempt,
   })
   const middleware: Middleware = {
     onRequest({ request }) {

@@ -9,6 +9,7 @@
  */
 
 import type * as http from "../http.js";
+import type * as lib_agreementCreationPool from "../lib/agreementCreationPool.js";
 import type * as lib_moneyRequestIngress from "../lib/moneyRequestIngress.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
@@ -31,6 +32,7 @@ import type * as lib_zepto_webhook from "../lib/zepto/webhook.js";
 import type * as migrations from "../migrations.js";
 import type * as moneyRequests from "../moneyRequests.js";
 import type * as payToAgreementCreation from "../payToAgreementCreation.js";
+import type * as payToAgreementCreationState from "../payToAgreementCreationState.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as seed from "../seed.js";
 import type * as users from "../users.js";
@@ -47,6 +49,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   http: typeof http;
+  "lib/agreementCreationPool": typeof lib_agreementCreationPool;
   "lib/moneyRequestIngress": typeof lib_moneyRequestIngress;
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/requireUser": typeof lib_requireUser;
@@ -69,6 +72,7 @@ const fullApi: ApiFromModules<{
   migrations: typeof migrations;
   moneyRequests: typeof moneyRequests;
   payToAgreementCreation: typeof payToAgreementCreation;
+  payToAgreementCreationState: typeof payToAgreementCreationState;
   paymentDestinations: typeof paymentDestinations;
   seed: typeof seed;
   users: typeof users;

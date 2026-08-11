@@ -372,7 +372,7 @@ describe('Money Request submission and requester read', () => {
         .withIndex('by_payToAgreementId_and_observedAt', (q) =>
           q.eq('payToAgreementId', agreement._id),
         )
-        .take(3),
+        .take(4),
       work: await ctx.db
         .query('payToAgreementWorkItems')
         .withIndex('by_payToAgreementId', (q) =>
@@ -390,6 +390,8 @@ describe('Money Request submission and requester read', () => {
     })
     expect(durable.evidence.map(({ kind }) => kind)).toEqual([
       'local_accepted',
+      'creation_attempt_started',
+      'provider_http_post_attempted',
       'provider_create_succeeded',
     ])
     expect(durable.work?.state).toBe('completed')
@@ -403,6 +405,266 @@ describe('Money Request submission and requester read', () => {
     expect(JSON.stringify(durable)).not.toContain('123456-0012345')
     expect(JSON.stringify(durable)).not.toContain('654321-0098765')
   }
+
+  test('recovers an invalid success response through same-UID GET without a second POST cycle', async () => {
+    const providerRequests: Array<{ method: string; uid: string }> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      const providerRequest = new Request(request)
+      if (providerRequest.method === 'POST') {
+        const body = (await providerRequest.json()) as { uid: string }
+        providerRequests.push({ method: 'POST', uid: body.uid })
+        return new Response(JSON.stringify({ data: { uid: body.uid } }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      const uid = decodeURIComponent(providerRequest.url.split('/').at(-1)!)
+      providerRequests.push({ method: 'GET', uid })
+      return new Response(
+        JSON.stringify({
+          data: {
+            uid,
+            state: 'pending',
+            created_at: '2026-08-11T09:30:00+10:00',
+            mms_agreement_id: null,
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    })
+    const { t, requester, payerUserId } = await setup()
+    const moneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId),
+    )
+    const expectedUid = await t.run(async (ctx) =>
+      ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', moneyRequestId),
+        )
+        .unique()
+        .then((agreement) => agreement?.providerUid),
+    )
+    vi.useFakeTimers()
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    vi.useRealTimers()
+
+    const durable = await t.run(async (ctx) => ({
+      agreement: await ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', moneyRequestId),
+        )
+        .unique(),
+      evidence: await ctx.db.query('payToAgreementEvidence').take(10),
+    }))
+    const methods = providerRequests
+      .filter(({ uid }) => uid === expectedUid)
+      .map(({ method }) => method)
+    expect(methods.at(-1)).toBe('GET')
+    expect(
+      methods.filter((method) => method === 'POST').length,
+    ).toBeLessThanOrEqual(3)
+    expect(durable.agreement?.providerUid).toBe(expectedUid)
+    expect(durable.agreement?.creationState).toBe('created')
+    expect(durable.evidence.map(({ kind }) => kind)).toEqual([
+      'local_accepted',
+      'creation_attempt_started',
+      'provider_http_post_attempted',
+      'provider_create_ambiguous',
+      'provider_http_get_attempted',
+      'provider_create_succeeded',
+    ])
+  })
+
+  test('uses six same-UID POST attempts across two cycles and never starts a third', async () => {
+    const providerRequests: Array<{ method: string; uid: string }> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      const providerRequest = new Request(request)
+      if (providerRequest.method === 'POST') {
+        const body = (await providerRequest.json()) as { uid: string }
+        providerRequests.push({ method: 'POST', uid: body.uid })
+        return new Response('temporarily unavailable', {
+          status: 503,
+          headers: { 'Retry-After': '0' },
+        })
+      }
+      const uid = decodeURIComponent(providerRequest.url.split('/').at(-1)!)
+      providerRequests.push({ method: 'GET', uid })
+      return new Response(null, { status: 404 })
+    })
+    vi.useFakeTimers()
+    const { t, requester, payerUserId } = await setup()
+    const moneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId),
+    )
+    const expectedUid = await t.run(async (ctx) =>
+      ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', moneyRequestId),
+        )
+        .unique()
+        .then((agreement) => agreement?.providerUid),
+    )
+    await t.finishAllScheduledFunctions(vi.advanceTimersToNextTimer)
+    vi.useRealTimers()
+
+    const state = await t.run(async (ctx) => ({
+      agreement: await ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', moneyRequestId),
+        )
+        .unique(),
+      evidence: await ctx.db.query('payToAgreementEvidence').take(50),
+    }))
+    const requests = providerRequests.filter(({ uid }) => uid === expectedUid)
+    expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(6)
+    expect(new Set(requests.map(({ uid }) => uid))).toEqual(
+      new Set([expectedUid]),
+    )
+    expect(state.agreement?.creationState).toBe('manual_hold')
+    expect(
+      state.evidence.filter(
+        ({ kind }) => kind === 'provider_http_post_attempted',
+      ),
+    ).toHaveLength(6)
+    expect(
+      state.evidence.filter(({ kind }) => kind === 'creation_attempt_started'),
+    ).toHaveLength(2)
+  })
+
+  test('rejects duplicate and stale worker outcomes and verifies after lease expiry', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const moneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId),
+    )
+    const agreement = await t.run(async (ctx) =>
+      ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', moneyRequestId),
+        )
+        .unique(),
+    )
+    if (!agreement) throw new Error('Expected PayTo Agreement')
+    const nowMs = 1_000
+    const firstClaim = await t.mutation(
+      internal.payToAgreementCreation.claimWork,
+      { payToAgreementId: agreement._id, leaseToken: 'worker-a', nowMs },
+    )
+    expect(firstClaim?.kind).toBe('post')
+    await expect(
+      t.mutation(internal.payToAgreementCreation.claimWork, {
+        payToAgreementId: agreement._id,
+        leaseToken: 'worker-b',
+        nowMs: nowMs + 1,
+      }),
+    ).resolves.toBeNull()
+    await expect(
+      t.mutation(internal.payToAgreementCreation.recordCreated, {
+        payToAgreementId: agreement._id,
+        leaseToken: 'worker-b',
+        result: {
+          providerState: 'pending',
+          providerCreatedAt: nowMs,
+          providerMmsAgreementId: null,
+        },
+        observedAt: nowMs + 2,
+      }),
+    ).resolves.toBe(false)
+
+    const recovered = await t.mutation(
+      internal.payToAgreementCreation.claimWork,
+      {
+        payToAgreementId: agreement._id,
+        leaseToken: 'worker-c',
+        nowMs: nowMs + 3 * 60_000 + 1,
+      },
+    )
+    expect(recovered?.kind).toBe('verify')
+    await expect(
+      t.mutation(internal.payToAgreementCreation.recordCreated, {
+        payToAgreementId: agreement._id,
+        leaseToken: 'worker-a',
+        result: {
+          providerState: 'pending',
+          providerCreatedAt: nowMs,
+          providerMmsAgreementId: null,
+        },
+        observedAt: nowMs + 3 * 60_000 + 2,
+      }),
+    ).resolves.toBe(false)
+    const state = await t.run(async (ctx) => ({
+      agreement: await ctx.db.get('payToAgreements', agreement._id),
+      evidence: await ctx.db.query('payToAgreementEvidence').take(10),
+    }))
+    expect(state.agreement?.creationState).toBe('verifying')
+    expect(state.evidence.map(({ kind }) => kind)).toContain(
+      'creation_lease_expired',
+    )
+  })
+
+  test('reopens only one manually held agreement through an audited operator action', async () => {
+    const { t, requester, payerUserId } = await setup()
+    const moneyRequestId = await submit(
+      requester,
+      moneyRequestIntent(payerUserId),
+    )
+    const agreement = await t.run(async (ctx) =>
+      ctx.db
+        .query('payToAgreements')
+        .withIndex('by_moneyRequestId', (q) =>
+          q.eq('moneyRequestId', moneyRequestId),
+        )
+        .unique(),
+    )
+    if (!agreement) throw new Error('Expected PayTo Agreement')
+    await t.run(async (ctx) => {
+      const workItem = await ctx.db
+        .query('payToAgreementWorkItems')
+        .withIndex('by_payToAgreementId', (q) =>
+          q.eq('payToAgreementId', agreement._id),
+        )
+        .unique()
+      if (!workItem) throw new Error('Expected creation work item')
+      await ctx.db.patch('payToAgreements', agreement._id, {
+        creationState: 'manual_hold',
+      })
+      await ctx.db.patch('payToAgreementWorkItems', workItem._id, {
+        state: 'held',
+        postCycle: 2,
+      })
+    })
+
+    await t.mutation(internal.payToAgreementCreation.reopenManualHold, {
+      payToAgreementId: agreement._id,
+      operatorIdentity: 'operator@example.test',
+      reason: 'Investigate ambiguous sandbox response',
+      mode: 'verifying',
+    })
+
+    const state = await t.run(async (ctx) => ({
+      agreement: await ctx.db.get('payToAgreements', agreement._id),
+      evidence: await ctx.db
+        .query('payToAgreementEvidence')
+        .withIndex('by_payToAgreementId_and_observedAt', (q) =>
+          q.eq('payToAgreementId', agreement._id),
+        )
+        .take(10),
+    }))
+    expect(state.agreement?.creationState).toBe('verifying')
+    expect(state.evidence.at(-1)).toMatchObject({
+      kind: 'operator_reopened',
+      operatorIdentity: 'operator@example.test',
+      reason: 'Investigate ambiguous sandbox response',
+      mode: 'verifying',
+    })
+  })
 
   test('atomically queues five independent Payer agreements and exposes every projection', async () => {
     const { t, requester, payerUserId } = await setup()
@@ -840,7 +1102,7 @@ describe('Money Request submission and requester read', () => {
     const durable = await durableSubmissionState(t)
     expect(durable.requests).toHaveLength(1)
     expect(durable.agreements).toHaveLength(1)
-    expect(durable.evidence).toHaveLength(1)
+    expect(durable.evidence.map(({ kind }) => kind)).toContain('local_accepted')
     expect(durable.work).toHaveLength(1)
   })
 
@@ -874,7 +1136,9 @@ describe('Money Request submission and requester read', () => {
     const durable = await durableSubmissionState(t)
     expect(durable.requests).toHaveLength(1)
     expect(durable.agreements).toHaveLength(2)
-    expect(durable.evidence).toHaveLength(2)
+    expect(
+      durable.evidence.filter(({ kind }) => kind === 'local_accepted'),
+    ).toHaveLength(2)
     expect(durable.work).toHaveLength(2)
   })
 
@@ -922,7 +1186,7 @@ describe('Money Request submission and requester read', () => {
     expect(
       new Set(durable.agreements.map((item) => item.providerUid)).size,
     ).toBe(1)
-    expect(durable.evidence).toHaveLength(1)
+    expect(durable.evidence.map(({ kind }) => kind)).toContain('local_accepted')
     expect(durable.work).toHaveLength(1)
     await expect(
       requester.query(api.moneyRequests.get, { moneyRequestId: firstId }),
@@ -1123,7 +1387,7 @@ describe('Money Request submission and requester read', () => {
     }))
     expect(durable.requests).toHaveLength(1)
     expect(durable.agreements).toHaveLength(1)
-    expect(durable.evidence).toHaveLength(1)
+    expect(durable.evidence.map(({ kind }) => kind)).toContain('local_accepted')
     expect(durable.work).toHaveLength(1)
   })
 

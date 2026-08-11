@@ -6,6 +6,11 @@ import {
   providerAgreementStateValidator,
 } from './validators/payToAgreements'
 
+const agreementEvidenceBaseValidator = v.object({
+  payToAgreementId: v.id('payToAgreements'),
+  observedAt: v.number(),
+})
+
 export default defineSchema({
   users: defineTable({
     tokenIdentifier: v.string(),
@@ -79,13 +84,23 @@ export default defineSchema({
     creationState: v.union(
       v.literal('queued'),
       v.literal('submitting'),
+      v.literal('verifying'),
+      v.literal('retry_wait'),
+      v.literal('manual_hold'),
       v.literal('created'),
+      v.literal('failed'),
     ),
     creationUpdatedAt: v.number(),
     lifecycleState: providerAgreementStateValidator,
     lifecycleConfidence: v.literal('provisional'),
     lifecycleObservedAt: v.number(),
-    trackingState: v.literal('verification_due'),
+    trackingState: v.union(
+      v.literal('verification_due'),
+      v.literal('checking'),
+      v.literal('retrying'),
+      v.literal('needs_review'),
+      v.literal('stopped'),
+    ),
     trackingUpdatedAt: v.number(),
     providerCreatedAt: v.optional(v.number()),
     providerMmsAgreementId: v.optional(v.union(v.string(), v.null())),
@@ -100,17 +115,67 @@ export default defineSchema({
 
   payToAgreementEvidence: defineTable(
     v.union(
-      v.object({
-        payToAgreementId: v.id('payToAgreements'),
+      agreementEvidenceBaseValidator.extend({
         kind: v.literal('local_accepted'),
-        observedAt: v.number(),
       }),
-      v.object({
-        payToAgreementId: v.id('payToAgreements'),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('creation_attempt_started'),
+        postCycle: v.number(),
+        reservedPostAttempts: v.number(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_http_post_attempted'),
+        postCycle: v.number(),
+        attemptInCycle: v.number(),
+        lifetimeAttempt: v.number(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_http_get_attempted'),
+        postCycle: v.number(),
+        attemptInRequest: v.number(),
+        lifetimeAttempt: v.number(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('creation_lease_expired'),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_create_ambiguous'),
+        category: v.string(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_create_temporarily_rejected'),
+        category: v.string(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_verification_not_found'),
+        absenceCount: v.number(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('provider_verification_failed'),
+        category: v.string(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('creation_retry_scheduled'),
+        nextAttemptAt: v.number(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('creation_manual_hold'),
+        reason: v.string(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('creation_failed'),
+        reason: v.string(),
+      }),
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('operator_reopened'),
+        operatorIdentity: v.string(),
+        reason: v.string(),
+        mode: v.union(v.literal('queued'), v.literal('verifying')),
+      }),
+      agreementEvidenceBaseValidator.extend({
         kind: v.literal('provider_create_succeeded'),
         providerState: providerAgreementStateValidator,
         providerCreatedAt: v.number(),
-        observedAt: v.number(),
       }),
     ),
   ).index('by_payToAgreementId_and_observedAt', [
@@ -124,11 +189,23 @@ export default defineSchema({
     state: v.union(
       v.literal('queued'),
       v.literal('running'),
+      v.literal('waiting'),
       v.literal('completed'),
+      v.literal('held'),
+      v.literal('failed'),
     ),
     availableAt: v.number(),
     workId: v.optional(v.string()),
     startedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    postCycle: v.optional(v.number()),
+    reservedPostAttempts: v.optional(v.number()),
+    actualPostAttempts: v.optional(v.number()),
+    actualGetAttempts: v.optional(v.number()),
+    verificationAttempt: v.optional(v.number()),
+    absenceCount: v.optional(v.number()),
+    lastPostAt: v.optional(v.number()),
   }).index('by_payToAgreementId', ['payToAgreementId']),
 })
