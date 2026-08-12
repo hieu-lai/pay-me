@@ -33,6 +33,7 @@ import {
 import { SheetClose, SheetFooter } from '#/components/ui/sheet'
 import { Spinner } from '#/components/ui/spinner'
 import { toast } from '#/components/ui/toast'
+import { aliasResolution } from '#/server-fns/alias-resolution'
 import type { ConvexError } from 'convex/values'
 import {
   Building2,
@@ -47,16 +48,18 @@ import { usePayoutMethodForm } from './use-payout-method-form'
 
 const methods = [
   {
-    id: 'payid',
-    title: 'PayID',
-    description: 'Payouts using your PayID.',
-    icon: <PayIdIdIcon className="size-5" />,
-  },
-  {
     id: 'bankAccount',
     title: 'Bank account',
     description: 'Payouts via BSB and account number.',
     icon: <BankIcon className="size-5" />,
+    disabled: false,
+  },
+  {
+    id: 'payid',
+    title: 'PayID',
+    description: 'Payouts using your PayID.',
+    icon: <PayIdIdIcon className="size-5" />,
+    disabled: true,
   },
 ] as const
 
@@ -194,6 +197,9 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                       <FieldLabel
                         key={method.id}
                         htmlFor={`form-tanstack-radiogroup-${method.id}`}
+                        className={
+                          method.disabled ? 'text-muted-foreground' : ''
+                        }
                       >
                         <Field
                           orientation="horizontal"
@@ -210,6 +216,7 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                             value={method.id}
                             id={`form-tanstack-radiogroup-${method.id}`}
                             aria-invalid={isInvalid}
+                            disabled={method.disabled}
                           />
                         </Field>
                       </FieldLabel>
@@ -283,6 +290,45 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                   children={(payIdTypeField) => (
                     <form.Field
                       name="value"
+                      validators={{
+                        onChangeAsyncDebounceMs: 500,
+                        onChangeAsync: async ({ value, fieldApi }) => {
+                          const aliasType = payIdTypeField.state.value
+
+                          if (!value || !aliasType) return
+
+                          fieldApi.setMeta((prev) => ({
+                            ...prev,
+                            isValidating: true,
+                          }))
+
+                          try {
+                            const result = await aliasResolution({
+                              data: {
+                                type: aliasType,
+                                value:
+                                  aliasType === 'alias_phone'
+                                    ? value
+                                        .replace(/[\s()-]/g, '')
+                                        .replace(/^0/, '+61')
+                                        .replace(/^\+61/, '+61-')
+                                    : value,
+                              },
+                            })
+
+                            if (result) return undefined
+
+                            return { message: 'Invalid PayID' }
+                          } catch (e) {
+                            return { message: 'Cannot validate PayID' }
+                          } finally {
+                            fieldApi.setMeta((prev) => ({
+                              ...prev,
+                              isValidating: false,
+                            }))
+                          }
+                        },
+                      }}
                       children={(valueField) => {
                         const isInvalid =
                           valueField.state.meta.isTouched &&

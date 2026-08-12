@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
+import { protectPaymentDestination } from './lib/paymentDestinationCrypto'
 import schema from './schema'
+import type { PaymentDestinationInput } from './validators/paymentDestinations'
 import { handleMoneyRequestSubmission } from '../src/server-fns/money-requests'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -157,6 +159,22 @@ async function setupUsers() {
   const requester = t.withIdentity(requesterIdentity)
   const payer = t.withIdentity(payerIdentity)
   return { t, requester, payer, requesterUserId, payerUserId }
+}
+
+type PayIdDestinationInput = Exclude<PaymentDestinationInput, { type: 'bban' }>
+
+async function seedPayId(
+  t: Awaited<ReturnType<typeof setupUsers>>['t'],
+  ownerUserId: Id<'users'>,
+  destination: PayIdDestinationInput,
+  setAsDefault = true,
+) {
+  const protectedDestination = await protectPaymentDestination(destination)
+  return await t.mutation(internal.paymentDestinations.insertProtected, {
+    ownerUserId,
+    protectedDestination,
+    setAsDefault,
+  })
 }
 
 async function addPayer(
@@ -350,10 +368,10 @@ afterEach(() => {
 
 describe('Money Request submission and requester read', () => {
   test('rejects a PayID before commit while its independent capability is disabled', async () => {
-    const { t, requester, payer, payerUserId } = await setup()
-    await payer.action(api.paymentDestinations.create, {
-      destination: { type: 'alias_email', value: 'payer@example.com' },
-      setAsDefault: true,
+    const { t, requester, payerUserId } = await setup()
+    await seedPayId(t, payerUserId, {
+      type: 'alias_email',
+      value: 'payer@example.com',
     })
     const fetch = vi.spyOn(globalThis, 'fetch')
 
@@ -390,11 +408,8 @@ describe('Money Request submission and requester read', () => {
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         )
       })
-      const { t, requester, payer, payerUserId } = await setup()
-      await payer.action(api.paymentDestinations.create, {
-        destination: { type, value },
-        setAsDefault: true,
-      })
+      const { t, requester, payerUserId } = await setup()
+      await seedPayId(t, payerUserId, { type, value })
 
       const moneyRequestId = await submit(
         requester,
@@ -442,7 +457,7 @@ describe('Money Request submission and requester read', () => {
         headers: { 'Content-Type': 'application/json' },
       }),
     )
-    const { t, requester, payer, requesterUserId, payerUserId } = await setup()
+    const { t, requester, requesterUserId, payerUserId } = await setup()
     const requesterDestination = await t.run(async (ctx) =>
       ctx.db
         .query('paymentDestinations')
@@ -457,9 +472,9 @@ describe('Money Request submission and requester read', () => {
         ciphertext: btoa('legacy-invalid-ciphertext'),
       }),
     )
-    await payer.action(api.paymentDestinations.create, {
-      destination: { type: 'alias_email', value: 'payer@example.com' },
-      setAsDefault: true,
+    await seedPayId(t, payerUserId, {
+      type: 'alias_email',
+      value: 'payer@example.com',
     })
 
     await expect(
@@ -473,10 +488,10 @@ describe('Money Request submission and requester read', () => {
     process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
       'payid-pseudonym-secret-at-least-32-bytes'
     delete process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN
-    const { t, requester, payer, payerUserId } = await setup()
-    await payer.action(api.paymentDestinations.create, {
-      destination: { type: 'alias_email', value: 'payer@example.com' },
-      setAsDefault: true,
+    const { t, requester, payerUserId } = await setup()
+    await seedPayId(t, payerUserId, {
+      type: 'alias_email',
+      value: 'payer@example.com',
     })
 
     await expect(
@@ -511,10 +526,10 @@ describe('Money Request submission and requester read', () => {
       process.env.ZEPTO_PAYID_CAPABILITY = certifiedPayIdCapability
       process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
         'payid-pseudonym-secret-at-least-32-bytes'
-      const { t, requester, payer, payerUserId } = await setup()
-      const destinationId = await payer.action(api.paymentDestinations.create, {
-        destination: { type: 'alias_email', value: 'payer@example.com' },
-        setAsDefault: true,
+      const { t, requester, payerUserId } = await setup()
+      const destinationId = await seedPayId(t, payerUserId, {
+        type: 'alias_email',
+        value: 'payer@example.com',
       })
       await t.run(async (ctx) =>
         ctx.db.patch('paymentDestinations', destinationId, patch),
@@ -550,9 +565,9 @@ describe('Money Request submission and requester read', () => {
     })
     const users = await setup()
     const second = await addPayer(users.t, 100)
-    await users.requester.action(api.paymentDestinations.create, {
-      destination: { type: 'alias_email', value: 'requester@example.com' },
-      setAsDefault: true,
+    await seedPayId(users.t, users.requesterUserId, {
+      type: 'alias_email',
+      value: 'requester@example.com',
     })
     await submit(users.requester, {
       ...moneyRequestIntent(users.payerUserId),
@@ -601,14 +616,14 @@ describe('Money Request submission and requester read', () => {
       )
     })
     const users = await setup()
-    await users.payer.action(api.paymentDestinations.create, {
-      destination: { type: 'alias_email', value: 'payer@example.com' },
-      setAsDefault: true,
+    await seedPayId(users.t, users.payerUserId, {
+      type: 'alias_email',
+      value: 'payer@example.com',
     })
     const second = await addPayer(users.t, 101, false)
-    await second.payer.action(api.paymentDestinations.create, {
-      destination: { type: 'alias_phone', value: '+61-411222333' },
-      setAsDefault: true,
+    await seedPayId(users.t, second.payerUserId, {
+      type: 'alias_phone',
+      value: '+61-411222333',
     })
     const firstIntent = {
       ...moneyRequestIntent(users.payerUserId),
@@ -661,10 +676,10 @@ describe('Money Request submission and requester read', () => {
           { status, headers: { 'Content-Type': 'application/json' } },
         ),
       )
-      const { t, requester, payer, payerUserId } = await setup()
-      await payer.action(api.paymentDestinations.create, {
-        destination: { type: 'alias_email', value: 'payer@example.com' },
-        setAsDefault: true,
+      const { t, requester, payerUserId } = await setup()
+      await seedPayId(t, payerUserId, {
+        type: 'alias_email',
+        value: 'payer@example.com',
       })
 
       const submissionError = await submit(
@@ -697,9 +712,9 @@ describe('Money Request submission and requester read', () => {
     process.env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET =
       'payid-pseudonym-secret-at-least-32-bytes'
     const { t, requester, payer, payerUserId } = await setup()
-    await payer.action(api.paymentDestinations.create, {
-      destination: { type: 'alias_email', value: 'payer@example.com' },
-      setAsDefault: true,
+    await seedPayId(t, payerUserId, {
+      type: 'alias_email',
+      value: 'payer@example.com',
     })
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
       await payer.action(api.paymentDestinations.create, {
@@ -2041,19 +2056,28 @@ describe('Money Request submission and requester read', () => {
   test.each(['requester', 'payer'] as const)(
     'keeps PayID disabled for the %s destination baseline',
     async (payIdOwner) => {
-      const { t, requester, payer, payerUserId } = await setupUsers()
-      await requester.action(api.paymentDestinations.create, {
-        destination:
-          payIdOwner === 'requester'
-            ? { type: 'alias_email', value: 'requester@example.com' }
-            : { type: 'bban', value: '123456-0012345' },
-      })
-      await payer.action(api.paymentDestinations.create, {
-        destination:
-          payIdOwner === 'payer'
-            ? { type: 'alias_email', value: 'payer@example.com' }
-            : { type: 'bban', value: '654321-0098765' },
-      })
+      const { t, requester, payer, requesterUserId, payerUserId } =
+        await setupUsers()
+      if (payIdOwner === 'requester') {
+        await seedPayId(t, requesterUserId, {
+          type: 'alias_email',
+          value: 'requester@example.com',
+        })
+      } else {
+        await requester.action(api.paymentDestinations.create, {
+          destination: { type: 'bban', value: '123456-0012345' },
+        })
+      }
+      if (payIdOwner === 'payer') {
+        await seedPayId(t, payerUserId, {
+          type: 'alias_email',
+          value: 'payer@example.com',
+        })
+      } else {
+        await payer.action(api.paymentDestinations.create, {
+          destination: { type: 'bban', value: '654321-0098765' },
+        })
+      }
 
       await expect(
         submit(requester, moneyRequestIntent(payerUserId)),

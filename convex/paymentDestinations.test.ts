@@ -5,10 +5,12 @@ import { convexTest } from 'convex-test'
 import { beforeEach, describe, expect, test } from 'vitest'
 
 import { api, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import {
   paymentDestinationSearchLabelPatch,
   searchLabelFor,
 } from './migrations'
+import { protectPaymentDestination } from './lib/paymentDestinationCrypto'
 import schema from './schema'
 import { paymentDestinationInputValidator } from './validators/paymentDestinations'
 
@@ -86,8 +88,9 @@ async function createBank(
   })
 }
 
-async function createPayId(
-  authenticated: Awaited<ReturnType<typeof setup>>['first'],
+async function seedPayId(
+  t: Awaited<ReturnType<typeof setup>>['t'],
+  ownerUserId: Id<'users'>,
   payIdType: 'mobile' | 'email' | 'abn' | 'organisationIdentifier',
   value: string,
   setAsDefault?: boolean,
@@ -114,8 +117,13 @@ async function createPayId(
         return value.normalize('NFC').trim()
     }
   })()
-  return await authenticated.action(api.paymentDestinations.create, {
-    destination: { type, value: normalizedValue },
+  const protectedDestination = await protectPaymentDestination({
+    type,
+    value: normalizedValue,
+  })
+  return await t.mutation(internal.paymentDestinations.insertProtected, {
+    ownerUserId,
+    protectedDestination,
     ...(setAsDefault === undefined ? {} : { setAsDefault }),
   })
 }
@@ -194,8 +202,8 @@ describe('payment destination storage and display', () => {
   test.each([['0412 345 678'], ['+61412345678'], ['+61-4 1234 5678']])(
     'normalizes mobile PayID %s',
     async (input) => {
-      const { t, first } = await setup()
-      const destinationId = await createPayId(first, 'mobile', input)
+      const { t, first, firstUserId } = await setup()
+      const destinationId = await seedPayId(t, firstUserId, 'mobile', input)
 
       await expect(
         t.run(async (ctx) => ctx.db.get('paymentDestinations', destinationId)),
@@ -217,8 +225,8 @@ describe('payment destination storage and display', () => {
   ] as const)(
     'normalizes and masks %s PayIDs',
     async (payIdType, input, mask, type) => {
-      const { t, first } = await setup()
-      const destinationId = await createPayId(first, payIdType, input)
+      const { t, first, firstUserId } = await setup()
+      const destinationId = await seedPayId(t, firstUserId, payIdType, input)
 
       await expect(
         t.run(async (ctx) => ctx.db.get('paymentDestinations', destinationId)),
@@ -229,7 +237,7 @@ describe('payment destination storage and display', () => {
   )
 
   test('uses the stored key version when keys rotate', async () => {
-    const { t, first } = await setup()
+    const { t, first, firstUserId } = await setup()
     const destinationId = await createBank(first)
     process.env.PAYMENT_DESTINATION_ENCRYPTION_KEYS = JSON.stringify({
       v1: encryptionKeyV1,
@@ -237,8 +245,9 @@ describe('payment destination storage and display', () => {
     })
     process.env.PAYMENT_DESTINATION_CURRENT_ENCRYPTION_KEY_VERSION = 'v2'
 
-    const secondDestinationId = await createPayId(
-      first,
+    const secondDestinationId = await seedPayId(
+      t,
+      firstUserId,
       'email',
       'rotated@example.com',
     )
@@ -255,11 +264,11 @@ describe('payment destination storage and display', () => {
   })
 
   test('lists destinations across cursor-based pages', async () => {
-    const { first } = await setup()
+    const { t, first, firstUserId } = await setup()
     const destinationIds = [
-      await createPayId(first, 'email', 'one@example.com'),
-      await createPayId(first, 'email', 'two@example.com'),
-      await createPayId(first, 'email', 'three@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'one@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'two@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'three@example.com'),
     ]
 
     const firstPage = await first.query(api.paymentDestinations.list, {
@@ -278,12 +287,12 @@ describe('payment destination storage and display', () => {
   })
 
   test('lists the default destination first across cursor-based pages', async () => {
-    const { first } = await setup()
+    const { t, first, firstUserId } = await setup()
     const destinationIds = [
-      await createPayId(first, 'email', 'one@example.com'),
-      await createPayId(first, 'email', 'two@example.com'),
-      await createPayId(first, 'email', 'three@example.com'),
-      await createPayId(first, 'email', 'four@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'one@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'two@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'three@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'four@example.com'),
     ]
     await first.mutation(api.paymentDestinations.setDefault, {
       destinationId: destinationIds[2],
@@ -313,10 +322,10 @@ describe('payment destination storage and display', () => {
   })
 
   test('treats a whitespace-only search as the existing paginated list', async () => {
-    const { first } = await setup()
+    const { t, first, firstUserId } = await setup()
     const destinationIds = [
-      await createPayId(first, 'email', 'one@example.com'),
-      await createPayId(first, 'email', 'two@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'one@example.com'),
+      await seedPayId(t, firstUserId, 'email', 'two@example.com'),
     ]
     await first.mutation(api.paymentDestinations.setDefault, {
       destinationId: destinationIds[1],
@@ -539,15 +548,38 @@ describe('payment destination validation and uniqueness', () => {
     },
   )
 
-  test('rejects normalized duplicates for one owner but permits another owner', async () => {
-    const { first, second } = await setup()
-    await createPayId(first, 'mobile', '0412 345 678')
+  test.each([
+    ['alias_email', 'person@example.com'],
+    ['alias_abn', '12345678901'],
+    ['alias_organisation_identifier', 'Zepto Pty Ltd, Byron Bay NSW'],
+    ['alias_phone', '+61-411222333'],
+  ] as const)('does not create a %s PayID', async (type, value) => {
+    const { t, first } = await setup()
 
     await expect(
-      createPayId(first, 'mobile', '+61-4 1234 5678'),
+      first.action(api.paymentDestinations.create, {
+        destination: { type, value },
+      }),
+    ).rejects.toMatchObject({
+      data: {
+        code: 'PAYMENT_DESTINATION_METHOD_DISABLED',
+        message: 'PayID payment destinations are currently disabled.',
+      },
+    })
+    await expect(
+      t.run(async (ctx) => ctx.db.query('paymentDestinations').take(1)),
+    ).resolves.toEqual([])
+  })
+
+  test('rejects normalized duplicates for one owner but permits another owner', async () => {
+    const { t, firstUserId, secondUserId } = await setup()
+    await seedPayId(t, firstUserId, 'mobile', '0412 345 678')
+
+    await expect(
+      seedPayId(t, firstUserId, 'mobile', '+61-4 1234 5678'),
     ).rejects.toThrow('already saved')
     await expect(
-      createPayId(second, 'mobile', '+61412345678'),
+      seedPayId(t, secondUserId, 'mobile', '+61412345678'),
     ).resolves.toBeTypeOf('string')
   })
 })
@@ -590,23 +622,34 @@ describe('payment destination authorization and lifecycle', () => {
   })
 
   test('keeps the first default unless creation explicitly replaces it', async () => {
-    const { first } = await setup()
+    const { t, first, firstUserId } = await setup()
     const bankId = await createBank(first)
-    const emailId = await createPayId(first, 'email', 'first@example.com')
+    const emailId = await seedPayId(
+      t,
+      firstUserId,
+      'email',
+      'first@example.com',
+    )
     let destinations = await listDestinations(first)
     expect(destinations.find(({ id }) => id === bankId)?.isDefault).toBe(true)
     expect(destinations.find(({ id }) => id === emailId)?.isDefault).toBe(false)
 
-    const mobileId = await createPayId(first, 'mobile', '0499 999 999', true)
+    const mobileId = await seedPayId(
+      t,
+      firstUserId,
+      'mobile',
+      '0499 999 999',
+      true,
+    )
     destinations = await listDestinations(first)
     expect(destinations.find(({ id }) => id === mobileId)?.isDefault).toBe(true)
     expect(destinations.filter(({ isDefault }) => isDefault)).toHaveLength(1)
   })
 
   test('blocks deleting a default with alternatives, then allows it after switching', async () => {
-    const { first } = await setup()
+    const { t, first, firstUserId } = await setup()
     const bankId = await createBank(first)
-    const payId = await createPayId(first, 'email', 'delete@example.com')
+    const payId = await seedPayId(t, firstUserId, 'email', 'delete@example.com')
 
     await expect(
       first.mutation(api.paymentDestinations.remove, {

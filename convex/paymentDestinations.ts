@@ -175,7 +175,7 @@ export const list = userQuery({
   },
 })
 
-/** Encrypt and save a Bank Account or PayID for the current user. */
+/** Encrypt and save a Bank Account for the current user. */
 export const create = userAction({
   args: {
     destination: paymentDestinationInputValidator,
@@ -184,6 +184,13 @@ export const create = userAction({
   },
   returns: zid('paymentDestinations'),
   handler: async (ctx, args): Promise<Id<'paymentDestinations'>> => {
+    if (args.destination.type !== 'bban') {
+      throw new ConvexError({
+        code: 'PAYMENT_DESTINATION_METHOD_DISABLED',
+        message: 'PayID payment destinations are currently disabled.',
+      })
+    }
+
     const protectedDestination = await protectPaymentDestination(
       args.destination,
     )
