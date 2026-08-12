@@ -190,6 +190,57 @@ describe('POST /zepto/webhooks', () => {
     })
   })
 
+  test('persists normalized decline context on the event and agreement', async () => {
+    const providerUid = '019ff0d7-eba1-744e-818f-35c9211dbb99'
+    const { t, payToAgreementId } = await setupAgreement(providerUid)
+    const request = await signedDelivery('delivery-declined-context', {
+      data: {
+        id: '019ff0d8-1d1e-7838-83f0-f2078f9a10a2',
+        body: {
+          reason: {
+            code: 'AG01',
+            title: 'Transaction Forbidden',
+            detail: 'The Payer Customer Account is unable to be debited',
+          },
+          caused_by: 'debtor',
+          mms_agreement_id: '019ff0d7f246115eb644957fb06bb925',
+        },
+        type: 'payto_agreement.declined',
+        published_at: '2026-08-11T22:42:02.910+10:00',
+        resource_uid: providerUid,
+        resource_type: 'payto_agreement',
+        resource_metadata: {},
+      },
+    })
+
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...request })).status,
+    ).toBe(200)
+    const durable = await t.run(async (ctx) => ({
+      event: await ctx.db
+        .query('zeptoWebhookEvents')
+        .withIndex('by_providerEventId', (q) =>
+          q.eq('providerEventId', '019ff0d8-1d1e-7838-83f0-f2078f9a10a2'),
+        )
+        .unique(),
+      agreement: await ctx.db.get('payToAgreements', payToAgreementId),
+    }))
+    const context = {
+      causedBy: 'debtor',
+      reason: {
+        code: 'AG01',
+        title: 'Transaction Forbidden',
+        detail: 'The Payer Customer Account is unable to be debited',
+      },
+    }
+    expect(durable.event).toMatchObject(context)
+    expect(durable.agreement).toMatchObject({
+      lifecycleState: 'declined',
+      lifecycleCausedBy: context.causedBy,
+      lifecycleReason: context.reason,
+    })
+  })
+
   test('atomically applies a verified multi-item lifecycle delivery and schedules reconciliation', async () => {
     const { t, requester, moneyRequestId, payToAgreementId } =
       await setupAgreement()
@@ -461,6 +512,14 @@ describe('POST /zepto/webhooks', () => {
           published_at: '2026-08-11T01:02:04.000Z',
           resource_uid: 'agreement_webhook_1',
           resource_type: 'payto_agreement',
+          body: {
+            caused_by: 'debtor',
+            reason: {
+              code: 'MD16',
+              title: 'Mandate cancelled',
+              detail: 'The debtor cancelled the agreement',
+            },
+          },
         },
         {
           id: 'event-older-activated',
@@ -468,6 +527,14 @@ describe('POST /zepto/webhooks', () => {
           published_at: '2026-08-11T01:02:03.000Z',
           resource_uid: 'agreement_webhook_1',
           resource_type: 'payto_agreement',
+          body: {
+            caused_by: 'initiator',
+            reason: {
+              code: 'STALE',
+              title: 'Stale context',
+              detail: 'This must not replace the current lifecycle context',
+            },
+          },
         },
       ],
     })
@@ -477,12 +544,31 @@ describe('POST /zepto/webhooks', () => {
     ).toBe(200)
     const durable = await t.run(async (ctx) => ({
       agreement: await ctx.db.get('payToAgreements', payToAgreementId),
+      events: await ctx.db.query('zeptoWebhookEvents').collect(),
       evidence: await ctx.db.query('payToAgreementEvidence').collect(),
     }))
     expect(durable.agreement).toMatchObject({
       lifecycleState: 'cancelled',
       lifecycleProviderPublishedAt: Date.parse('2026-08-11T01:02:04.000Z'),
+      lifecycleCausedBy: 'debtor',
+      lifecycleReason: {
+        code: 'MD16',
+        title: 'Mandate cancelled',
+        detail: 'The debtor cancelled the agreement',
+      },
     })
+    expect(durable.events).toEqual([
+      expect.objectContaining({
+        providerEventId: 'event-newer-cancelled',
+        causedBy: 'debtor',
+        reason: expect.objectContaining({ code: 'MD16' }),
+      }),
+      expect.objectContaining({
+        providerEventId: 'event-older-activated',
+        causedBy: 'initiator',
+        reason: expect.objectContaining({ code: 'STALE' }),
+      }),
+    ])
     expect(durable.evidence).toEqual([
       expect.objectContaining({
         providerEventId: 'event-newer-cancelled',

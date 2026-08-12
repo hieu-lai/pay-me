@@ -23,8 +23,17 @@ import {
   verifyIngressAttestation,
 } from './lib/moneyRequestIngress'
 import { agreementCreationPool } from './lib/agreementCreationPool'
+import {
+  payIdCapabilityStatus,
+  pseudonymousPayIdRequesterId,
+} from './lib/payIdCapability'
+import { decryptPaymentDestination } from './lib/paymentDestinationCrypto'
 import { requireUser } from './lib/requireUser'
+import { resolvePayIdAlias } from './lib/zepto/aliasResolution'
+import { createSandboxZeptoClientFromEnv } from './lib/zepto/env'
+import { ZeptoClientError } from './lib/zepto/error'
 import { creationFailureKind } from './payToAgreementCreationState'
+import { routingSnapshotValidator } from './validators/payToAgreements'
 
 const intentValidator = v.object({
   submissionKey: v.string(),
@@ -35,6 +44,9 @@ const intentValidator = v.object({
 const payerDestinationValidator = v.object({
   payerId: v.id('users'),
   destinationId: v.id('paymentDestinations'),
+})
+const preflightPayerDestinationValidator = payerDestinationValidator.extend({
+  snapshot: routingSnapshotValidator,
 })
 const agreementAllocationValidator = payerDestinationValidator.extend({
   providerUid: v.string(),
@@ -71,6 +83,7 @@ const publicAgreementValidator = v.object({
       v.literal('ready'),
       v.literal('temporarilyUnavailable'),
       v.literal('ended'),
+      v.literal('unknown'),
     ),
     confidence: v.union(v.literal('provisional'), v.literal('confirmed')),
     observedAt: v.number(),
@@ -78,6 +91,7 @@ const publicAgreementValidator = v.object({
   tracking: v.object({
     state: v.union(
       v.literal('verificationDue'),
+      v.literal('current'),
       v.literal('checking'),
       v.literal('retrying'),
       v.literal('needsReview'),
@@ -92,6 +106,9 @@ const publicAgreementValidator = v.object({
         v.literal('providerTemporarilyUnavailable'),
         v.literal('operatorReviewRequired'),
         v.literal('requestRejected'),
+        v.literal('lifecycleTrackingOutage'),
+        v.literal('lifecycleUnknown'),
+        v.literal('lifecycleContradiction'),
       ),
       message: v.string(),
       retryable: v.boolean(),
@@ -150,13 +167,15 @@ function safeError(
     | 'SUBMISSION_CONFLICT'
     | 'REQUESTER_DESTINATION_UNAVAILABLE'
     | 'PAYER_UNAVAILABLE'
+    | 'VALIDATION_UNAVAILABLE'
     | 'INGRESS_TRUST_INVALID'
     | 'UNAUTHENTICATED'
     | 'MONEY_REQUEST_NOT_FOUND'
     | 'SERVICE_UNAVAILABLE',
   message: string,
 ): never {
-  const retryable = code === 'SERVICE_UNAVAILABLE'
+  const retryable =
+    code === 'SERVICE_UNAVAILABLE' || code === 'VALIDATION_UNAVAILABLE'
   throw new ConvexError({ code, message, retryable })
 }
 
@@ -174,10 +193,9 @@ function validateIntent(intent: {
   }
 }
 
-function bankAccountSnapshot(destination: Doc<'paymentDestinations'>) {
-  if (destination.type !== 'bban') return null
+function routingSnapshot(destination: Doc<'paymentDestinations'>) {
   return {
-    kind: 'bban' as const,
+    kind: destination.type,
     maskedDisplay: destination.maskedDisplay,
     ciphertext: destination.ciphertext,
     nonce: destination.nonce,
@@ -185,7 +203,7 @@ function bankAccountSnapshot(destination: Doc<'paymentDestinations'>) {
   }
 }
 
-async function currentBankAccount(
+async function currentDestination(
   ctx: Pick<QueryCtx, 'db'>,
   user: Doc<'users'>,
 ) {
@@ -195,8 +213,7 @@ async function currentBankAccount(
     user.defaultPaymentDestinationId,
   )
   if (!destination || destination.ownerUserId !== user._id) return null
-  const snapshot = bankAccountSnapshot(destination)
-  if (!snapshot) return null
+  const snapshot = routingSnapshot(destination)
   return { destination, snapshot }
 }
 
@@ -231,11 +248,11 @@ async function resolveDestinations(
   if (payerIds.includes(requester._id)) {
     safeError('INVALID_INTENT', 'A Requester cannot also be the Payer.')
   }
-  const requesterDestination = await currentBankAccount(ctx, requester)
+  const requesterDestination = await currentDestination(ctx, requester)
   if (!requesterDestination) {
     safeError(
       'REQUESTER_DESTINATION_UNAVAILABLE',
-      'Choose an available Bank Account as your Default Destination.',
+      'Choose an available Default Destination.',
     )
   }
   const payers = []
@@ -244,13 +261,179 @@ async function resolveDestinations(
     if (!payer) {
       safeError('PAYER_UNAVAILABLE', 'A selected Payer is unavailable.')
     }
-    const payerDestination = await currentBankAccount(ctx, payer)
+    const payerDestination = await currentDestination(ctx, payer)
     if (!payerDestination) {
       safeError('PAYER_UNAVAILABLE', 'A selected Payer is unavailable.')
     }
     payers.push({ payer, payerDestination })
   }
   return { requesterDestination, payers }
+}
+
+function providerErrorCode(error: ZeptoClientError) {
+  if (
+    typeof error.body !== 'object' ||
+    error.body === null ||
+    !('errors' in error.body) ||
+    !Array.isArray(error.body.errors)
+  )
+    return undefined
+  const first = error.body.errors[0]
+  return typeof first === 'object' &&
+    first !== null &&
+    'code' in first &&
+    typeof first.code === 'string'
+    ? first.code
+    : undefined
+}
+
+function destinationUnavailable(role: 'requester' | 'payer'): never {
+  safeError(
+    role === 'requester'
+      ? 'REQUESTER_DESTINATION_UNAVAILABLE'
+      : 'PAYER_UNAVAILABLE',
+    role === 'requester'
+      ? 'Choose an available Default Destination.'
+      : 'A selected Payer is unavailable.',
+  )
+}
+
+function aliasResolutionFailure(
+  error: unknown,
+  role: 'requester' | 'payer',
+): never {
+  if (!(error instanceof ZeptoClientError)) {
+    safeError(
+      'SERVICE_UNAVAILABLE',
+      'PayID validation is temporarily unavailable.',
+    )
+  }
+  const code = providerErrorCode(error)
+  if (
+    error.kind === 'network' ||
+    error.kind === 'timeout' ||
+    error.status === 429 ||
+    (error.status !== undefined && error.status >= 500) ||
+    ['ZPADD02', 'ZPADD03', 'ZPADD04', 'ZPADD98'].includes(code ?? '')
+  ) {
+    safeError(
+      'VALIDATION_UNAVAILABLE',
+      'PayID validation is temporarily unavailable.',
+    )
+  }
+  if (
+    error.kind === 'configuration' ||
+    error.kind === 'sandbox_only' ||
+    error.kind === 'invalid_response' ||
+    error.status === 401 ||
+    error.status === 403 ||
+    code === 'ZPUNP09'
+  ) {
+    safeError(
+      'SERVICE_UNAVAILABLE',
+      'PayID validation is temporarily unavailable.',
+    )
+  }
+  destinationUnavailable(role)
+}
+
+function destinationDecryptionFailure(
+  error: unknown,
+  role: 'requester' | 'payer',
+): never {
+  const code =
+    error instanceof ConvexError &&
+    typeof error.data === 'object' &&
+    error.data !== null &&
+    'code' in error.data &&
+    typeof error.data.code === 'string'
+      ? error.data.code
+      : undefined
+  if (code !== 'PAYMENT_DESTINATION_DECRYPTION_FAILED') {
+    safeError(
+      'SERVICE_UNAVAILABLE',
+      'PayID validation is temporarily unavailable.',
+    )
+  }
+  destinationUnavailable(role)
+}
+
+async function validatePayIdDestinations(
+  requesterSnapshot: ReturnType<typeof routingSnapshot>,
+  payerDestinations: Array<{ snapshot: ReturnType<typeof routingSnapshot> }>,
+  trustedIp: string,
+  identityKey: string,
+) {
+  const destinations = [
+    { role: 'requester' as const, snapshot: requesterSnapshot },
+    ...payerDestinations.map(({ snapshot }) => ({
+      role: 'payer' as const,
+      snapshot,
+    })),
+  ]
+  if (!destinations.some(({ snapshot }) => snapshot.kind !== 'bban')) return
+  const capability = payIdCapabilityStatus(
+    env.ZEPTO_PAYID_CAPABILITY,
+    env.PAYME_RELEASE_COMMIT,
+  )
+  if (capability.kind === 'disabled') {
+    const blocked = destinations.find(
+      ({ snapshot }) => snapshot.kind !== 'bban',
+    )!
+    destinationUnavailable(blocked.role)
+  }
+  if (capability.kind === 'misconfigured') {
+    safeError(
+      'SERVICE_UNAVAILABLE',
+      'PayID validation is temporarily unavailable.',
+    )
+  }
+  let requesterId: string
+  try {
+    requesterId = await pseudonymousPayIdRequesterId(
+      identityKey,
+      env.MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET ?? '',
+    )
+  } catch {
+    safeError(
+      'SERVICE_UNAVAILABLE',
+      'PayID validation is temporarily unavailable.',
+    )
+  }
+  let client: ReturnType<typeof createSandboxZeptoClientFromEnv>
+  try {
+    client = createSandboxZeptoClientFromEnv()
+  } catch (error) {
+    aliasResolutionFailure(error, 'requester')
+  }
+  const resolved = new Set<string>()
+  for (const destination of destinations) {
+    if (destination.snapshot.kind === 'bban') continue
+    let decrypted: Awaited<ReturnType<typeof decryptPaymentDestination>>
+    try {
+      decrypted = await decryptPaymentDestination({
+        type: destination.snapshot.kind,
+        ciphertext: destination.snapshot.ciphertext,
+        nonce: destination.snapshot.nonce,
+        keyVersion: destination.snapshot.keyVersion,
+      })
+    } catch (error) {
+      destinationDecryptionFailure(error, destination.role)
+    }
+    if (decrypted.type === 'bban') destinationUnavailable(destination.role)
+    const key = `${decrypted.type}\u0000${decrypted.value}`
+    if (resolved.has(key)) continue
+    try {
+      await resolvePayIdAlias(client, {
+        alias: decrypted,
+        requesterId,
+        trustedIp,
+      })
+    } catch (error) {
+      aliasResolutionFailure(error, destination.role)
+    }
+    resolved.add(key)
+  }
 }
 
 export const submit = action({
@@ -290,15 +473,24 @@ export const submit = action({
       | {
           kind: 'new'
           requesterDestinationId: Id<'paymentDestinations'>
+          requesterSnapshot: ReturnType<typeof routingSnapshot>
           payerDestinations: Array<{
             payerId: Id<'users'>
             destinationId: Id<'paymentDestinations'>
+            snapshot: ReturnType<typeof routingSnapshot>
           }>
         } = await ctx.runQuery(internal.moneyRequests.preflight, {
       intent: args.intent,
       submissionFingerprint,
     })
     if (preflight.kind === 'replay') return preflight.moneyRequestId
+
+    await validatePayIdDestinations(
+      preflight.requesterSnapshot,
+      preflight.payerDestinations,
+      args.attestation.trustedIp,
+      identity.tokenIdentifier,
+    )
 
     const moneyRequestId: Id<'moneyRequests'> = await ctx.runMutation(
       internal.moneyRequests.accept,
@@ -333,7 +525,8 @@ export const preflight = internalQuery({
     v.object({
       kind: v.literal('new'),
       requesterDestinationId: v.id('paymentDestinations'),
-      payerDestinations: v.array(payerDestinationValidator),
+      requesterSnapshot: routingSnapshotValidator,
+      payerDestinations: v.array(preflightPayerDestinationValidator),
     }),
   ),
   handler: async (ctx, args) => {
@@ -355,9 +548,11 @@ export const preflight = internalQuery({
     return {
       kind: 'new' as const,
       requesterDestinationId: requesterDestination.destination._id,
+      requesterSnapshot: requesterDestination.snapshot,
       payerDestinations: payers.map(({ payer, payerDestination }) => ({
         payerId: payer._id,
         destinationId: payerDestination.destination._id,
+        snapshot: payerDestination.snapshot,
       })),
     }
   },
@@ -395,7 +590,7 @@ export const accept = internalMutation({
     ) {
       safeError(
         'REQUESTER_DESTINATION_UNAVAILABLE',
-        'Choose an available Bank Account as your Default Destination.',
+        'Choose an available Default Destination.',
       )
     }
     const allocationsByPayerId = new Map(
@@ -552,6 +747,7 @@ function publicTrackingState(state: Doc<'payToAgreements'>['trackingState']) {
     case 'verification_due':
       return 'verificationDue' as const
     case 'checking':
+    case 'current':
     case 'retrying':
     case 'stopped':
       return state
@@ -599,6 +795,23 @@ function publicAgreementFailure(
         'This PayTo Agreement could not be created. Submit a new Money Request after checking the Payer details.',
       retryable: false,
     },
+    lifecycle_tracking_outage: {
+      code: 'lifecycleTrackingOutage',
+      message:
+        'The last confirmed provider outcome is being retained while tracking recovers.',
+      retryable: true,
+    },
+    lifecycle_unknown: {
+      code: 'lifecycleUnknown',
+      message:
+        'The provider outcome needs review before PayMe can describe it.',
+      retryable: false,
+    },
+    lifecycle_contradiction: {
+      code: 'lifecycleContradiction',
+      message: 'Conflicting provider evidence needs operator review.',
+      retryable: false,
+    },
   } as const
   return { ...projection[failure.kind], observedAt: failure.observedAt }
 }
@@ -619,6 +832,8 @@ function publicLifecycleMeaning(
     case 'failed':
     case 'expired':
       return 'ended' as const
+    case 'unknown':
+      return 'unknown' as const
   }
 }
 

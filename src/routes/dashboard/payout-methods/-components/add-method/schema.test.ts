@@ -10,8 +10,8 @@ function messagesFor(input: unknown) {
 }
 
 describe('add payout method schema', () => {
-  test('defaults to PayID', () => {
-    expect(defaultValues.method).toBe('payid')
+  test('defaults to Bank Account while PayID is disabled', () => {
+    expect(defaultValues.method).toBe('bankAccount')
   })
 
   test('accepts a complete bank account and trims text fields', () => {

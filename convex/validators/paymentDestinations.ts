@@ -1,5 +1,18 @@
 import { zid } from 'convex-helpers/server/zod4'
+import { literals } from 'convex-helpers/validators'
 import { z } from 'zod'
+
+export const payIdAliasTypes = [
+  'alias_phone',
+  'alias_email',
+  'alias_abn',
+  'alias_organisation_identifier',
+] as const
+
+export const paymentDestinationTypeConvexValidator = literals(
+  'bban',
+  ...payIdAliasTypes,
+)
 
 export const payIdTypeValidator = z.enum([
   'mobile',
@@ -10,10 +23,7 @@ export const payIdTypeValidator = z.enum([
 
 export const paymentDestinationTypeValidator = z.enum([
   'bban',
-  'alias_phone',
-  'alias_email',
-  'alias_abn',
-  'alias_organisation_identifier',
+  ...payIdAliasTypes,
 ])
 
 export const encryptedValueValidator = z.object({

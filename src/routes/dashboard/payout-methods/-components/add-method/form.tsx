@@ -48,16 +48,18 @@ import { usePayoutMethodForm } from './use-payout-method-form'
 
 const methods = [
   {
-    id: 'payid',
-    title: 'PayID',
-    description: 'Payouts using your PayID.',
-    icon: <PayIdIdIcon className="size-5" />,
-  },
-  {
     id: 'bankAccount',
     title: 'Bank account',
     description: 'Payouts via BSB and account number.',
     icon: <BankIcon className="size-5" />,
+    disabled: false,
+  },
+  {
+    id: 'payid',
+    title: 'PayID',
+    description: 'Payouts using your PayID.',
+    icon: <PayIdIdIcon className="size-5" />,
+    disabled: true,
   },
 ] as const
 
@@ -195,6 +197,9 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                       <FieldLabel
                         key={method.id}
                         htmlFor={`form-tanstack-radiogroup-${method.id}`}
+                        className={
+                          method.disabled ? 'text-muted-foreground' : ''
+                        }
                       >
                         <Field
                           orientation="horizontal"
@@ -211,6 +216,7 @@ export function Form({ onSuccess }: { onSuccess: () => void }) {
                             value={method.id}
                             id={`form-tanstack-radiogroup-${method.id}`}
                             aria-invalid={isInvalid}
+                            disabled={method.disabled}
                           />
                         </Field>
                       </FieldLabel>

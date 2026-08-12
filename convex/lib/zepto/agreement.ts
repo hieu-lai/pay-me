@@ -1,21 +1,22 @@
 import type { ProviderAgreementState } from '../../validators/payToAgreements'
+import type { PaymentDestinationInput } from '../../validators/paymentDestinations'
 import { providerAgreementStates } from '../../validators/payToAgreements'
 import type { ZeptoClient } from './client'
 import { ZeptoClientError } from './error'
 
 const agreementStates = new Set<ProviderAgreementState>(providerAgreementStates)
 
-type BankAccountParty = {
+type AgreementParty = {
   name: string
-  accountIdentifier: string
+  accountIdentifier: PaymentDestinationInput
 }
 
-type CreateBankAccountAgreementInput = {
+type CreateAgreementInput = {
   providerUid: string
   amountCents: number
   description: string
-  creditor: BankAccountParty
-  debtor: BankAccountParty
+  creditor: AgreementParty
+  debtor: AgreementParty
 }
 
 export type CreatedAgreement = {
@@ -63,9 +64,9 @@ function normalizeAgreement(
   }
 }
 
-export async function createBankAccountAgreement(
+export async function createAgreement(
   client: ZeptoClient,
-  input: CreateBankAccountAgreementInput,
+  input: CreateAgreementInput,
 ): Promise<CreatedAgreement> {
   const { data } = await client.payTo.POST('/payto/agreements', {
     body: {
@@ -81,18 +82,12 @@ export async function createBankAccountAgreement(
       creditor: {
         party_name: input.creditor.name,
         ultimate_party_name: input.creditor.name,
-        account_identifier: {
-          type: 'bban',
-          value: input.creditor.accountIdentifier,
-        },
+        account_identifier: input.creditor.accountIdentifier,
       },
       debtor: {
         party_name: input.debtor.name,
         ultimate_party_name: input.debtor.name,
-        account_identifier: {
-          type: 'bban',
-          value: input.debtor.accountIdentifier,
-        },
+        account_identifier: input.debtor.accountIdentifier,
       },
     },
   })

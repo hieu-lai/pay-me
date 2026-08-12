@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 
-import { createBankAccountAgreement, getAgreementByUid } from './agreement'
+import { createAgreement, getAgreementByUid } from './agreement'
 import { createZeptoClient } from './client'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -10,7 +10,59 @@ function jsonResponse(body: unknown, status = 200) {
   })
 }
 
-describe('Zepto Bank Account agreement creation', () => {
+describe('Zepto agreement creation', () => {
+  test('preserves PayID alias kinds in the agreement payload', async () => {
+    let request: Request | undefined
+    const client = createZeptoClient({
+      environment: 'sandbox',
+      accessToken: 'sandbox-token',
+      fetch: async (input) => {
+        request = input.clone()
+        return jsonResponse(
+          {
+            data: {
+              uid: 'agreement_payid',
+              state: 'pending',
+              created_at: '2026-08-11T09:30:00+10:00',
+              mms_agreement_id: null,
+            },
+          },
+          201,
+        )
+      },
+    })
+
+    await createAgreement(client, {
+      providerUid: 'agreement_payid',
+      amountCents: 100,
+      description: 'PayID request',
+      creditor: {
+        name: 'Requester',
+        accountIdentifier: {
+          type: 'alias_organisation_identifier',
+          value: 'requester-campaign',
+        },
+      },
+      debtor: {
+        name: 'Payer',
+        accountIdentifier: { type: 'alias_phone', value: '+61-411222333' },
+      },
+    })
+
+    const body = (await request?.json()) as {
+      creditor: { account_identifier: unknown }
+      debtor: { account_identifier: unknown }
+    }
+    expect(body.creditor.account_identifier).toEqual({
+      type: 'alias_organisation_identifier',
+      value: 'requester-campaign',
+    })
+    expect(body.debtor.account_identifier).toEqual({
+      type: 'alias_phone',
+      value: '+61-411222333',
+    })
+  })
+
   test('posts the pinned one-payment sandbox contract with the preallocated UID', async () => {
     const requests: Request[] = []
     const fetch = vi.fn(async (request: Request) => {
@@ -33,17 +85,17 @@ describe('Zepto Bank Account agreement creation', () => {
       fetch,
     })
 
-    const result = await createBankAccountAgreement(client, {
+    const result = await createAgreement(client, {
       providerUid: '018f22e2-7c00-7000-8000-000000000001',
       amountCents: 12_345,
       description: 'Shared dinner',
       creditor: {
         name: 'Requesting User',
-        accountIdentifier: '123456-0012345',
+        accountIdentifier: { type: 'bban', value: '123456-0012345' },
       },
       debtor: {
         name: 'Paying User',
-        accountIdentifier: '654321-0098765',
+        accountIdentifier: { type: 'bban', value: '654321-0098765' },
       },
     })
 
@@ -99,17 +151,18 @@ describe('Zepto Bank Account agreement creation', () => {
       description: 'Shared dinner',
       creditor: {
         name: 'Requesting User',
-        accountIdentifier: '123456-0012345',
+        accountIdentifier: { type: 'bban' as const, value: '123456-0012345' },
       },
       debtor: {
         name: 'Paying User',
-        accountIdentifier: '654321-0098765',
+        accountIdentifier: { type: 'bban' as const, value: '654321-0098765' },
       },
     }
 
-    await expect(
-      createBankAccountAgreement(client, input),
-    ).rejects.toMatchObject({ kind: 'http', status: 500 })
+    await expect(createAgreement(client, input)).rejects.toMatchObject({
+      kind: 'http',
+      status: 500,
+    })
     expect(requests).toHaveLength(3)
     const bodies = (await Promise.all(
       requests.map((request) => request.json()),

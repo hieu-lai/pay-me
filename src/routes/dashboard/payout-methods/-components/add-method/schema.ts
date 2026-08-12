@@ -122,7 +122,7 @@ export type FormDefaultValues = FormValues & {
 
 export const defaultValues: FormDefaultValues = {
   label: '',
-  method: 'payid',
+  method: 'bankAccount',
   payIdType: 'alias_phone',
   value: '',
   bsb: '',
