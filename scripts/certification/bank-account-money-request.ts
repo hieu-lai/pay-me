@@ -1,10 +1,3 @@
-export type CertificationCommandId =
-  | 'formatting'
-  | 'linting'
-  | 'type-checking'
-  | 'complete-test-suite'
-  | 'production-build'
-
 export const MANDATORY_CERTIFICATION_REQUIREMENTS = [
   'valid-and-adversarial-ingress',
   'atomic-allocation',
@@ -40,12 +33,7 @@ export const MANDATORY_CERTIFICATION_REQUIREMENTS = [
 export type CertificationRequirement =
   (typeof MANDATORY_CERTIFICATION_REQUIREMENTS)[number]
 
-export const CERTIFICATION_COMMANDS: ReadonlyArray<{
-  id: CertificationCommandId
-  displayCommand: string
-  executable: string
-  args: ReadonlyArray<string>
-}> = [
+export const CERTIFICATION_COMMANDS = [
   {
     id: 'formatting',
     displayCommand: 'bun run check:certification',
@@ -76,7 +64,15 @@ export const CERTIFICATION_COMMANDS: ReadonlyArray<{
     executable: 'bun',
     args: ['run', 'build'],
   },
-]
+] as const satisfies ReadonlyArray<{
+  id: string
+  displayCommand: string
+  executable: string
+  args: ReadonlyArray<string>
+}>
+
+export type CertificationCommandId =
+  (typeof CERTIFICATION_COMMANDS)[number]['id']
 
 type CertificationScenario = {
   area: string

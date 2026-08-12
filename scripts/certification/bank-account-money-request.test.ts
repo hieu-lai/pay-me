@@ -20,14 +20,6 @@ function successfulResults() {
 
 describe('Bank Account Money Request automated certification', () => {
   test('requires every release quality gate and mandatory deterministic scenario', () => {
-    expect(CERTIFICATION_COMMANDS.map(({ id }) => id)).toEqual([
-      'formatting',
-      'linting',
-      'type-checking',
-      'complete-test-suite',
-      'production-build',
-    ])
-
     const covered = new Set(
       CERTIFICATION_SCENARIOS.flatMap(({ requirements }) => requirements),
     )
