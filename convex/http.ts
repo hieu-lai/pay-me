@@ -141,6 +141,52 @@ function parseRfc3339DateTime(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+type ZeptoWebhookCause = NonNullable<ZeptoWebhookItem['causedBy']>
+
+const zeptoWebhookCauses = new Set<ZeptoWebhookCause>([
+  'debtor',
+  'initiator',
+  'zepto_admin',
+  'zepto_system',
+])
+
+function isZeptoWebhookCause(value: unknown): value is ZeptoWebhookCause {
+  return (
+    typeof value === 'string' &&
+    zeptoWebhookCauses.has(value as ZeptoWebhookCause)
+  )
+}
+
+function boundedString(value: unknown, maxLength: number) {
+  return typeof value === 'string' && value.length <= maxLength
+    ? value
+    : undefined
+}
+
+function parseZeptoWebhookContext(value: Record<string, unknown>) {
+  if (!isRecord(value.body)) return {}
+
+  const causedBy = isZeptoWebhookCause(value.body.caused_by)
+    ? value.body.caused_by
+    : undefined
+  const providerReason = isRecord(value.body.reason)
+    ? value.body.reason
+    : undefined
+  const code = boundedString(providerReason?.code, 128)
+  const title = boundedString(providerReason?.title, 512)
+  const detail = boundedString(providerReason?.detail, 4_096)
+  const reason = {
+    ...(code === undefined ? {} : { code }),
+    ...(title === undefined ? {} : { title }),
+    ...(detail === undefined ? {} : { detail }),
+  }
+
+  return {
+    ...(causedBy === undefined ? {} : { causedBy }),
+    ...(Object.keys(reason).length === 0 ? {} : { reason }),
+  }
+}
+
 function parseZeptoWebhookPayload(value: unknown): ZeptoWebhookItem[] | null {
   if (!isRecord(value)) return null
   const data = Array.isArray(value.data) ? value.data : [value.data]
@@ -168,6 +214,7 @@ function parseZeptoWebhookPayload(value: unknown): ZeptoWebhookItem[] | null {
       eventType: type,
       resourceUid: resource_uid,
       providerPublishedAt: publishedAt,
+      ...parseZeptoWebhookContext(valueItem),
     })
   }
   return items

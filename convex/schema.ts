@@ -6,9 +6,11 @@ import {
   routingSnapshotValidator,
 } from './validators/payToAgreements'
 import {
+  zeptoWebhookCausedByValidator,
   zeptoWebhookDeliveryValidator,
   zeptoWebhookEventValidator,
   zeptoWebhookEvidenceValidator,
+  zeptoWebhookReasonValidator,
 } from './validators/zeptoWebhook'
 import { paymentDestinationTypeConvexValidator } from './validators/paymentDestinations'
 
@@ -102,6 +104,8 @@ export default defineSchema({
     ),
     lifecycleObservedAt: v.number(),
     lifecycleProviderPublishedAt: v.optional(v.number()),
+    lifecycleCausedBy: v.optional(zeptoWebhookCausedByValidator),
+    lifecycleReason: v.optional(zeptoWebhookReasonValidator),
     trackingState: v.union(
       v.literal('verification_due'),
       v.literal('current'),
