@@ -5,6 +5,7 @@ import {
   handleMoneyRequestSubmission,
   MoneyRequestSubmissionError,
   moneyRequestIntentSchema,
+  submitMoneyRequest,
 } from './money-requests'
 
 const intent = moneyRequestIntentSchema.parse({
@@ -28,6 +29,10 @@ function dependencies(
 }
 
 describe('submitMoneyRequest trusted server ingress', () => {
+  test('uses the framework POST-only boundary for CSRF protection', () => {
+    expect(submitMoneyRequest.method).toBe('POST')
+  })
+
   test('binds authenticated identity, trusted IP, and exact intent before submission', async () => {
     const deps = dependencies()
 

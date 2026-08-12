@@ -52,6 +52,20 @@ bun --bun run format
 bun --bun run check
 ```
 
+## Automated Bank Account certification
+
+Run the commit-bound certification from a clean worktree:
+
+```bash
+bun run certify:bank-account-money-request
+```
+
+The command runs formatting checks, linting, type checking, the complete test
+suite, and the production build. It writes the sanitized evidence report to
+`docs/certification/bank-account-money-request.md`. The generated report
+certifies the commit that existed before the report was written; commit the
+report separately so its recorded commit remains reproducible.
+
 ## Deploy with Nitro
 
 This project uses Nitro as a generic server adapter, so it can run on any Node-compatible host.

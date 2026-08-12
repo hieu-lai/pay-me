@@ -14,7 +14,9 @@
     "test": "vitest run",
     "lint": "eslint",
     "format": "prettier --write . && eslint --fix",
-    "check": "prettier --check ."
+    "check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "certify:bank-account-money-request": "bun scripts/certify-bank-account-money-request.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
