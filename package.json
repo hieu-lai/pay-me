@@ -15,6 +15,7 @@
     "lint": "eslint",
     "format": "prettier --write . && eslint --fix",
     "check": "prettier --check .",
+    "check:certification": "prettier --check README.md package.json scripts src/server-fns/money-requests.test.ts src/start.ts src/start.test.ts docs/certification",
     "typecheck": "tsc --noEmit",
     "certify:bank-account-money-request": "bun scripts/certify-bank-account-money-request.ts"
   },

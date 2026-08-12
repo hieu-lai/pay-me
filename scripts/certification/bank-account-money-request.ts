@@ -5,36 +5,40 @@ export type CertificationCommandId =
   | 'complete-test-suite'
   | 'production-build'
 
+export const MANDATORY_CERTIFICATION_REQUIREMENTS = [
+  'valid-and-adversarial-ingress',
+  'atomic-allocation',
+  'idempotency',
+  'mixed-group-outcomes',
+  'ambiguous-creation',
+  'retry-budgets',
+  'leases',
+  'role-authorization',
+  'information-flow',
+  'webhook-authenticity-and-deduplication',
+  'reconciliation',
+  'targeted-recovery',
+  'network-ambiguity',
+  'action-crashes',
+  'duplicate-delivery',
+  'forged-webhooks',
+  'unknown-provider-states',
+  'provider-rejection',
+  'missed-webhook-repair',
+  'bounded-rate-limiting',
+  'authentication',
+  'csrf',
+  'attestation',
+  'trusted-ip-handling',
+  'sibling-authorization',
+  'payment-destination-races',
+  'redaction',
+  'internal-only-operations',
+  'production-denial',
+] as const
+
 export type CertificationRequirement =
-  | 'valid-and-adversarial-ingress'
-  | 'atomic-allocation'
-  | 'idempotency'
-  | 'mixed-group-outcomes'
-  | 'ambiguous-creation'
-  | 'retry-budgets'
-  | 'leases'
-  | 'role-authorization'
-  | 'information-flow'
-  | 'webhook-authenticity-and-deduplication'
-  | 'reconciliation'
-  | 'targeted-recovery'
-  | 'network-ambiguity'
-  | 'action-crashes'
-  | 'duplicate-delivery'
-  | 'forged-webhooks'
-  | 'unknown-provider-states'
-  | 'provider-rejection'
-  | 'missed-webhook-repair'
-  | 'bounded-rate-limiting'
-  | 'authentication'
-  | 'csrf'
-  | 'attestation'
-  | 'trusted-ip-handling'
-  | 'sibling-authorization'
-  | 'destination-races'
-  | 'redaction'
-  | 'internal-only-operations'
-  | 'production-denial'
+  (typeof MANDATORY_CERTIFICATION_REQUIREMENTS)[number]
 
 export const CERTIFICATION_COMMANDS: ReadonlyArray<{
   id: CertificationCommandId
@@ -44,9 +48,9 @@ export const CERTIFICATION_COMMANDS: ReadonlyArray<{
 }> = [
   {
     id: 'formatting',
-    displayCommand: 'bun run check',
+    displayCommand: 'bun run check:certification',
     executable: 'bun',
-    args: ['run', 'check'],
+    args: ['run', 'check:certification'],
   },
   {
     id: 'linting',
@@ -77,7 +81,10 @@ export const CERTIFICATION_COMMANDS: ReadonlyArray<{
 type CertificationScenario = {
   area: string
   requirements: ReadonlyArray<CertificationRequirement>
-  evidence: string
+  evidence: ReadonlyArray<{
+    path: string
+    testNames?: ReadonlyArray<string>
+  }>
   simulation: string
   recoveryOutcome: string
   telemetryAssertion: string
@@ -93,8 +100,25 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
       'attestation',
       'trusted-ip-handling',
     ],
-    evidence:
-      '`src/server-fns/money-requests.test.ts`; `convex/moneyRequests.test.ts`',
+    evidence: [
+      {
+        path: 'src/start.test.ts',
+        testNames: ['rejects a cross-origin server-function submission'],
+      },
+      {
+        path: 'src/server-fns/money-requests.test.ts',
+        testNames: [
+          'rejects unauthenticated requests before calling Convex',
+          'rejects unavailable or non-canonical IPv4',
+        ],
+      },
+      {
+        path: 'convex/moneyRequests.test.ts',
+        testNames: [
+          'rejects %s ingress trust before unavailable destination reads',
+        ],
+      },
+    ],
     simulation:
       'Authenticated and unauthenticated identities, POST-only server ingress, fixed clock, canonical and rejected ingress values, tampered and expired attestations.',
     recoveryOutcome:
@@ -103,11 +127,20 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
       'Public errors are classified without logging trusted ingress or attestation material.',
   },
   {
-    area: 'Atomic allocation and destination trust',
-    requirements: ['atomic-allocation', 'destination-races'],
-    evidence: '`convex/moneyRequests.test.ts`',
+    area: 'Atomic allocation and Payment Destination trust',
+    requirements: ['atomic-allocation', 'payment-destination-races'],
+    evidence: [
+      {
+        path: 'convex/moneyRequests.test.ts',
+        testNames: [
+          'atomically queues five independent Payer agreements',
+          'rechecks every selected Payer destination and rolls back a later Payer race',
+          'rolls back the root when a later provider UID allocation fails',
+        ],
+      },
+    ],
     simulation:
-      'One-to-five Payer fixtures, missing/default-changed destinations, later-Payer race, and injected UID allocation failure.',
+      'One-to-five Payer fixtures, missing or changed Default Destinations, later-Payer race, and injected UID allocation failure.',
     recoveryOutcome:
       'The entire local allocation commits once or rolls back; no partial root or work remains.',
     telemetryAssertion:
@@ -116,8 +149,19 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
   {
     area: 'Durable idempotency',
     requirements: ['idempotency'],
-    evidence:
-      '`convex/moneyRequests.test.ts`; `src/routes/dashboard/request/-components/requester/submission-key.test.ts`',
+    evidence: [
+      {
+        path: 'convex/moneyRequests.test.ts',
+        testNames: [
+          'recovers from response loss without repeating destination preflight or durable work',
+          'concurrent retries converge on one durable intent',
+        ],
+      },
+      {
+        path: 'src/routes/dashboard/request/-components/requester/submission-key.test.ts',
+        testNames: ['survives a page reload for the same immutable intent'],
+      },
+    ],
     simulation:
       'Response loss, page reload, concurrent replay, reordered Payer set, changed intent, and fresh submission key.',
     recoveryOutcome:
@@ -128,7 +172,14 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
   {
     area: 'Independent group outcomes',
     requirements: ['mixed-group-outcomes'],
-    evidence: '`convex/moneyRequests.test.ts`',
+    evidence: [
+      {
+        path: 'convex/moneyRequests.test.ts',
+        testNames: [
+          'preserves five independent mixed outcomes through delay and targeted recovery',
+        ],
+      },
+    ],
     simulation:
       'Five deterministic Payers covering success, rejection, ambiguity, delay, backpressure, and recovery.',
     recoveryOutcome:
@@ -147,8 +198,29 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
       'provider-rejection',
       'bounded-rate-limiting',
     ],
-    evidence:
-      '`convex/payToAgreementCreationState.test.ts`; `convex/moneyRequests.test.ts`; `convex/lib/zepto/client.test.ts`',
+    evidence: [
+      {
+        path: 'convex/payToAgreementCreationState.test.ts',
+        testNames: [
+          'never permits a third automatic POST cycle and eventually holds',
+          'an expired submitting lease recovers into same-UID verification',
+        ],
+      },
+      {
+        path: 'convex/moneyRequests.test.ts',
+        testNames: [
+          'recovers an invalid success response through same-UID GET without a second POST cycle',
+          'uses six same-UID POST attempts across two cycles and never starts a third',
+        ],
+      },
+      {
+        path: 'convex/lib/zepto/client.test.ts',
+        testNames: [
+          'retries GET requests and honors Retry-After',
+          'stops after the configured retry count',
+        ],
+      },
+    ],
     simulation:
       'Invalid/ambiguous responses, transport failures, expired workers, duplicate/stale workers, provider rejection, Retry-After, and retry exhaustion.',
     recoveryOutcome:
@@ -164,7 +236,16 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
       'information-flow',
       'redaction',
     ],
-    evidence: '`convex/moneyRequests.test.ts`',
+    evidence: [
+      {
+        path: 'convex/moneyRequests.test.ts',
+        testNames: [
+          'shows a Payer only their agreement and the Requester safe identity',
+          'makes missing and unauthorized requester reads indistinguishable',
+          'does not log routing values, trusted IP, or attestation material',
+        ],
+      },
+    ],
     simulation:
       'Requester, assigned Payer, sibling Payer, unrelated User, and nonexistent identifiers across detail and paginated histories.',
     recoveryOutcome:
@@ -179,8 +260,19 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
       'duplicate-delivery',
       'forged-webhooks',
     ],
-    evidence:
-      '`convex/lib/zepto/webhook.test.ts`; `convex/zeptoWebhook.test.ts`',
+    evidence: [
+      {
+        path: 'convex/lib/zepto/webhook.test.ts',
+        testNames: ['verifies the exact raw body bytes'],
+      },
+      {
+        path: 'convex/zeptoWebhook.test.ts',
+        testNames: [
+          'rejects forged and malformed deliveries without durable changes',
+          'makes delivery replays no-ops and commits new items beside duplicate events',
+        ],
+      },
+    ],
     simulation:
       'Exact raw bytes, forged signatures, malformed bodies, multi-item atomic delivery, repeated delivery IDs, and repeated event IDs.',
     recoveryOutcome:
@@ -195,8 +287,28 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
       'unknown-provider-states',
       'missed-webhook-repair',
     ],
-    evidence:
-      '`convex/payToAgreementReconciliationState.test.ts`; `convex/payToAgreementReconciliation.test.ts`; `convex/lib/zepto/reconciliation.test.ts`',
+    evidence: [
+      {
+        path: 'convex/payToAgreementReconciliationState.test.ts',
+        testNames: [
+          'raises review on the sixth GET failure while continuing daily repair',
+        ],
+      },
+      {
+        path: 'convex/payToAgreementReconciliation.test.ts',
+        testNames: [
+          'repairs a missed terminal webhook from the provider GET boundary',
+          'keeps unknown GET state internal and raises a safe public review projection',
+          'makes duplicate workers no-ops and safely replaces an expired lease',
+        ],
+      },
+      {
+        path: 'convex/lib/zepto/reconciliation.test.ts',
+        testNames: [
+          'normalizes bounded history evidence without retaining provider bodies',
+        ],
+      },
+    ],
     simulation:
       'Missed webhook, provisional state, unknown GET state, contradiction, six failures, 24-hour outage, duplicate lease, and expired lease.',
     recoveryOutcome:
@@ -207,7 +319,17 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
   {
     area: 'Targeted recovery and private operations',
     requirements: ['targeted-recovery', 'internal-only-operations'],
-    evidence: '`convex/moneyRequests.test.ts`; Convex generated API typecheck',
+    evidence: [
+      {
+        path: 'convex/moneyRequests.test.ts',
+        testNames: [
+          'reopens only one manually held agreement through an audited operator action',
+          'requires an authenticated operator and a non-empty recovery reason',
+          'preserves evidence and the provider UID without mutating sibling agreements',
+        ],
+      },
+      { path: 'convex/_generated/api.ts' },
+    ],
     simulation:
       'Authenticated operator identity input, empty identity/reason, established absence, ambiguous hold, terminal agreement, and sibling state.',
     recoveryOutcome:
@@ -218,8 +340,26 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
   {
     area: 'Sandbox-only production denial',
     requirements: ['production-denial'],
-    evidence:
-      '`convex/lib/zepto/env.test.ts`; `convex/lib/zepto/client.test.ts`; `convex/lib/payIdCapability.test.ts`',
+    evidence: [
+      {
+        path: 'convex/lib/zepto/env.test.ts',
+        testNames: [
+          'denies production credentials to sandbox-only agreement work',
+          'denies sandbox credentials when the configured origin is production',
+        ],
+      },
+      {
+        path: 'convex/lib/zepto/client.test.ts',
+        testNames: [
+          'rejects every explicit sandbox-only route before fetch',
+          'rejects sandbox simulation fields in production request bodies',
+        ],
+      },
+      {
+        path: 'convex/lib/payIdCapability.test.ts',
+        testNames: ['is disabled by default'],
+      },
+    ],
     simulation:
       'Production origin, production credential path, sandbox credentials under production configuration, simulation routes/body fields, and uncertified PayID capability.',
     recoveryOutcome:
@@ -240,6 +380,28 @@ type CertificationInput = {
   evidenceDate: string
   worktreeClean: boolean
   results: ReadonlyArray<CertificationResult>
+}
+
+export async function verifyCertificationEvidence(
+  readText: (path: string) => Promise<string>,
+) {
+  for (const scenario of CERTIFICATION_SCENARIOS) {
+    for (const reference of scenario.evidence) {
+      let source: string
+      try {
+        source = await readText(reference.path)
+      } catch {
+        throw new Error(`Certification evidence is missing: ${reference.path}`)
+      }
+      for (const testName of reference.testNames ?? []) {
+        if (!source.includes(testName)) {
+          throw new Error(
+            `Certification test is missing from ${reference.path}: ${testName}`,
+          )
+        }
+      }
+    }
+  }
 }
 
 function validateInput(input: CertificationInput) {
@@ -264,7 +426,7 @@ function validateInput(input: CertificationInput) {
 function scenarioRows() {
   return CERTIFICATION_SCENARIOS.map(
     ({ area, evidence, simulation, recoveryOutcome, telemetryAssertion }) =>
-      `| ${area} | ${evidence} | ${simulation} | ${recoveryOutcome} | ${telemetryAssertion} |`,
+      `| ${area} | ${evidence.map(({ path }) => `\`${path}\``).join('; ')} | ${simulation} | ${recoveryOutcome} | ${telemetryAssertion} |`,
   ).join('\n')
 }
 
@@ -308,7 +470,7 @@ This evidence certifies automated behavior for the Bank Account capability in a 
 
 ## Known automated-coverage gaps
 
-- TanStack Start supplies the CSRF boundary for the POST-only server function; the suite certifies the POST-only application configuration but does not duplicate the framework's own origin-validation tests.
+- Cross-origin and same-origin CSRF behavior is exercised through PayMe's configured TanStack request middleware; framework-internal CSRF unit coverage remains upstream.
 - Live Zepto sandbox behavior, webhook delivery by Zepto, real trusted-edge forwarding, external quotas, and provider-enabled scopes require separate sanitized live evidence.
 - Human security review, legal/compliance approval, written Zepto eligibility, operational dashboards, alert routing, owners, and production configuration are deliberate activation gates and are not automated by this report.
 - PayID remains independently disabled unless its commit-bound live certification capability is complete.

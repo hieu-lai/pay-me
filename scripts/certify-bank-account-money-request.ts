@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { format } from 'prettier'
@@ -7,6 +7,7 @@ import { format } from 'prettier'
 import {
   CERTIFICATION_COMMANDS,
   buildCertificationReport,
+  verifyCertificationEvidence,
 } from './certification/bank-account-money-request'
 
 const defaultOutput = 'docs/certification/bank-account-money-request.md'
@@ -21,7 +22,7 @@ if (outputArgument !== -1 && !process.argv[outputArgument + 1]) {
   throw new Error('--output requires a path.')
 }
 
-function run(
+function runCommand(
   executable: string,
   args: ReadonlyArray<string>,
   options: { quiet?: boolean } = {},
@@ -40,20 +41,24 @@ function run(
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 process.chdir(repositoryRoot)
 
-const initialStatus = run('git', ['status', '--porcelain'], { quiet: true })
+await verifyCertificationEvidence((path) => readFile(path, 'utf8'))
+
+const initialStatus = runCommand('git', ['status', '--porcelain'], {
+  quiet: true,
+})
 if (initialStatus.exitCode !== 0) throw new Error('Unable to inspect worktree.')
 if (initialStatus.stdout !== '') {
   throw new Error('Certification requires a clean worktree.')
 }
 
-const commit = run('git', ['rev-parse', 'HEAD'], { quiet: true })
+const commit = runCommand('git', ['rev-parse', 'HEAD'], { quiet: true })
 if (commit.exitCode !== 0)
   throw new Error('Unable to resolve the certified commit.')
 
 const results = []
 for (const command of CERTIFICATION_COMMANDS) {
   console.log(`\n[certification] ${command.displayCommand}`)
-  const result = run(command.executable, command.args)
+  const result = runCommand(command.executable, command.args)
   results.push({
     id: command.id,
     displayCommand: command.displayCommand,
@@ -64,11 +69,16 @@ for (const command of CERTIFICATION_COMMANDS) {
   }
 }
 
+const finalStatus = runCommand('git', ['status', '--porcelain'], {
+  quiet: true,
+})
+if (finalStatus.exitCode !== 0) throw new Error('Unable to inspect worktree.')
+
 const report = await format(
   buildCertificationReport({
     certifiedCommit: commit.stdout,
     evidenceDate: new Date().toISOString().slice(0, 10),
-    worktreeClean: true,
+    worktreeClean: finalStatus.stdout === '',
     results,
   }),
   { parser: 'markdown' },

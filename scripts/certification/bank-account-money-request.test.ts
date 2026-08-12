@@ -3,10 +3,20 @@ import { describe, expect, test } from 'vitest'
 import {
   CERTIFICATION_COMMANDS,
   CERTIFICATION_SCENARIOS,
+  MANDATORY_CERTIFICATION_REQUIREMENTS,
   buildCertificationReport,
+  verifyCertificationEvidence,
 } from './bank-account-money-request'
 
 const certifiedCommit = 'a'.repeat(40)
+
+function successfulResults() {
+  return CERTIFICATION_COMMANDS.map(({ id, displayCommand }) => ({
+    id,
+    displayCommand,
+    exitCode: 0,
+  }))
+}
 
 describe('Bank Account Money Request automated certification', () => {
   test('requires every release quality gate and mandatory deterministic scenario', () => {
@@ -21,39 +31,19 @@ describe('Bank Account Money Request automated certification', () => {
     const covered = new Set(
       CERTIFICATION_SCENARIOS.flatMap(({ requirements }) => requirements),
     )
-    expect(covered).toEqual(
-      new Set([
-        'valid-and-adversarial-ingress',
-        'atomic-allocation',
-        'idempotency',
-        'mixed-group-outcomes',
-        'ambiguous-creation',
-        'retry-budgets',
-        'leases',
-        'role-authorization',
-        'information-flow',
-        'webhook-authenticity-and-deduplication',
-        'reconciliation',
-        'targeted-recovery',
-        'network-ambiguity',
-        'action-crashes',
-        'duplicate-delivery',
-        'forged-webhooks',
-        'unknown-provider-states',
-        'provider-rejection',
-        'missed-webhook-repair',
-        'bounded-rate-limiting',
-        'authentication',
-        'csrf',
-        'attestation',
-        'trusted-ip-handling',
-        'sibling-authorization',
-        'destination-races',
-        'redaction',
-        'internal-only-operations',
-        'production-denial',
-      ]),
-    )
+    expect(covered).toEqual(new Set(MANDATORY_CERTIFICATION_REQUIREMENTS))
+  })
+
+  test('fails when a named deterministic test is absent from its evidence file', async () => {
+    await expect(
+      verifyCertificationEvidence(async (path) =>
+        path === 'src/start.test.ts'
+          ? 'the named test has been removed'
+          : (CERTIFICATION_SCENARIOS.flatMap(({ evidence }) => evidence)
+              .find((reference) => reference.path === path)
+              ?.testNames?.join('\n') ?? ''),
+      ),
+    ).rejects.toThrow('Certification test is missing from src/start.test.ts')
   })
 
   test('renders only successful, clean, sandbox certification evidence', () => {
@@ -61,11 +51,7 @@ describe('Bank Account Money Request automated certification', () => {
       certifiedCommit,
       evidenceDate: '2026-08-12',
       worktreeClean: true,
-      results: CERTIFICATION_COMMANDS.map(({ id, displayCommand }) => ({
-        id,
-        displayCommand,
-        exitCode: 0,
-      })),
+      results: successfulResults(),
     })
 
     expect(report).toContain(certifiedCommit)
@@ -87,11 +73,7 @@ describe('Bank Account Money Request automated certification', () => {
       certifiedCommit,
       evidenceDate: '2026-08-12',
       worktreeClean: true,
-      results: CERTIFICATION_COMMANDS.map(({ id, displayCommand }) => ({
-        id,
-        displayCommand,
-        exitCode: 0,
-      })),
+      results: successfulResults(),
     }
 
     expect(() =>
