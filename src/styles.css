@@ -1,7 +1,8 @@
-@import 'tailwindcss';
-@import 'tw-animate-css';
-@import 'shadcn/tailwind.css';
-@import '@fontsource-variable/geist';
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -138,8 +139,7 @@ body {
   body {
     @apply bg-background text-foreground;
   }
-  button:not(:disabled),
-  [role='button']:not(:disabled) {
+  button:not(:disabled), [role="button"]:not(:disabled) {
     cursor: pointer;
   }
   html {
