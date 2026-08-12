@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { format } from 'prettier'
 
 import {
   CERTIFICATION_COMMANDS,
@@ -63,12 +64,15 @@ for (const command of CERTIFICATION_COMMANDS) {
   }
 }
 
-const report = buildCertificationReport({
-  certifiedCommit: commit.stdout,
-  evidenceDate: new Date().toISOString().slice(0, 10),
-  worktreeClean: true,
-  results,
-})
+const report = await format(
+  buildCertificationReport({
+    certifiedCommit: commit.stdout,
+    evidenceDate: new Date().toISOString().slice(0, 10),
+    worktreeClean: true,
+    results,
+  }),
+  { parser: 'markdown' },
+)
 await mkdir(dirname(outputPath), { recursive: true })
 await writeFile(outputPath, report, 'utf8')
 console.log(`\n[certification] Wrote ${outputPath}`)
