@@ -2,7 +2,7 @@
 
 | Field            | Certified value                                                              |
 | ---------------- | ---------------------------------------------------------------------------- |
-| Commit           | `c9f8b76c1864aca38ffa422769892f3974ee4586`                                   |
+| Commit           | `b28865a6a1ef16b8970f0f48b126d405bbd3348b`                                   |
 | Evidence date    | 2026-08-12                                                                   |
 | Capability scope | Bank Account Money Requests only; PayID remains independently gated          |
 | Environment      | Zepto sandbox (simulated HTTP boundary)                                      |
