@@ -64,7 +64,9 @@ export const applyDelivery = internalMutation({
       const agreement = await ctx.db
         .query('payToAgreements')
         .withIndex('by_environment_and_providerUid', (q) =>
-          q.eq('environment', 'sandbox').eq('providerUid', item.resourceUid),
+          q
+            .eq('environment', args.environment)
+            .eq('providerUid', item.resourceUid),
         )
         .unique()
       if (!agreement) continue

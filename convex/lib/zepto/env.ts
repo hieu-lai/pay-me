@@ -1,7 +1,24 @@
 import { env } from '../../_generated/server'
 import { createZeptoClient } from './client'
-import type { CreateZeptoClientOptions, ZeptoClient } from './client'
+import type {
+  CreateZeptoClientOptions,
+  ZeptoClient,
+  ZeptoEnvironment,
+} from './client'
 import { ZeptoClientError } from './error'
+
+export function configuredZeptoEnvironment(): ZeptoEnvironment {
+  if (
+    env.ZEPTO_ENVIRONMENT !== 'sandbox' &&
+    env.ZEPTO_ENVIRONMENT !== 'production'
+  ) {
+    throw new ZeptoClientError({
+      kind: 'configuration',
+      message: 'ZEPTO_ENVIRONMENT must be configured.',
+    })
+  }
+  return env.ZEPTO_ENVIRONMENT
+}
 
 /** Create the client from optional typed Convex environment variables. */
 export function createZeptoClientFromEnv(): ZeptoClient {
@@ -40,6 +57,35 @@ export function createSandboxZeptoClientFromEnv(
   return createZeptoClient({
     environment: 'sandbox',
     accessToken: env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN,
+    onAttempt: options.onAttempt,
+  })
+}
+
+/** Create a PayTo Agreement client using only credentials for its durable environment. */
+export function createEnvironmentZeptoClientFromEnv(
+  environment: ZeptoEnvironment,
+  options: Pick<CreateZeptoClientOptions, 'onAttempt'> = {},
+): ZeptoClient {
+  if (configuredZeptoEnvironment() !== environment) {
+    throw new ZeptoClientError({
+      kind: 'configuration',
+      message:
+        'PayTo Agreement environment does not match the configured Zepto environment.',
+    })
+  }
+  if (environment === 'sandbox') {
+    return createSandboxZeptoClientFromEnv(options)
+  }
+  if (!env.ZEPTO_PERSONAL_ACCESS_TOKEN) {
+    throw new ZeptoClientError({
+      kind: 'configuration',
+      message:
+        'ZEPTO_PERSONAL_ACCESS_TOKEN must be configured for production PayTo Agreement work.',
+    })
+  }
+  return createZeptoClient({
+    environment: 'production',
+    accessToken: env.ZEPTO_PERSONAL_ACCESS_TOKEN,
     onAttempt: options.onAttempt,
   })
 }

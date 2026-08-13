@@ -5,6 +5,7 @@ import { internal } from './_generated/api'
 import { env, httpAction } from './_generated/server'
 import { verifyZeptoWebhookSignature } from './lib/zepto/webhook'
 import type { ZeptoWebhookItem } from './validators/zeptoWebhook'
+import type { ZeptoEnvironment } from './validators/payToAgreements'
 
 type AddUserArgs = {
   tokenIdentifier: string
@@ -83,9 +84,11 @@ export async function handleClerkWebhook(
 
 type ZeptoWebhookDependencies = {
   signingSecret: string | undefined
+  environment: ZeptoEnvironment | undefined
   nowMs: () => number
   applyDelivery: (args: {
     deliveryId: string
+    environment: ZeptoEnvironment
     signatureTimestamp: number
     receivedAt: number
     items: ZeptoWebhookItem[]
@@ -224,6 +227,9 @@ export async function handleZeptoWebhook(
   request: Request,
   dependencies: ZeptoWebhookDependencies,
 ) {
+  if (!dependencies.environment) {
+    return new Response('Zepto webhook is not configured', { status: 500 })
+  }
   const deliveryId = request.headers.get('split-request-id')?.trim()
   const splitSignature = request.headers.get('split-signature')?.trim()
 
@@ -260,6 +266,7 @@ export async function handleZeptoWebhook(
   try {
     await dependencies.applyDelivery({
       deliveryId,
+      environment: dependencies.environment,
       signatureTimestamp,
       receivedAt: dependencies.nowMs(),
       items,
@@ -294,6 +301,7 @@ http.route({
   handler: httpAction((ctx, request) =>
     handleZeptoWebhook(request, {
       signingSecret: env.ZEPTO_WEBHOOK_SIGNING_SECRET,
+      environment: env.ZEPTO_ENVIRONMENT,
       nowMs: Date.now,
       applyDelivery: async (args) => {
         await ctx.runMutation(internal.zeptoWebhook.applyDelivery, args)

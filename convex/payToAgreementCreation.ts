@@ -6,9 +6,10 @@ import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalAction, internalMutation } from './_generated/server'
 import { agreementCreationPool } from './lib/agreementCreationPool'
+import { firstConfirmedActivePatch } from './lib/payToAgreementActivation'
 import { decryptPaymentDestination } from './lib/paymentDestinationCrypto'
 import { createAgreement, getAgreementByUid } from './lib/zepto/agreement'
-import { createSandboxZeptoClientFromEnv } from './lib/zepto/env'
+import { createEnvironmentZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import {
   canRecordLeaseOutcome,
@@ -21,9 +22,12 @@ import {
   normalizedProviderErrorCategory,
   recoveryClassForProviderError,
 } from './payToAgreementCreationState'
+import { reconciliationScheduleForState } from './payToAgreementReconciliationState'
 import {
+  agreementEvidenceSourceValidator,
   providerAgreementStateValidator,
   routingSnapshotValidator,
+  zeptoEnvironmentValidator,
 } from './validators/payToAgreements'
 
 const LEASE_DURATION_MS = 3 * 60_000
@@ -71,6 +75,7 @@ function postFailureProjection(
 
 const creationInputValidator = v.object({
   kind: v.union(v.literal('post'), v.literal('verify')),
+  environment: zeptoEnvironmentValidator,
   leaseToken: v.string(),
   postCycle: v.number(),
   providerUid: v.string(),
@@ -212,6 +217,7 @@ export const claimWork = internalMutation({
     await enqueueCreation(ctx, agreement._id, LEASE_DURATION_MS)
     return {
       kind: decision.kind === 'claim_post' ? 'post' : 'verify',
+      environment: agreement.environment,
       leaseToken: args.leaseToken,
       postCycle:
         decision.kind === 'claim_post'
@@ -335,6 +341,7 @@ export const recordHttpGetAttempt = internalMutation({
 
 export const recordCreated = internalMutation({
   args: leasedOutcomeArgsValidator.extend({
+    source: agreementEvidenceSourceValidator,
     result: createdResultValidator,
   }).fields,
   returns: v.boolean(),
@@ -361,13 +368,30 @@ export const recordCreated = internalMutation({
     if (agreement.creationState === 'created') return false
     enforceTransition(agreement.creationState, 'created')
 
+    const confirmedByGet = args.source === 'per_uid_get'
+    const reconciliationDelayMs = confirmedByGet
+      ? reconciliationScheduleForState(args.result.providerState)
+      : 30 * 60_000
+    const stopped = reconciliationDelayMs === null
+
     await ctx.db.patch('payToAgreements', agreement._id, {
+      ...firstConfirmedActivePatch({
+        activationProvenancePolicy: agreement.activationProvenancePolicy,
+        confirmationSource: args.source,
+        existingFirstConfirmedActiveAt: agreement.firstConfirmedActiveAt,
+        observedAt: args.observedAt,
+        providerState: args.result.providerState,
+      }),
       creationState: 'created',
       creationUpdatedAt: args.observedAt,
       lifecycleState: args.result.providerState,
-      lifecycleConfidence: 'provisional',
+      lifecycleConfidence: confirmedByGet ? 'confirmed' : 'provisional',
       lifecycleObservedAt: args.observedAt,
-      trackingState: 'verification_due',
+      trackingState: confirmedByGet
+        ? stopped
+          ? 'stopped'
+          : 'current'
+        : 'verification_due',
       trackingUpdatedAt: args.observedAt,
       currentFailure: undefined,
       providerCreatedAt: args.result.providerCreatedAt,
@@ -376,6 +400,7 @@ export const recordCreated = internalMutation({
     await ctx.db.insert('payToAgreementEvidence', {
       payToAgreementId: agreement._id,
       kind: 'provider_create_succeeded',
+      source: args.source,
       providerState: args.result.providerState,
       providerCreatedAt: args.result.providerCreatedAt,
       observedAt: args.observedAt,
@@ -398,16 +423,16 @@ export const recordCreated = internalMutation({
         reconciliationWorkItem._id,
         {
           providerUid: agreement.providerUid,
-          state: 'queued',
-          availableAt: args.observedAt + 30 * 60_000,
+          state: stopped ? 'stopped' : 'queued',
+          availableAt: args.observedAt + (reconciliationDelayMs ?? 0),
         },
       )
     } else {
       await ctx.db.insert('payToAgreementReconciliationWorkItems', {
         payToAgreementId: agreement._id,
         providerUid: agreement.providerUid,
-        state: 'queued',
-        availableAt: args.observedAt + 30 * 60_000,
+        state: stopped ? 'stopped' : 'queued',
+        availableAt: args.observedAt + (reconciliationDelayMs ?? 0),
       })
     }
     return true
@@ -792,7 +817,7 @@ export const create = internalAction({
 
     if (input.kind === 'verify') {
       try {
-        const client = createSandboxZeptoClientFromEnv({
+        const client = createEnvironmentZeptoClientFromEnv(input.environment, {
           onAttempt: async ({ method, attempt }) => {
             if (method !== 'GET') return
             const recorded: boolean = await ctx.runMutation(
@@ -814,6 +839,7 @@ export const create = internalAction({
           {
             payToAgreementId: args.payToAgreementId,
             leaseToken,
+            source: 'per_uid_get',
             result: normalizedResult(found),
             observedAt: Date.now(),
           },
@@ -862,7 +888,7 @@ export const create = internalAction({
           keyVersion: input.debtorSnapshot.keyVersion,
         }),
       ])
-      const client = createSandboxZeptoClientFromEnv({
+      const client = createEnvironmentZeptoClientFromEnv(input.environment, {
         onAttempt: async ({ method, attempt }) => {
           if (method !== 'POST') return
           const recorded: boolean = await ctx.runMutation(
@@ -896,6 +922,7 @@ export const create = internalAction({
         {
           payToAgreementId: args.payToAgreementId,
           leaseToken,
+          source: 'creation_response',
           result: normalizedResult(created),
           observedAt: Date.now(),
         },

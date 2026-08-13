@@ -4,7 +4,8 @@ import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { ActionCtx } from './_generated/server'
 import { internalAction, internalMutation } from './_generated/server'
-import { createSandboxZeptoClientFromEnv } from './lib/zepto/env'
+import { firstConfirmedActivePatch } from './lib/payToAgreementActivation'
+import { createEnvironmentZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import {
   getAgreementHistoryEvidence,
@@ -16,15 +17,21 @@ import {
   decideReconciliationFailure,
   decideReconciliationSuccess,
 } from './payToAgreementReconciliationState'
-import { providerAgreementStates } from './validators/payToAgreements'
+import type { ZeptoEnvironment } from './validators/payToAgreements'
+import {
+  providerAgreementStates,
+  zeptoEnvironmentValidator,
+} from './validators/payToAgreements'
 
 const LEASE_DURATION_MS = 3 * 60_000
 
 const claimResultValidator = v.object({
+  environment: zeptoEnvironmentValidator,
   providerUid: v.string(),
   confirmedTerminalState: v.optional(v.string()),
 })
 type ClaimResult = {
+  environment: ZeptoEnvironment
   providerUid: string
   confirmedTerminalState?: string
 }
@@ -111,6 +118,7 @@ export const claimWork = internalMutation({
       observedAt: args.nowMs,
     })
     return {
+      environment: agreement.environment,
       providerUid: workItem.providerUid,
       ...(isConfirmedTerminal(agreement)
         ? { confirmedTerminalState: agreement.lifecycleState }
@@ -170,6 +178,13 @@ export const recordSuccess = internalMutation({
     if (decision.kind === 'confirmed') {
       const stopped = decision.delayMs === null
       await ctx.db.patch('payToAgreements', agreement._id, {
+        ...firstConfirmedActivePatch({
+          activationProvenancePolicy: agreement.activationProvenancePolicy,
+          confirmationSource: 'per_uid_get',
+          existingFirstConfirmedActiveAt: agreement.firstConfirmedActiveAt,
+          observedAt: args.observedAt,
+          providerState: decision.state,
+        }),
         lifecycleState: decision.state,
         lifecycleRawState: undefined,
         lifecycleConfidence: 'confirmed',
@@ -423,7 +438,7 @@ async function investigateHistory(
   ctx: ActionCtx,
   payToAgreementId: Doc<'payToAgreements'>['_id'],
   providerUid: string,
-  client: ReturnType<typeof createSandboxZeptoClientFromEnv>,
+  client: ReturnType<typeof createEnvironmentZeptoClientFromEnv>,
 ) {
   try {
     const history = await getAgreementHistoryEvidence(client, providerUid)
@@ -464,7 +479,7 @@ export const reconcile = internalAction({
     if (!input) return null
 
     try {
-      const client = createSandboxZeptoClientFromEnv()
+      const client = createEnvironmentZeptoClientFromEnv(input.environment)
       const { providerState } = await getAgreementLifecycleByUid(
         client,
         input.providerUid,

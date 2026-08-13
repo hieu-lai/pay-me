@@ -22,6 +22,25 @@ export type ProviderAgreementState = Infer<
   typeof providerAgreementStateValidator
 >
 
+export const zeptoEnvironmentValidator = literals('sandbox', 'production')
+export type ZeptoEnvironment = Infer<typeof zeptoEnvironmentValidator>
+
+export const activationProvenancePolicyValidator = literals(
+  'track_first_confirmation',
+  'legacy_excluded',
+)
+export type ActivationProvenancePolicy = Infer<
+  typeof activationProvenancePolicyValidator
+>
+
+export const agreementEvidenceSourceValidator = literals(
+  'creation_response',
+  'per_uid_get',
+)
+export type AgreementEvidenceSource = Infer<
+  typeof agreementEvidenceSourceValidator
+>
+
 export const routingSnapshotValidator = v.object({
   kind: paymentDestinationTypeConvexValidator,
   maskedDisplay: v.string(),

@@ -2,6 +2,7 @@
 
 import { runToCompletion } from '@convex-dev/migrations'
 import migrationComponent from '@convex-dev/migrations/test'
+import workpoolTest from '@convex-dev/workpool/test'
 import { convexTest } from 'convex-test'
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
@@ -63,6 +64,86 @@ const legacySchema = defineSchema({
     defaultPaymentDestinationId: v.optional(v.id('paymentDestinations')),
   }),
 })
+
+async function insertLegacyPayToAgreement(t: ReturnType<typeof convexTest>) {
+  return await t.run(async (ctx) => {
+    const requesterUserId = await ctx.db.insert('users', {
+      tokenIdentifier: 'issuer|legacy-requester',
+      clerkUserId: 'legacy-requester',
+      email: 'legacy-requester@example.com',
+      name: 'Legacy Requester',
+    })
+    const payerUserId = await ctx.db.insert('users', {
+      tokenIdentifier: 'issuer|legacy-payer',
+      clerkUserId: 'legacy-payer',
+      email: 'legacy-payer@example.com',
+      name: 'Legacy Payer',
+    })
+    const destination = {
+      type: 'bban' as const,
+      searchLabel: 'Legacy',
+      maskedDisplay: 'Bank account ••••1234',
+      ciphertext: 'ciphertext',
+      nonce: 'nonce',
+      keyVersion: 'v1',
+    }
+    const creditorDestinationId = await ctx.db.insert('paymentDestinations', {
+      ...destination,
+      ownerUserId: requesterUserId,
+      fingerprint: 'legacy-requester-fingerprint',
+    })
+    const debtorDestinationId = await ctx.db.insert('paymentDestinations', {
+      ...destination,
+      ownerUserId: payerUserId,
+      fingerprint: 'legacy-payer-fingerprint',
+    })
+    const routingSnapshot = {
+      kind: 'bban' as const,
+      maskedDisplay: destination.maskedDisplay,
+      ciphertext: destination.ciphertext,
+      nonce: destination.nonce,
+      keyVersion: destination.keyVersion,
+    }
+    const moneyRequestId = await ctx.db.insert('moneyRequests', {
+      requesterUserId,
+      requesterNameSnapshot: 'Legacy Requester',
+      amountCents: 1_000,
+      currency: 'AUD',
+      purpose: 'other',
+      description: 'Legacy PayTo Agreement',
+      submissionKey: 'legacy-submission',
+      submissionFingerprint: 'legacy-submission-fingerprint',
+      sourceCreditorPaymentDestinationId: creditorDestinationId,
+      creditorSnapshot: routingSnapshot,
+      submittedAt: 1_000,
+    })
+    const payToAgreementId = await ctx.db.insert('payToAgreements', {
+      moneyRequestId,
+      payerUserId,
+      payerNameSnapshot: 'Legacy Payer',
+      sourceDebtorPaymentDestinationId: debtorDestinationId,
+      debtorSnapshot: routingSnapshot,
+      provider: 'zepto',
+      environment: 'sandbox',
+      apiVersion: '20260101',
+      providerUid: 'legacy-agreement',
+      creationState: 'created',
+      creationUpdatedAt: 1_000,
+      lifecycleState: 'active',
+      lifecycleConfidence: 'provisional',
+      lifecycleObservedAt: 1_000,
+      trackingState: 'verification_due',
+      trackingUpdatedAt: 1_000,
+    })
+    await ctx.db.insert('payToAgreementReconciliationWorkItems', {
+      payToAgreementId,
+      providerUid: 'legacy-agreement',
+      state: 'queued',
+      availableAt: 1_000,
+    })
+    return payToAgreementId
+  })
+}
 
 test('backfills missing payment destination search labels idempotently', async () => {
   const t = convexTest(legacySchema, modules)
@@ -178,6 +259,60 @@ test('backfills missing user search text from name and optional username', async
     namedUser: { searchText: 'Searchable User' },
     usernameUser: { searchText: 'Username User payme-user' },
   })
+})
+
+test('permanently excludes legacy PayTo Agreements from new activation provenance', async () => {
+  const t = convexTest(schema, modules)
+  migrationComponent.register(t)
+  workpoolTest.register(t, 'agreementCreationWorkpool')
+  const payToAgreementId = await insertLegacyPayToAgreement(t)
+
+  for (let run = 0; run < 2; run += 1) {
+    await t.run(async (ctx) => {
+      await runToCompletion(
+        ctx,
+        components.migrations,
+        internal.migrations.excludeLegacyPayToAgreements,
+      )
+    })
+  }
+
+  await t.run(async (ctx) => {
+    await ctx.db.patch('payToAgreements', payToAgreementId, {
+      creationState: 'manual_hold',
+    })
+    await ctx.db.insert('payToAgreementWorkItems', {
+      payToAgreementId,
+      kind: 'create',
+      state: 'held',
+      availableAt: 1_000,
+    })
+  })
+  await t.mutation(internal.payToAgreementCreation.reopenManualHold, {
+    payToAgreementId,
+    operatorIdentity: 'operator@example.test',
+    reason: 'Verify legacy exclusion survives recovery',
+  })
+
+  await t.mutation(internal.payToAgreementReconciliation.claimWork, {
+    payToAgreementId,
+    leaseToken: 'legacy-reconciliation',
+    nowMs: 2_000,
+  })
+  await t.mutation(internal.payToAgreementReconciliation.recordSuccess, {
+    payToAgreementId,
+    leaseToken: 'legacy-reconciliation',
+    providerState: 'active',
+    observedAt: 3_000,
+  })
+
+  const agreement = await t.run(async (ctx) =>
+    ctx.db.get('payToAgreements', payToAgreementId),
+  )
+  expect(agreement).toMatchObject({
+    activationProvenancePolicy: 'legacy_excluded',
+  })
+  expect(agreement?.firstConfirmedActiveAt).toBeUndefined()
 })
 
 test('deletes all money request and PayTo agreement data', async () => {

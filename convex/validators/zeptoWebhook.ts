@@ -1,6 +1,8 @@
 import type { Infer } from 'convex/values'
 import { v } from 'convex/values'
 
+import { zeptoEnvironmentValidator } from './payToAgreements'
+
 export const zeptoWebhookCausedByValidator = v.union(
   v.literal('debtor'),
   v.literal('initiator'),
@@ -50,5 +52,6 @@ export const zeptoWebhookEvidenceValidator = zeptoWebhookItemValidator
 
 export const applyZeptoWebhookDeliveryValidator =
   zeptoWebhookDeliveryValidator.extend({
+    environment: zeptoEnvironmentValidator,
     items: v.array(zeptoWebhookItemValidator),
   })

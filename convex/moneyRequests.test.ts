@@ -1070,6 +1070,7 @@ describe('Money Request submission and requester read', () => {
       t.mutation(internal.payToAgreementCreation.recordCreated, {
         payToAgreementId: agreement._id,
         leaseToken: 'worker-b',
+        source: 'creation_response',
         result: {
           providerState: 'pending',
           providerCreatedAt: nowMs,
@@ -1092,6 +1093,7 @@ describe('Money Request submission and requester read', () => {
       t.mutation(internal.payToAgreementCreation.recordCreated, {
         payToAgreementId: agreement._id,
         leaseToken: 'worker-a',
+        source: 'creation_response',
         result: {
           providerState: 'pending',
           providerCreatedAt: nowMs,
@@ -1506,6 +1508,7 @@ describe('Money Request submission and requester read', () => {
     await t.mutation(internal.payToAgreementCreation.recordCreated, {
       payToAgreementId: createdAgreement._id,
       leaseToken: 'created-worker',
+      source: 'creation_response',
       result: {
         providerState: 'pending',
         providerCreatedAt: nowMs,
@@ -1674,6 +1677,7 @@ describe('Money Request submission and requester read', () => {
     await t.mutation(internal.payToAgreementCreation.recordCreated, {
       payToAgreementId: ambiguousAgreement._id,
       leaseToken: 'recovery-worker',
+      source: 'per_uid_get',
       result: {
         providerState: 'pending',
         providerCreatedAt: nowMs,
@@ -2294,6 +2298,7 @@ describe('Money Request submission and requester read', () => {
           ],
           submittedAt: Date.now(),
           expectedRequesterDestinationId: preflight.requesterDestinationId,
+          environment: 'sandbox',
         }),
       ).rejects.toThrow(
         racedParty === 'Requester'
@@ -2339,6 +2344,7 @@ describe('Money Request submission and requester read', () => {
         ),
         submittedAt: Date.now(),
         expectedRequesterDestinationId: preflight.requesterDestinationId,
+        environment: 'sandbox',
       }),
     ).rejects.toThrow('selected Payer is unavailable')
 
@@ -2391,6 +2397,7 @@ describe('Money Request submission and requester read', () => {
         ),
         submittedAt: Date.now(),
         expectedRequesterDestinationId: preflight.requesterDestinationId,
+        environment: 'sandbox',
       }),
     ).rejects.toThrow('temporarily unavailable')
 

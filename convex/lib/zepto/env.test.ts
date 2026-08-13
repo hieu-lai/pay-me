@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest'
 
 import {
+  createEnvironmentZeptoClientFromEnv,
   createSandboxZeptoClientFromEnv,
   createZeptoClientFromEnv,
 } from './env'
@@ -74,6 +75,46 @@ describe('createZeptoClientFromEnv', () => {
 
     expect(() => createSandboxZeptoClientFromEnv()).toThrow(
       'Sandbox agreement work requires sandbox-only Zepto configuration.',
+    )
+  })
+
+  test('selects credentials independently for sandbox and production PayTo Agreements', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: Request[] = []
+    globalThis.fetch = async (request) => {
+      requests.push(new Request(request).clone())
+      return new Response(JSON.stringify({ ping: 'pong' }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-token'
+    process.env.ZEPTO_PERSONAL_ACCESS_TOKEN = 'production-token'
+
+    try {
+      process.env.ZEPTO_ENVIRONMENT = 'sandbox'
+      await createEnvironmentZeptoClientFromEnv('sandbox').core.GET('/ping')
+      process.env.ZEPTO_ENVIRONMENT = 'production'
+      await createEnvironmentZeptoClientFromEnv('production').core.GET('/ping')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(requests.map((request) => request.url)).toEqual([
+      'https://api.sandbox.zeptopayments.com/ping',
+      'https://api.zeptopayments.com/ping',
+    ])
+    expect(
+      requests.map((request) => request.headers.get('Authorization')),
+    ).toEqual(['Bearer sandbox-token', 'Bearer production-token'])
+  })
+
+  test('rejects PayTo Agreement environment and deployment configuration mismatches', () => {
+    process.env.ZEPTO_ENVIRONMENT = 'production'
+    process.env.ZEPTO_PERSONAL_ACCESS_TOKEN = 'production-token'
+    process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-token'
+
+    expect(() => createEnvironmentZeptoClientFromEnv('sandbox')).toThrow(
+      'PayTo Agreement environment does not match the configured Zepto environment.',
     )
   })
 })

@@ -2,8 +2,11 @@ import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 
 import {
+  activationProvenancePolicyValidator,
+  agreementEvidenceSourceValidator,
   providerAgreementStateValidator,
   routingSnapshotValidator,
+  zeptoEnvironmentValidator,
 } from './validators/payToAgreements'
 import {
   zeptoWebhookCausedByValidator,
@@ -80,9 +83,11 @@ export default defineSchema({
     sourceDebtorPaymentDestinationId: v.id('paymentDestinations'),
     debtorSnapshot: routingSnapshotValidator,
     provider: v.literal('zepto'),
-    environment: v.literal('sandbox'),
+    environment: zeptoEnvironmentValidator,
     apiVersion: v.literal('20260101'),
     providerUid: v.string(),
+    activationProvenancePolicy: v.optional(activationProvenancePolicyValidator),
+    firstConfirmedActiveAt: v.optional(v.number()),
     creationState: v.union(
       v.literal('queued'),
       v.literal('submitting'),
@@ -201,6 +206,7 @@ export default defineSchema({
       }),
       agreementEvidenceBaseValidator.extend({
         kind: v.literal('provider_create_succeeded'),
+        source: v.optional(agreementEvidenceSourceValidator),
         providerState: providerAgreementStateValidator,
         providerCreatedAt: v.number(),
       }),

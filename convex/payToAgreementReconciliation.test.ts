@@ -1,11 +1,13 @@
 /// <reference types="vite/client" />
 
 import type { UserIdentity } from 'convex/server'
+import workpoolTest from '@convex-dev/workpool/test'
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import type { ZeptoEnvironment } from './validators/payToAgreements'
 
 const modules = import.meta.glob('./**/*.ts')
 const requesterIdentity = {
@@ -17,6 +19,7 @@ const requesterIdentity = {
 
 beforeEach(() => {
   process.env.ZEPTO_ENVIRONMENT = 'sandbox'
+  process.env.ZEPTO_PERSONAL_ACCESS_TOKEN = 'production-test-token'
   process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-test-token'
 })
 
@@ -24,8 +27,9 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function setupAgreement() {
+async function setupAgreement(environment: ZeptoEnvironment = 'sandbox') {
   const t = convexTest(schema, modules)
+  workpoolTest.register(t, 'agreementCreationWorkpool')
   const ids = await t.run(async (ctx) => {
     const requesterUserId = await ctx.db.insert('users', {
       tokenIdentifier: requesterIdentity.tokenIdentifier,
@@ -92,9 +96,10 @@ async function setupAgreement() {
         keyVersion: 'v1',
       },
       provider: 'zepto',
-      environment: 'sandbox',
+      environment,
       apiVersion: '20260101',
       providerUid: 'agreement_reconciliation_1',
+      activationProvenancePolicy: 'track_first_confirmation',
       creationState: 'created',
       creationUpdatedAt: submittedAt,
       lifecycleState: 'active',
@@ -126,6 +131,7 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
         kind: 'create',
         state: 'running',
         availableAt: 1_000,
+        postCycle: 1,
         leaseToken: 'creation-lease',
         leaseExpiresAt: 200_000,
       })
@@ -135,6 +141,7 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
       await t.mutation(internal.payToAgreementCreation.recordCreated, {
         payToAgreementId,
         leaseToken: 'creation-lease',
+        source: 'creation_response',
         result: {
           providerState: 'pending',
           providerCreatedAt: 2_000,
@@ -143,6 +150,9 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
         observedAt: 3_000,
       }),
     ).toBe(true)
+    await expect(
+      t.run(async (ctx) => ctx.db.get('payToAgreements', payToAgreementId)),
+    ).resolves.not.toHaveProperty('firstConfirmedActiveAt')
     const work = await t.run(async (ctx) =>
       ctx.db
         .query('payToAgreementReconciliationWorkItems')
@@ -155,6 +165,57 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
       state: 'queued',
       availableAt: 3_000 + 30 * 60_000,
     })
+  })
+
+  test('records an active creation-recovery GET as confirmed provenance', async () => {
+    const { t, payToAgreementId } = await setupAgreement()
+    await t.run(async (ctx) => {
+      await ctx.db.patch('payToAgreements', payToAgreementId, {
+        creationState: 'verifying',
+      })
+      await ctx.db.insert('payToAgreementWorkItems', {
+        payToAgreementId,
+        kind: 'create',
+        state: 'running',
+        availableAt: 1_000,
+        postCycle: 1,
+      })
+    })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            uid: 'agreement_reconciliation_1',
+            state: 'active',
+            created_at: '2026-08-11T01:02:03.000Z',
+            mms_agreement_id: null,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+
+    await t.action(internal.payToAgreementCreation.create, {
+      payToAgreementId,
+    })
+
+    const durable = await t.run(async (ctx) => ({
+      agreement: await ctx.db.get('payToAgreements', payToAgreementId),
+      evidence: await ctx.db.query('payToAgreementEvidence').collect(),
+    }))
+    expect(durable.agreement).toMatchObject({
+      lifecycleState: 'active',
+      lifecycleConfidence: 'confirmed',
+      firstConfirmedActiveAt: expect.any(Number),
+    })
+    expect(durable.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'provider_create_succeeded',
+          source: 'per_uid_get',
+        }),
+      ]),
+    )
   })
 
   test('repairs a missed terminal webhook from the provider GET boundary', async () => {
@@ -191,6 +252,36 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
     expect(globalThis.fetch).toHaveBeenCalledOnce()
   })
 
+  test('looks up production PayTo Agreements only with production configuration', async () => {
+    process.env.ZEPTO_ENVIRONMENT = 'production'
+    const { t, payToAgreementId } = await setupAgreement('production')
+    const requests: Request[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      requests.push(new Request(request).clone())
+      return new Response(
+        JSON.stringify({
+          data: {
+            uid: 'agreement_reconciliation_1',
+            state: 'active',
+            created_at: '2026-08-11T01:02:03.000Z',
+            mms_agreement_id: null,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    })
+
+    await t.action(internal.payToAgreementReconciliation.reconcile, {
+      payToAgreementId,
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toContain('https://api.zeptopayments.com/')
+    expect(requests[0]?.headers.get('Authorization')).toBe(
+      'Bearer production-test-token',
+    )
+  })
+
   test('turns provisional lifecycle evidence into a GET-confirmed public projection', async () => {
     const { t, requester, moneyRequestId, payToAgreementId } =
       await setupAgreement()
@@ -203,7 +294,10 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
       },
     )
 
-    expect(claimed).toEqual({ providerUid: 'agreement_reconciliation_1' })
+    expect(claimed).toEqual({
+      environment: 'sandbox',
+      providerUid: 'agreement_reconciliation_1',
+    })
     expect(
       await t.mutation(internal.payToAgreementReconciliation.recordSuccess, {
         payToAgreementId,
@@ -243,6 +337,77 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
       state: 'queued',
       availableAt: 3_000 + 24 * 60 * 60_000,
     })
+  })
+
+  test('records the first GET-confirmed active observation exactly once', async () => {
+    const { t, payToAgreementId } = await setupAgreement()
+    await t.run(async (ctx) => {
+      await ctx.db.patch('payToAgreements', payToAgreementId, {
+        activationProvenancePolicy: 'track_first_confirmation',
+      })
+    })
+    await t.mutation(internal.payToAgreementReconciliation.claimWork, {
+      payToAgreementId,
+      leaseToken: 'lease-first-active',
+      nowMs: 2_000,
+    })
+    await t.mutation(internal.payToAgreementReconciliation.recordSuccess, {
+      payToAgreementId,
+      leaseToken: 'lease-first-active',
+      providerState: 'active',
+      observedAt: 3_000,
+    })
+
+    await t.mutation(internal.payToAgreementReconciliation.claimWork, {
+      payToAgreementId,
+      leaseToken: 'lease-repeated-active',
+      nowMs: 3_000 + 24 * 60 * 60_000,
+    })
+    await t.mutation(internal.payToAgreementReconciliation.recordSuccess, {
+      payToAgreementId,
+      leaseToken: 'lease-repeated-active',
+      providerState: 'active',
+      observedAt: 4_000 + 24 * 60 * 60_000,
+    })
+
+    await expect(
+      t.run(async (ctx) => ctx.db.get('payToAgreements', payToAgreementId)),
+    ).resolves.toMatchObject({ firstConfirmedActiveAt: 3_000 })
+  })
+
+  test('concurrent active observations converge on one first confirmation', async () => {
+    const { t, payToAgreementId } = await setupAgreement()
+    await t.run(async (ctx) => {
+      await ctx.db.patch('payToAgreements', payToAgreementId, {
+        activationProvenancePolicy: 'track_first_confirmation',
+      })
+    })
+    await t.mutation(internal.payToAgreementReconciliation.claimWork, {
+      payToAgreementId,
+      leaseToken: 'lease-concurrent-active',
+      nowMs: 2_000,
+    })
+
+    const outcomes = await Promise.all([
+      t.mutation(internal.payToAgreementReconciliation.recordSuccess, {
+        payToAgreementId,
+        leaseToken: 'lease-concurrent-active',
+        providerState: 'active',
+        observedAt: 3_000,
+      }),
+      t.mutation(internal.payToAgreementReconciliation.recordSuccess, {
+        payToAgreementId,
+        leaseToken: 'lease-concurrent-active',
+        providerState: 'active',
+        observedAt: 3_001,
+      }),
+    ])
+
+    expect(outcomes.filter(Boolean)).toHaveLength(1)
+    const agreement = await t.run(async (ctx) =>
+      ctx.db.get('payToAgreements', payToAgreementId),
+    )
+    expect([3_000, 3_001]).toContain(agreement?.firstConfirmedActiveAt)
   })
 
   test('keeps unknown GET state internal and raises a safe public review projection', async () => {

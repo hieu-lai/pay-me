@@ -45,6 +45,23 @@ export const runBackfillUserSearchText = migrations.runner(
   internal.migrations.backfillUserSearchText,
 )
 
+export const excludeLegacyPayToAgreements = migrations.define({
+  table: 'payToAgreements',
+  migrateOne: async (_ctx, agreement) => {
+    if (agreement.activationProvenancePolicy !== undefined) return
+    return {
+      activationProvenancePolicy:
+        agreement.firstConfirmedActiveAt === undefined
+          ? ('legacy_excluded' as const)
+          : ('track_first_confirmation' as const),
+    }
+  },
+})
+
+export const runExcludeLegacyPayToAgreements = migrations.runner(
+  internal.migrations.excludeLegacyPayToAgreements,
+)
+
 export const deleteAllPayToAgreementEvidence = migrations.define({
   table: 'payToAgreementEvidence',
   migrateOne: async (ctx, evidence) => {

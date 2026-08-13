@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, test } from 'vitest'
 
 import { api } from './_generated/api'
 import schema from './schema'
+import type { ZeptoEnvironment } from './validators/payToAgreements'
 
 const modules = import.meta.glob('./**/*.ts')
 const webhookSecret = 'whsec_zepto_lifecycle_test_secret'
@@ -47,7 +48,10 @@ async function signedDelivery(
   }
 }
 
-async function setupAgreement(providerUid = 'agreement_webhook_1') {
+async function setupAgreement(
+  providerUid = 'agreement_webhook_1',
+  environment: ZeptoEnvironment = 'sandbox',
+) {
   const t = convexTest(schema, modules)
   const ids = await t.run(async (ctx) => {
     const requesterUserId = await ctx.db.insert('users', {
@@ -115,9 +119,10 @@ async function setupAgreement(providerUid = 'agreement_webhook_1') {
         keyVersion: 'v1',
       },
       provider: 'zepto',
-      environment: 'sandbox',
+      environment,
       apiVersion: '20260101',
       providerUid,
+      activationProvenancePolicy: 'track_first_confirmation',
       creationState: 'created',
       creationUpdatedAt: submittedAt,
       lifecycleState: 'pending',
@@ -145,13 +150,14 @@ async function durableWebhookState(
 }
 
 beforeEach(() => {
+  process.env.ZEPTO_ENVIRONMENT = 'sandbox'
   process.env.ZEPTO_WEBHOOK_SIGNING_SECRET = webhookSecret
 })
 
 describe('POST /zepto/webhooks', () => {
   test('accepts Zepto PayTo webhook deliveries with a single data object', async () => {
     const providerUid = '019ff0c0-b888-7c66-af96-63972ad43d51'
-    const { t } = await setupAgreement(providerUid)
+    const { t, payToAgreementId } = await setupAgreement(providerUid)
     const request = await signedDelivery('delivery-single-event', {
       data: {
         id: '019ff0c0-be3a-7565-90a9-6692c017fd33',
@@ -187,6 +193,38 @@ describe('POST /zepto/webhooks', () => {
       ],
       evidence: [expect.objectContaining({ outcome: 'applied' })],
       reconciliation: [expect.objectContaining({ providerUid })],
+    })
+    await expect(
+      t.run(async (ctx) => ctx.db.get('payToAgreements', payToAgreementId)),
+    ).resolves.not.toHaveProperty('firstConfirmedActiveAt')
+  })
+
+  test('scopes webhook PayTo Agreement lookup to the configured production environment', async () => {
+    process.env.ZEPTO_ENVIRONMENT = 'production'
+    const providerUid = 'shared_environment_uid'
+    const { t, payToAgreementId } = await setupAgreement(
+      providerUid,
+      'production',
+    )
+    const request = await signedDelivery('delivery-production-event', {
+      data: {
+        id: 'production-event',
+        type: 'payto_agreement.activated',
+        published_at: '2026-08-11T22:16:31.290+10:00',
+        resource_uid: providerUid,
+        resource_type: 'payto_agreement',
+      },
+    })
+
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...request })).status,
+    ).toBe(200)
+    await expect(
+      t.run(async (ctx) => ctx.db.get('payToAgreements', payToAgreementId)),
+    ).resolves.toMatchObject({
+      environment: 'production',
+      lifecycleState: 'active',
+      lifecycleConfidence: 'provisional',
     })
   })
 

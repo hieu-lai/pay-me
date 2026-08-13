@@ -30,10 +30,17 @@ import {
 import { decryptPaymentDestination } from './lib/paymentDestinationCrypto'
 import { requireUser } from './lib/requireUser'
 import { resolvePayIdAlias } from './lib/zepto/aliasResolution'
-import { createSandboxZeptoClientFromEnv } from './lib/zepto/env'
+import {
+  configuredZeptoEnvironment,
+  createEnvironmentZeptoClientFromEnv,
+} from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import { creationFailureKind } from './payToAgreementCreationState'
-import { routingSnapshotValidator } from './validators/payToAgreements'
+import {
+  routingSnapshotValidator,
+  zeptoEnvironmentValidator,
+} from './validators/payToAgreements'
+import type { ZeptoEnvironment } from './validators/payToAgreements'
 
 const intentValidator = v.object({
   submissionKey: v.string(),
@@ -363,6 +370,7 @@ async function validatePayIdDestinations(
   payerDestinations: Array<{ snapshot: ReturnType<typeof routingSnapshot> }>,
   trustedIp: string,
   identityKey: string,
+  environment: ZeptoEnvironment,
 ) {
   const destinations = [
     { role: 'requester' as const, snapshot: requesterSnapshot },
@@ -400,9 +408,9 @@ async function validatePayIdDestinations(
       'PayID validation is temporarily unavailable.',
     )
   }
-  let client: ReturnType<typeof createSandboxZeptoClientFromEnv>
+  let client: ReturnType<typeof createEnvironmentZeptoClientFromEnv>
   try {
-    client = createSandboxZeptoClientFromEnv()
+    client = createEnvironmentZeptoClientFromEnv(environment)
   } catch (error) {
     aliasResolutionFailure(error, 'requester')
   }
@@ -485,11 +493,22 @@ export const submit = action({
     })
     if (preflight.kind === 'replay') return preflight.moneyRequestId
 
+    let environment: ZeptoEnvironment
+    try {
+      environment = configuredZeptoEnvironment()
+    } catch {
+      safeError(
+        'SERVICE_UNAVAILABLE',
+        'Money Request submission is temporarily unavailable.',
+      )
+    }
+
     await validatePayIdDestinations(
       preflight.requesterSnapshot,
       preflight.payerDestinations,
       args.attestation.trustedIp,
       identity.tokenIdentifier,
+      environment,
     )
 
     const moneyRequestId: Id<'moneyRequests'> = await ctx.runMutation(
@@ -506,6 +525,7 @@ export const submit = action({
         ),
         submittedAt: nowMs,
         expectedRequesterDestinationId: preflight.requesterDestinationId,
+        environment,
       },
     )
     return moneyRequestId
@@ -565,6 +585,7 @@ export const accept = internalMutation({
     agreementAllocations: v.array(agreementAllocationValidator),
     submittedAt: v.number(),
     expectedRequesterDestinationId: v.id('paymentDestinations'),
+    environment: zeptoEnvironmentValidator,
   },
   returns: v.id('moneyRequests'),
   handler: async (ctx, args) => {
@@ -630,7 +651,7 @@ export const accept = internalMutation({
       const providerUidCollision = await ctx.db
         .query('payToAgreements')
         .withIndex('by_environment_and_providerUid', (q) =>
-          q.eq('environment', 'sandbox').eq('providerUid', providerUid),
+          q.eq('environment', args.environment).eq('providerUid', providerUid),
         )
         .unique()
       if (providerUidCollision) {
@@ -662,9 +683,10 @@ export const accept = internalMutation({
         sourceDebtorPaymentDestinationId: payerDestination.destination._id,
         debtorSnapshot: payerDestination.snapshot,
         provider: 'zepto',
-        environment: 'sandbox',
+        environment: args.environment,
         apiVersion: '20260101',
         providerUid: allocation.providerUid,
+        activationProvenancePolicy: 'track_first_confirmation',
         creationState: 'queued',
         creationUpdatedAt: args.submittedAt,
         lifecycleState: 'pending',

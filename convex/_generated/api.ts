@@ -13,6 +13,7 @@ import type * as http from "../http.js";
 import type * as lib_agreementCreationPool from "../lib/agreementCreationPool.js";
 import type * as lib_moneyRequestIngress from "../lib/moneyRequestIngress.js";
 import type * as lib_payIdCapability from "../lib/payIdCapability.js";
+import type * as lib_payToAgreementActivation from "../lib/payToAgreementActivation.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
@@ -61,6 +62,7 @@ const fullApi: ApiFromModules<{
   "lib/agreementCreationPool": typeof lib_agreementCreationPool;
   "lib/moneyRequestIngress": typeof lib_moneyRequestIngress;
   "lib/payIdCapability": typeof lib_payIdCapability;
+  "lib/payToAgreementActivation": typeof lib_payToAgreementActivation;
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
