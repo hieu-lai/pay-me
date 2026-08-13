@@ -38,7 +38,7 @@ export function createZeptoClientFromEnv(): ZeptoClient {
 
 /** Create the client used by sandbox-only provider workers. */
 export function createSandboxZeptoClientFromEnv(
-  options: Pick<CreateZeptoClientOptions, 'onAttempt'> = {},
+  options: Pick<CreateZeptoClientOptions, 'onAttempt' | 'maxRetries'> = {},
 ): ZeptoClient {
   if (env.ZEPTO_ENVIRONMENT !== 'sandbox') {
     throw new ZeptoClientError({
@@ -57,14 +57,14 @@ export function createSandboxZeptoClientFromEnv(
   return createZeptoClient({
     environment: 'sandbox',
     accessToken: env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN,
-    onAttempt: options.onAttempt,
+    ...options,
   })
 }
 
 /** Create a PayTo Agreement client using only credentials for its durable environment. */
 export function createEnvironmentZeptoClientFromEnv(
   environment: ZeptoEnvironment,
-  options: Pick<CreateZeptoClientOptions, 'onAttempt'> = {},
+  options: Pick<CreateZeptoClientOptions, 'onAttempt' | 'maxRetries'> = {},
 ): ZeptoClient {
   if (configuredZeptoEnvironment() !== environment) {
     throw new ZeptoClientError({
@@ -86,6 +86,6 @@ export function createEnvironmentZeptoClientFromEnv(
   return createZeptoClient({
     environment: 'production',
     accessToken: env.ZEPTO_PERSONAL_ACCESS_TOKEN,
-    onAttempt: options.onAttempt,
+    ...options,
   })
 }

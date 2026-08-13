@@ -26,5 +26,6 @@ const app = defineApp({
 
 app.use(migrations)
 app.use(workpool, { name: 'agreementCreationWorkpool' })
+app.use(workpool, { name: 'paymentCreationWorkpool' })
 
 export default app

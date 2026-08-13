@@ -2,16 +2,20 @@ import { v7 as uuid } from 'uuid'
 import type { Infer } from 'convex/values'
 import { v } from 'convex/values'
 
+import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
+import { paymentCreationPool } from './lib/paymentCreationPool'
 import { projectPayerPayment } from './lib/payToPaymentProjection'
 import type { PayToPaymentGateMode } from './validators/payToPayments'
 import {
+  payToPaymentCreateErrorCategoryValidator,
   payToPaymentEvidenceSourceValidator,
   payToPaymentIntentValidator,
   payToPaymentOperationClassificationValidator,
   payToPaymentOperationKindValidator,
+  providerPayToPaymentStateValidator,
 } from './validators/payToPayments'
 
 const ensureResultValidator = v.union(
@@ -37,6 +41,8 @@ const ensureResultValidator = v.union(
     ),
   }),
 )
+
+const CREATE_LEASE_DURATION_MS = 3 * 60_000
 
 type PaymentOperationKind = Infer<typeof payToPaymentOperationKindValidator>
 
@@ -126,6 +132,27 @@ async function fingerprintIntent(
   const digest = await crypto.subtle.digest(
     'SHA-256',
     new TextEncoder().encode(source),
+  )
+  return bytesToBase64Url(new Uint8Array(digest))
+}
+
+async function fingerprintCreateRequest(input: {
+  providerUid: string
+  agreementProviderUid: string
+  amountCents: number
+  priority: 'unattended'
+}) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(
+      JSON.stringify([
+        1,
+        input.providerUid,
+        input.agreementProviderUid,
+        input.amountCents,
+        input.priority,
+      ]),
+    ),
   )
   return bytesToBase64Url(new Uint8Array(digest))
 }
@@ -308,6 +335,19 @@ export async function ensurePayToPayment(
     creationState: 'create_pending',
     establishedAt: agreement.firstConfirmedActiveAt,
   })
+  const workItemId = await ctx.db.insert('payToPaymentWorkItems', {
+    payToPaymentId,
+    kind: 'create',
+    state: 'queued',
+    availableAt: args.observedAt,
+  })
+  const workId = await paymentCreationPool.enqueueAction(
+    ctx,
+    internal.payToPaymentCreation.create,
+    { payToPaymentId },
+    { retry: false },
+  )
+  await ctx.db.patch('payToPaymentWorkItems', workItemId, { workId })
   await projectPayerPayment(ctx, agreement, {
     paymentStatus: 'initiating',
     paymentVerificationPending: false,
@@ -325,11 +365,336 @@ export const ensure = internalMutation({
   handler: ensurePayToPayment,
 })
 
+const createWorkValidator = v.object({
+  kind: v.literal('create'),
+  operationId: v.string(),
+  payToPaymentId: v.id('payToPayments'),
+  providerUid: v.string(),
+  agreementProviderUid: v.string(),
+  amountCents: v.number(),
+  priority: v.literal('unattended'),
+  intentFingerprint: v.string(),
+  requestFingerprint: v.string(),
+  environment: v.union(v.literal('sandbox'), v.literal('production')),
+  leaseToken: v.string(),
+  leaseExpiresAt: v.number(),
+})
+type CreateWork = Infer<typeof createWorkValidator>
+
+async function createWorkItem(
+  ctx: MutationCtx,
+  payToPaymentId: Id<'payToPayments'>,
+) {
+  return await ctx.db
+    .query('payToPaymentWorkItems')
+    .withIndex('by_payToPaymentId', (q) =>
+      q.eq('payToPaymentId', payToPaymentId),
+    )
+    .unique()
+}
+
+function leaseAuthorizes(
+  workItem: Doc<'payToPaymentWorkItems'>,
+  leaseToken: string,
+  observedAt: number,
+) {
+  return (
+    workItem.state === 'running' &&
+    workItem.leaseToken === leaseToken &&
+    workItem.leaseExpiresAt !== undefined &&
+    workItem.leaseExpiresAt >= observedAt
+  )
+}
+
+function utcBudgetDate(nowMs: number) {
+  return new Date(nowMs).toISOString().slice(0, 10)
+}
+
+export const claimCreateWork = internalMutation({
+  args: {
+    payToPaymentId: v.id('payToPayments'),
+    leaseToken: v.string(),
+    nowMs: v.number(),
+  },
+  returns: v.union(createWorkValidator, v.null()),
+  handler: async (ctx, args): Promise<CreateWork | null> => {
+    const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
+    if (!payment || payment.creationState !== 'create_pending') return null
+    const workItem = await createWorkItem(ctx, payment._id)
+    if (
+      !workItem ||
+      workItem.state !== 'queued' ||
+      workItem.availableAt > args.nowMs
+    ) {
+      return null
+    }
+    const gate = await ctx.db
+      .query('payToPaymentRuntimeGates')
+      .withIndex('by_environment', (q) =>
+        q.eq('environment', payment.environment),
+      )
+      .unique()
+    if (moneyMovingDenial(gate?.mode, payment.environment) !== undefined) {
+      return null
+    }
+    if (!gate) return null
+
+    const budgetDate = utcBudgetDate(args.nowMs)
+    const existingCount =
+      gate.budgetDate === budgetDate ? (gate.reservedPaymentCount ?? 0) : 0
+    const existingValue =
+      gate.budgetDate === budgetDate ? (gate.reservedPaymentValueCents ?? 0) : 0
+    const reservedPaymentCount = existingCount + 1
+    const reservedPaymentValueCents =
+      existingValue + payment.intent.amount.cents
+    if (
+      (gate.dailyPaymentCountCap !== undefined &&
+        reservedPaymentCount > gate.dailyPaymentCountCap) ||
+      (gate.dailyPaymentValueCapCents !== undefined &&
+        reservedPaymentValueCents > gate.dailyPaymentValueCapCents)
+    ) {
+      return null
+    }
+
+    const operationId = await allocateOperationId(ctx, args.nowMs)
+    const request = {
+      providerUid: payment.providerUid,
+      agreementProviderUid: payment.intent.agreementProviderUid,
+      amountCents: payment.intent.amount.cents,
+      priority: payment.intent.priority,
+    }
+    const requestFingerprint = await fingerprintCreateRequest(request)
+    const leaseExpiresAt = args.nowMs + CREATE_LEASE_DURATION_MS
+    await ctx.db.patch('payToPaymentRuntimeGates', gate._id, {
+      budgetDate,
+      reservedPaymentCount,
+      reservedPaymentValueCents,
+    })
+    await ctx.db.insert('payToPaymentOperations', {
+      payToPaymentId: payment._id,
+      operationId,
+      operationKind: 'create',
+      intentFingerprint: payment.intent.fingerprint,
+      requestFingerprint,
+      authorizedAt: args.nowMs,
+      leaseToken: args.leaseToken,
+      leaseExpiresAt,
+    })
+    await ctx.db.patch('payToPayments', payment._id, {
+      creationState: 'creation_uncertain',
+    })
+    await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
+      state: 'running',
+      leaseToken: args.leaseToken,
+      leaseExpiresAt,
+      operationId,
+    })
+    return {
+      kind: 'create',
+      operationId,
+      payToPaymentId: payment._id,
+      ...request,
+      intentFingerprint: payment.intent.fingerprint,
+      requestFingerprint,
+      environment: payment.environment,
+      leaseToken: args.leaseToken,
+      leaseExpiresAt,
+    }
+  },
+})
+
+const createAttemptArgsValidator = v.object({
+  payToPaymentId: v.id('payToPayments'),
+  operationId: v.string(),
+  leaseToken: v.string(),
+  observedAt: v.number(),
+})
+
+export const markCreateDispatchStarted = internalMutation({
+  args: createAttemptArgsValidator.fields,
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
+    const workItem = await createWorkItem(ctx, args.payToPaymentId)
+    const operation = await ctx.db
+      .query('payToPaymentOperations')
+      .withIndex('by_operationId', (q) => q.eq('operationId', args.operationId))
+      .unique()
+    if (
+      !payment ||
+      !workItem ||
+      !operation ||
+      operation.payToPaymentId !== payment._id ||
+      workItem.operationId !== operation.operationId ||
+      operation.leaseToken !== args.leaseToken ||
+      operation.leaseExpiresAt === undefined ||
+      operation.leaseExpiresAt < args.observedAt ||
+      operation.dispatchStartedAt !== undefined ||
+      !leaseAuthorizes(workItem, args.leaseToken, args.observedAt)
+    ) {
+      return false
+    }
+    const gate = await ctx.db
+      .query('payToPaymentRuntimeGates')
+      .withIndex('by_environment', (q) =>
+        q.eq('environment', payment.environment),
+      )
+      .unique()
+    if (moneyMovingDenial(gate?.mode, payment.environment) !== undefined) {
+      await ctx.db.patch('payToPaymentOperations', operation._id, {
+        outcome: { classification: 'refused', observedAt: args.observedAt },
+      })
+      await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
+        state: 'held',
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+      })
+      return false
+    }
+    await ctx.db.patch('payToPaymentOperations', operation._id, {
+      dispatchStartedAt: args.observedAt,
+    })
+    return true
+  },
+})
+
+async function createAttemptContext(
+  ctx: MutationCtx,
+  args: {
+    payToPaymentId: Id<'payToPayments'>
+    operationId: string
+  },
+) {
+  const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
+  if (!payment) return null
+  const workItem = await createWorkItem(ctx, payment._id)
+  const operation = await ctx.db
+    .query('payToPaymentOperations')
+    .withIndex('by_operationId', (q) => q.eq('operationId', args.operationId))
+    .unique()
+  if (!operation || operation.payToPaymentId !== payment._id) return null
+  return { payment, workItem, operation }
+}
+
+function isCurrentDispatchedCreateAttempt(
+  attempt: NonNullable<Awaited<ReturnType<typeof createAttemptContext>>>,
+  leaseToken: string,
+  observedAt: number,
+) {
+  return (
+    attempt.workItem !== null &&
+    attempt.workItem.operationId === attempt.operation.operationId &&
+    attempt.operation.leaseToken === leaseToken &&
+    attempt.operation.dispatchStartedAt !== undefined &&
+    leaseAuthorizes(attempt.workItem, leaseToken, observedAt)
+  )
+}
+
+export const recordCreateResult = internalMutation({
+  args: createAttemptArgsValidator.extend({
+    providerState: providerPayToPaymentStateValidator,
+    providerCreatedAt: v.number(),
+  }).fields,
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const attempt = await createAttemptContext(ctx, args)
+    if (!attempt || attempt.operation.leaseToken !== args.leaseToken) {
+      return false
+    }
+    const { operation, payment, workItem } = attempt
+    await ctx.db.insert('payToPaymentEvidence', {
+      payToPaymentId: payment._id,
+      source: 'create_response',
+      intentFingerprint: payment.intent.fingerprint,
+      operationId: args.operationId,
+      classification: 'completed',
+      providerState: args.providerState,
+      providerCreatedAt: args.providerCreatedAt,
+      observedAt: args.observedAt,
+    })
+    if (
+      !isCurrentDispatchedCreateAttempt(
+        attempt,
+        args.leaseToken,
+        args.observedAt,
+      )
+    ) {
+      return false
+    }
+    if (!workItem) return false
+    const agreement = await ctx.db.get(
+      'payToAgreements',
+      payment.payToAgreementId,
+    )
+    if (!agreement) throw new Error('PayTo Payment invariant failed')
+    await ctx.db.patch('payToPaymentOperations', operation._id, {
+      outcome: { classification: 'completed', observedAt: args.observedAt },
+    })
+    await ctx.db.patch('payToPayments', payment._id, {
+      creationState: 'provider_established',
+    })
+    await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
+      state: 'completed',
+      completedAt: args.observedAt,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+    })
+    await projectPayerPayment(ctx, agreement, {
+      paymentStatus: 'processing',
+      paymentVerificationPending: true,
+      paymentAttentionRequired: false,
+    })
+    return true
+  },
+})
+
+export const recordCreateFailure = internalMutation({
+  args: createAttemptArgsValidator.extend({
+    errorCategory: payToPaymentCreateErrorCategoryValidator,
+  }).fields,
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const attempt = await createAttemptContext(ctx, args)
+    if (!attempt || attempt.operation.leaseToken !== args.leaseToken) {
+      return false
+    }
+    const { operation, payment, workItem } = attempt
+    await ctx.db.insert('payToPaymentEvidence', {
+      payToPaymentId: payment._id,
+      source: 'create_response',
+      intentFingerprint: payment.intent.fingerprint,
+      operationId: args.operationId,
+      classification: 'uncertain',
+      errorCategory: args.errorCategory,
+      observedAt: args.observedAt,
+    })
+    if (
+      !isCurrentDispatchedCreateAttempt(
+        attempt,
+        args.leaseToken,
+        args.observedAt,
+      )
+    ) {
+      return false
+    }
+    if (!workItem) return false
+    await ctx.db.patch('payToPaymentOperations', operation._id, {
+      outcome: { classification: 'uncertain', observedAt: args.observedAt },
+    })
+    await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
+      state: 'held',
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+    })
+    return true
+  },
+})
+
 function creationStateAllowsOperation(
   creationState: Doc<'payToPayments'>['creationState'],
   operationKind: PaymentOperationKind,
 ) {
-  if (operationKind === 'create') return creationState === 'create_pending'
+  if (operationKind === 'create') return false
   if (operationKind === 'retry') {
     return creationState === 'provider_established'
   }
@@ -443,6 +808,7 @@ export const recordOutcome = internalMutation({
   args: {
     payToPaymentId: v.id('payToPayments'),
     operationId: v.string(),
+    leaseToken: v.optional(v.string()),
     classification: payToPaymentOperationClassificationValidator,
     observedAt: v.number(),
   },
@@ -454,6 +820,20 @@ export const recordOutcome = internalMutation({
       .unique()
     if (!operation || operation.payToPaymentId !== args.payToPaymentId) {
       return { kind: 'not_found' as const }
+    }
+    if (operation.operationKind === 'create') {
+      const attempt = await createAttemptContext(ctx, args)
+      if (
+        !attempt ||
+        args.leaseToken === undefined ||
+        !isCurrentDispatchedCreateAttempt(
+          attempt,
+          args.leaseToken,
+          args.observedAt,
+        )
+      ) {
+        return { kind: 'not_found' as const }
+      }
     }
     const accepted = await acceptIntentReference(ctx, {
       payToPaymentId: args.payToPaymentId,

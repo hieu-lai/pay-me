@@ -335,6 +335,11 @@ export default defineSchema({
     environment: zeptoEnvironmentValidator,
     mode: payToPaymentGateModeValidator,
     activatedAt: v.optional(v.number()),
+    dailyPaymentCountCap: v.optional(v.number()),
+    dailyPaymentValueCapCents: v.optional(v.number()),
+    budgetDate: v.optional(v.string()),
+    reservedPaymentCount: v.optional(v.number()),
+    reservedPaymentValueCents: v.optional(v.number()),
   }).index('by_environment', ['environment']),
 
   payToPayments: defineTable({
@@ -359,6 +364,23 @@ export default defineSchema({
       'authorizedAt',
     ])
     .index('by_operationId', ['operationId']),
+
+  payToPaymentWorkItems: defineTable({
+    payToPaymentId: v.id('payToPayments'),
+    kind: v.literal('create'),
+    state: v.union(
+      v.literal('queued'),
+      v.literal('running'),
+      v.literal('completed'),
+      v.literal('held'),
+    ),
+    availableAt: v.number(),
+    workId: v.optional(v.string()),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    operationId: v.optional(v.string()),
+    completedAt: v.optional(v.number()),
+  }).index('by_payToPaymentId', ['payToPaymentId']),
 
   payToPaymentEvidence: defineTable(payToPaymentEvidenceValidator).index(
     'by_payToPaymentId_and_observedAt',

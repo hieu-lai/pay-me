@@ -56,12 +56,48 @@ export const payToPaymentOperationClassificationValidator = literals(
   'refused',
 )
 
+export const providerPayToPaymentStates = [
+  'created',
+  'submitting',
+  'pending',
+  'under_investigation',
+  'failed',
+  'settled',
+] as const
+export const providerPayToPaymentStateValidator = literals(
+  ...providerPayToPaymentStates,
+)
+export type ProviderPayToPaymentState = Infer<
+  typeof providerPayToPaymentStateValidator
+>
+
+export const payToPaymentCreateErrorCategories = [
+  'aborted',
+  'configuration',
+  'http',
+  'invalid_response',
+  'network',
+  'sandbox_only',
+  'timeout',
+  'unclassified',
+] as const
+export const payToPaymentCreateErrorCategoryValidator = literals(
+  ...payToPaymentCreateErrorCategories,
+)
+export type PayToPaymentCreateErrorCategory = Infer<
+  typeof payToPaymentCreateErrorCategoryValidator
+>
+
 export const payToPaymentOperationValidator = v.object({
   payToPaymentId: v.id('payToPayments'),
   operationId: v.string(),
   operationKind: payToPaymentOperationKindValidator,
   intentFingerprint: v.string(),
+  requestFingerprint: v.optional(v.string()),
   authorizedAt: v.number(),
+  leaseToken: v.optional(v.string()),
+  leaseExpiresAt: v.optional(v.number()),
+  dispatchStartedAt: v.optional(v.number()),
   outcome: v.optional(
     v.object({
       classification: payToPaymentOperationClassificationValidator,
@@ -80,5 +116,10 @@ export const payToPaymentEvidenceValidator = v.object({
   payToPaymentId: v.id('payToPayments'),
   source: payToPaymentEvidenceSourceValidator,
   intentFingerprint: v.string(),
+  operationId: v.optional(v.string()),
+  classification: v.optional(payToPaymentOperationClassificationValidator),
+  providerState: v.optional(providerPayToPaymentStateValidator),
+  providerCreatedAt: v.optional(v.number()),
+  errorCategory: v.optional(payToPaymentCreateErrorCategoryValidator),
   observedAt: v.number(),
 })
