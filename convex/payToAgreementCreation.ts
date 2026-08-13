@@ -22,6 +22,7 @@ import {
   normalizedProviderErrorCategory,
   recoveryClassForProviderError,
 } from './payToAgreementCreationState'
+import { ensurePayToPayment } from './payToPayments'
 import { reconciliationScheduleForState } from './payToAgreementReconciliationState'
 import {
   agreementEvidenceSourceValidator,
@@ -434,6 +435,13 @@ export const recordCreated = internalMutation({
         state: stopped ? 'stopped' : 'queued',
         availableAt: args.observedAt + (reconciliationDelayMs ?? 0),
       })
+    }
+    if (confirmedByGet && args.result.providerState === 'active') {
+      const paymentIntent = await ensurePayToPayment(ctx, {
+        payToAgreementId: agreement._id,
+        observedAt: args.observedAt,
+      })
+      if (paymentIntent.kind === 'mismatch') return false
     }
     return true
   },

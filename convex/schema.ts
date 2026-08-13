@@ -21,6 +21,14 @@ import {
   payerPaymentCountsValidator,
   payerPaymentStatusValidator,
 } from './validators/payToPaymentProjections'
+import {
+  payToPaymentAttentionValidator,
+  payToPaymentCreationStateValidator,
+  payToPaymentEvidenceValidator,
+  payToPaymentGateModeValidator,
+  payToPaymentIntentValidator,
+  payToPaymentOperationValidator,
+} from './validators/payToPayments'
 
 const agreementEvidenceBaseValidator = v.object({
   payToAgreementId: v.id('payToAgreements'),
@@ -322,4 +330,38 @@ export default defineSchema({
     absenceCount: v.optional(v.number()),
     lastPostAt: v.optional(v.number()),
   }).index('by_payToAgreementId', ['payToAgreementId']),
+
+  payToPaymentRuntimeGates: defineTable({
+    environment: zeptoEnvironmentValidator,
+    mode: payToPaymentGateModeValidator,
+    activatedAt: v.optional(v.number()),
+  }).index('by_environment', ['environment']),
+
+  payToPayments: defineTable({
+    payToAgreementId: v.id('payToAgreements'),
+    moneyRequestId: v.id('moneyRequests'),
+    payerUserId: v.id('users'),
+    environment: zeptoEnvironmentValidator,
+    providerUid: v.string(),
+    intent: payToPaymentIntentValidator,
+    creationState: payToPaymentCreationStateValidator,
+    establishedAt: v.number(),
+    attention: v.optional(payToPaymentAttentionValidator),
+  })
+    .index('by_payToAgreementId', ['payToAgreementId'])
+    .index('by_moneyRequestId', ['moneyRequestId'])
+    .index('by_payerUserId', ['payerUserId'])
+    .index('by_environment_and_providerUid', ['environment', 'providerUid']),
+
+  payToPaymentOperations: defineTable(payToPaymentOperationValidator)
+    .index('by_payToPaymentId_and_authorizedAt', [
+      'payToPaymentId',
+      'authorizedAt',
+    ])
+    .index('by_operationId', ['operationId']),
+
+  payToPaymentEvidence: defineTable(payToPaymentEvidenceValidator).index(
+    'by_payToPaymentId_and_observedAt',
+    ['payToPaymentId', 'observedAt'],
+  ),
 })

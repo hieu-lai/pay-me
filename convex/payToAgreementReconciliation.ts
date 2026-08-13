@@ -12,6 +12,7 @@ import {
   getAgreementLifecycleByUid,
 } from './lib/zepto/reconciliation'
 import { normalizedProviderErrorCategory } from './payToAgreementCreationState'
+import { ensurePayToPayment } from './payToPayments'
 import {
   canRecordReconciliationOutcome,
   decideReconciliationFailure,
@@ -207,6 +208,13 @@ export const recordSuccess = internalMutation({
           lastSuccessAt: args.observedAt,
         },
       )
+      if (decision.state === 'active') {
+        const paymentIntent = await ensurePayToPayment(ctx, {
+          payToAgreementId: agreement._id,
+          observedAt: args.observedAt,
+        })
+        if (paymentIntent.kind === 'mismatch') return false
+      }
     } else if (decision.kind === 'unknown') {
       await ctx.db.patch('payToAgreements', agreement._id, {
         lifecycleState: 'unknown',

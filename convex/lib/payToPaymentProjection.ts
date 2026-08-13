@@ -13,7 +13,7 @@ export const PAYER_PAYMENT_STATUSES = [
 export type PayerPaymentStatus = (typeof PAYER_PAYMENT_STATUSES)[number]
 export type PayerPaymentCounts = Record<PayerPaymentStatus, number>
 
-type PayerProjection = {
+export type PayerProjection = {
   paymentStatus: PayerPaymentStatus
   paymentVerificationPending: boolean
   paymentAttentionRequired: boolean
@@ -212,4 +212,46 @@ export async function repairPaymentProjection(
   assertPaymentProjectionValues(repaired, payerProjections)
   await ctx.db.patch('moneyRequests', moneyRequestId, repaired)
   await assertStoredPaymentProjection(ctx, moneyRequestId)
+}
+
+export async function projectPayerPayment(
+  ctx: Pick<MutationCtx, 'db'>,
+  agreement: Doc<'payToAgreements'>,
+  projection: PayerProjection,
+) {
+  const moneyRequest = await ctx.db.get(
+    'moneyRequests',
+    agreement.moneyRequestId,
+  )
+  if (!moneyRequest) projectionInvariantError()
+  const agreements = await ctx.db
+    .query('payToAgreements')
+    .withIndex('by_moneyRequestId', (q) =>
+      q.eq('moneyRequestId', agreement.moneyRequestId),
+    )
+    .take(6)
+  const payerProjections = agreements.map((item) => {
+    if (item._id === agreement._id) return projection
+    if (
+      item.paymentStatus === undefined ||
+      item.paymentVerificationPending === undefined ||
+      item.paymentAttentionRequired === undefined
+    ) {
+      projectionInvariantError()
+    }
+    return {
+      paymentStatus: item.paymentStatus,
+      paymentVerificationPending: item.paymentVerificationPending,
+      paymentAttentionRequired: item.paymentAttentionRequired,
+    }
+  })
+  const moneyRequestProjection =
+    moneyRequestProjectionFromPayers(payerProjections)
+  assertPaymentProjectionValues(moneyRequestProjection, payerProjections)
+  await ctx.db.patch('payToAgreements', agreement._id, projection)
+  await ctx.db.patch(
+    'moneyRequests',
+    agreement.moneyRequestId,
+    moneyRequestProjection,
+  )
 }
