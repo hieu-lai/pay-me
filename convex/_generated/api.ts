@@ -37,6 +37,7 @@ import type * as lib_zepto_pagination from "../lib/zepto/pagination.js";
 import type * as lib_zepto_payment from "../lib/zepto/payment.js";
 import type * as lib_zepto_reconciliation from "../lib/zepto/reconciliation.js";
 import type * as lib_zepto_webhook from "../lib/zepto/webhook.js";
+import type * as lib_zepto_webhookEvents from "../lib/zepto/webhookEvents.js";
 import type * as migrations from "../migrations.js";
 import type * as moneyRequests from "../moneyRequests.js";
 import type * as payToAgreementCreation from "../payToAgreementCreation.js";
@@ -95,6 +96,7 @@ const fullApi: ApiFromModules<{
   "lib/zepto/payment": typeof lib_zepto_payment;
   "lib/zepto/reconciliation": typeof lib_zepto_reconciliation;
   "lib/zepto/webhook": typeof lib_zepto_webhook;
+  "lib/zepto/webhookEvents": typeof lib_zepto_webhookEvents;
   migrations: typeof migrations;
   moneyRequests: typeof moneyRequests;
   payToAgreementCreation: typeof payToAgreementCreation;

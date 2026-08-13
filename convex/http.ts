@@ -4,6 +4,7 @@ import { httpRouter } from 'convex/server'
 import { internal } from './_generated/api'
 import { env, httpAction } from './_generated/server'
 import { verifyZeptoWebhookSignature } from './lib/zepto/webhook'
+import { classifyZeptoWebhookEvent } from './lib/zepto/webhookEvents'
 import type { ZeptoWebhookItem } from './validators/zeptoWebhook'
 import type { ZeptoEnvironment } from './validators/payToAgreements'
 
@@ -89,6 +90,7 @@ type ZeptoWebhookDependencies = {
   applyDelivery: (args: {
     deliveryId: string
     environment: ZeptoEnvironment
+    payloadHash: string
     signatureTimestamp: number
     receivedAt: number
     items: ZeptoWebhookItem[]
@@ -166,6 +168,23 @@ function boundedString(value: unknown, maxLength: number) {
     : undefined
 }
 
+function safeIdentifier(value: unknown, maxLength: number) {
+  return typeof value === 'string' &&
+    value.length >= 1 &&
+    value.length <= maxLength &&
+    /^[A-Za-z0-9._~-]+$/.test(value)
+    ? value
+    : null
+}
+
+async function sha256Base64Url(value: ArrayBuffer) {
+  const digest = await crypto.subtle.digest('SHA-256', value)
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/, '')
+}
+
 function parseZeptoWebhookContext(value: Record<string, unknown>) {
   if (!isRecord(value.body)) return {}
 
@@ -200,22 +219,25 @@ function parseZeptoWebhookPayload(value: unknown): ZeptoWebhookItem[] | null {
     if (!isRecord(valueItem)) return null
     const { id, type, published_at, resource_uid, resource_type } = valueItem
     const publishedAt = parseRfc3339DateTime(published_at)
+    const providerEventId = safeIdentifier(id, 128)
+    const eventType = safeIdentifier(type, 128)
+    const resourceUid = safeIdentifier(resource_uid, 64)
+    const resourceType = safeIdentifier(resource_type, 64)
     if (
-      typeof id !== 'string' ||
-      id.length < 1 ||
-      typeof type !== 'string' ||
-      type.length < 1 ||
-      typeof resource_uid !== 'string' ||
-      !/^[A-Za-z0-9._~-]{1,64}$/.test(resource_uid) ||
-      resource_type !== 'payto_agreement' ||
+      providerEventId === null ||
+      eventType === null ||
+      resourceUid === null ||
+      resourceType === null ||
       publishedAt === null
     ) {
       return null
     }
     items.push({
-      providerEventId: id,
-      eventType: type,
-      resourceUid: resource_uid,
+      providerEventId,
+      eventType,
+      resourceUid,
+      resourceType,
+      classification: classifyZeptoWebhookEvent(resourceType, eventType),
       providerPublishedAt: publishedAt,
       ...parseZeptoWebhookContext(valueItem),
     })
@@ -230,10 +252,16 @@ export async function handleZeptoWebhook(
   if (!dependencies.environment) {
     return new Response('Zepto webhook is not configured', { status: 500 })
   }
-  const deliveryId = request.headers.get('split-request-id')?.trim()
+  const deliveryId = safeIdentifier(
+    request.headers.get('split-request-id')?.trim(),
+    128,
+  )
   const splitSignature = request.headers.get('split-signature')?.trim()
 
-  if (!deliveryId || !splitSignature) {
+  if (deliveryId === null || !splitSignature) {
+    console.error('Zepto webhook verification failed', {
+      reason: 'missing_headers',
+    })
     return new Response('Invalid Zepto webhook', { status: 400 })
   }
 
@@ -246,8 +274,10 @@ export async function handleZeptoWebhook(
       secret: dependencies.signingSecret ?? '',
       nowMs: dependencies.nowMs(),
     }))
-  } catch (error) {
-    console.error('Zepto webhook verification failed', error)
+  } catch {
+    console.error('Zepto webhook verification failed', {
+      reason: 'invalid_signature',
+    })
     return new Response('Invalid Zepto webhook', { status: 400 })
   }
 
@@ -267,6 +297,7 @@ export async function handleZeptoWebhook(
     await dependencies.applyDelivery({
       deliveryId,
       environment: dependencies.environment,
+      payloadHash: await sha256Base64Url(rawBody),
       signatureTimestamp,
       receivedAt: dependencies.nowMs(),
       items,

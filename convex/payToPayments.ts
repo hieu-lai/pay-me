@@ -465,6 +465,35 @@ export async function makePayToPaymentReconciliationDue(
   })
 }
 
+export async function observePayToPaymentWebhook(
+  ctx: MutationCtx,
+  args: {
+    payToPaymentId: Id<'payToPayments'>
+    deliveryId: string
+    providerEventId: string
+    eventType: string
+    providerPublishedAt: number
+    providerState?: ProviderPayToPaymentState
+    observedAt: number
+  },
+) {
+  const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
+  if (!payment) return false
+  await ctx.db.insert('payToPaymentEvidence', {
+    payToPaymentId: payment._id,
+    source: 'webhook',
+    intentFingerprint: payment.intent.fingerprint,
+    deliveryId: args.deliveryId,
+    providerEventId: args.providerEventId,
+    eventType: args.eventType,
+    providerPublishedAt: args.providerPublishedAt,
+    providerState: args.providerState,
+    observedAt: args.observedAt,
+  })
+  await makePayToPaymentReconciliationDue(ctx, payment._id, args.observedAt)
+  return true
+}
+
 function leaseAuthorizes(
   workItem: Doc<'payToPaymentWorkItems'>,
   leaseToken: string,

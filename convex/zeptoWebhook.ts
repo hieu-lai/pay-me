@@ -2,20 +2,12 @@ import { v } from 'convex/values'
 
 import type { Id } from './_generated/dataModel'
 import { internalMutation } from './_generated/server'
-import type { ProviderAgreementState } from './validators/payToAgreements'
+import {
+  agreementStateForWebhookEvent,
+  paymentStateForWebhookEvent,
+} from './lib/zepto/webhookEvents'
+import { observePayToPaymentWebhook } from './payToPayments'
 import { applyZeptoWebhookDeliveryValidator } from './validators/zeptoWebhook'
-
-const lifecycleStateByEventType: Partial<
-  Record<string, ProviderAgreementState>
-> = {
-  'payto_agreement.activated': 'active',
-  'payto_agreement.cancelled': 'cancelled',
-  'payto_agreement.declined': 'declined',
-  'payto_agreement.expired': 'expired',
-  'payto_agreement.failed': 'failed',
-  'payto_agreement.reactivated': 'active',
-  'payto_agreement.suspended': 'suspended',
-}
 
 const terminalLifecycleStates = new Set([
   'cancelled',
@@ -36,6 +28,8 @@ export const applyDelivery = internalMutation({
 
     await ctx.db.insert('zeptoWebhookDeliveries', {
       deliveryId: args.deliveryId,
+      environment: args.environment,
+      payloadHash: args.payloadHash,
       signatureTimestamp: args.signatureTimestamp,
       receivedAt: args.receivedAt,
     })
@@ -61,17 +55,49 @@ export const applyDelivery = internalMutation({
       })
       appliedItems += 1
 
-      const agreement = await ctx.db
-        .query('payToAgreements')
-        .withIndex('by_environment_and_providerUid', (q) =>
-          q
-            .eq('environment', args.environment)
-            .eq('providerUid', item.resourceUid),
-        )
-        .unique()
+      const payment =
+        item.resourceType === 'payto_payment'
+          ? await ctx.db
+              .query('payToPayments')
+              .withIndex('by_environment_and_providerUid', (q) =>
+                q
+                  .eq('environment', args.environment)
+                  .eq('providerUid', item.resourceUid),
+              )
+              .unique()
+          : null
+      if (payment) {
+        await observePayToPaymentWebhook(ctx, {
+          payToPaymentId: payment._id,
+          deliveryId: args.deliveryId,
+          providerEventId: item.providerEventId,
+          eventType: item.eventType,
+          providerPublishedAt: item.providerPublishedAt,
+          providerState:
+            item.classification === 'supported_payment'
+              ? paymentStateForWebhookEvent(item.eventType)
+              : undefined,
+          observedAt: args.receivedAt,
+        })
+      }
+
+      const agreement =
+        item.resourceType === 'payto_agreement'
+          ? await ctx.db
+              .query('payToAgreements')
+              .withIndex('by_environment_and_providerUid', (q) =>
+                q
+                  .eq('environment', args.environment)
+                  .eq('providerUid', item.resourceUid),
+              )
+              .unique()
+          : null
       if (!agreement) continue
 
-      const nextState = lifecycleStateByEventType[item.eventType]
+      const nextState =
+        item.classification === 'supported_agreement'
+          ? agreementStateForWebhookEvent(item.eventType)
+          : undefined
       const conflictsWithConfirmedTerminal =
         nextState !== undefined &&
         agreement.lifecycleConfidence === 'confirmed' &&

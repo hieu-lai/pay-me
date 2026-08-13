@@ -2,9 +2,10 @@
 
 import type { UserIdentity } from 'convex/server'
 import { convexTest } from 'convex-test'
-import { beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { api } from './_generated/api'
+import { handleZeptoWebhook } from './http'
 import schema from './schema'
 import type { ZeptoEnvironment } from './validators/payToAgreements'
 
@@ -136,6 +137,54 @@ async function setupAgreement(
   return { t, requester: t.withIdentity(requesterIdentity), ...ids }
 }
 
+async function setupPayment(providerUid = 'payment_webhook_1') {
+  const setup = await setupAgreement()
+  const payToPaymentId = await setup.t.run(async (ctx) => {
+    const agreement = await ctx.db.get(
+      'payToAgreements',
+      setup.payToAgreementId,
+    )
+    const moneyRequest = await ctx.db.get('moneyRequests', setup.moneyRequestId)
+    if (!agreement || !moneyRequest) throw new Error('Expected Payment setup')
+
+    const establishedAt = Date.now() - 60_000
+    const id = await ctx.db.insert('payToPayments', {
+      payToAgreementId: agreement._id,
+      moneyRequestId: moneyRequest._id,
+      payerUserId: agreement.payerUserId,
+      environment: agreement.environment,
+      providerUid,
+      intent: {
+        agreementProviderUid: agreement.providerUid,
+        amount: { cents: moneyRequest.amountCents, currency: 'AUD' },
+        routing: {
+          sourceCreditorPaymentDestinationId:
+            moneyRequest.sourceCreditorPaymentDestinationId,
+          sourceDebtorPaymentDestinationId:
+            agreement.sourceDebtorPaymentDestinationId,
+          creditorSnapshot: moneyRequest.creditorSnapshot,
+          debtorSnapshot: agreement.debtorSnapshot,
+        },
+        priority: 'unattended',
+        apiVersion: '20260101',
+        fingerprint: 'payment-webhook-intent-fingerprint',
+      },
+      creationState: 'provider_established',
+      establishedAt,
+      lifecycleState: 'pending',
+      lifecycleObservedAt: establishedAt,
+      lastReconciledAt: establishedAt,
+    })
+    await ctx.db.insert('payToPaymentReconciliationWorkItems', {
+      payToPaymentId: id,
+      state: 'queued',
+      availableAt: establishedAt + 60 * 60_000,
+    })
+    return id
+  })
+  return { ...setup, payToPaymentId, paymentProviderUid: providerUid }
+}
+
 async function durableWebhookState(
   t: Awaited<ReturnType<typeof setupAgreement>>['t'],
 ) {
@@ -154,7 +203,348 @@ beforeEach(() => {
   process.env.ZEPTO_WEBHOOK_SIGNING_SECRET = webhookSecret
 })
 
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 describe('POST /zepto/webhooks', () => {
+  test('durably observes mixed PayTo Agreement and PayTo Payment events and immediately reconciles both', async () => {
+    const { t, payToAgreementId, payToPaymentId, paymentProviderUid } =
+      await setupPayment()
+    const request = await signedDelivery('delivery-agreement-and-payment', {
+      data: [
+        {
+          id: 'event-agreement-suspended',
+          type: 'payto_agreement.suspended',
+          published_at: '2026-08-11T01:02:03.000Z',
+          resource_uid: 'agreement_webhook_1',
+          resource_type: 'payto_agreement',
+        },
+        {
+          id: 'event-payment-settled',
+          type: 'payto_payment.settled',
+          published_at: '2026-08-11T01:02:04.000Z',
+          resource_uid: paymentProviderUid,
+          resource_type: 'payto_payment',
+        },
+      ],
+    })
+
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...request })).status,
+    ).toBe(200)
+    const durable = await t.run(async (ctx) => ({
+      agreement: await ctx.db.get('payToAgreements', payToAgreementId),
+      payment: await ctx.db.get('payToPayments', payToPaymentId),
+      delivery: await ctx.db
+        .query('zeptoWebhookDeliveries')
+        .withIndex('by_deliveryId', (q) =>
+          q.eq('deliveryId', 'delivery-agreement-and-payment'),
+        )
+        .unique(),
+      events: await ctx.db.query('zeptoWebhookEvents').collect(),
+      paymentEvidence: await ctx.db.query('payToPaymentEvidence').collect(),
+      agreementWork: await ctx.db
+        .query('payToAgreementReconciliationWorkItems')
+        .unique(),
+      paymentWork: await ctx.db
+        .query('payToPaymentReconciliationWorkItems')
+        .unique(),
+    }))
+    expect(durable.delivery).toMatchObject({
+      deliveryId: 'delivery-agreement-and-payment',
+      payloadHash: expect.any(String),
+    })
+    expect(durable.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerEventId: 'event-agreement-suspended',
+          resourceType: 'payto_agreement',
+          classification: 'supported_agreement',
+        }),
+        expect.objectContaining({
+          providerEventId: 'event-payment-settled',
+          resourceType: 'payto_payment',
+          classification: 'supported_payment',
+        }),
+      ]),
+    )
+    expect(durable.agreement).toMatchObject({
+      lifecycleState: 'suspended',
+      lifecycleConfidence: 'provisional',
+    })
+    expect(durable.payment).toMatchObject({ lifecycleState: 'pending' })
+    expect(durable.paymentEvidence).toEqual([
+      expect.objectContaining({
+        source: 'webhook',
+        providerState: 'settled',
+      }),
+    ])
+    expect(durable.agreementWork).toMatchObject({
+      availableAt: expect.any(Number),
+      state: 'queued',
+    })
+    expect(durable.paymentWork).toMatchObject({
+      availableAt: expect.any(Number),
+      state: 'queued',
+    })
+    expect(durable.paymentWork?.availableAt).toBeLessThan(Date.now() + 60_000)
+    expect(durable.delivery).not.toHaveProperty('body')
+    expect(durable.delivery).not.toHaveProperty('rawBody')
+  })
+
+  test('classifies signed unsupported and unknown-UID events without semantic changes', async () => {
+    const { t, payToPaymentId, paymentProviderUid } = await setupPayment()
+    const request = await signedDelivery('delivery-unsupported-events', {
+      data: [
+        {
+          id: 'event-payment-future-state',
+          type: 'payto_payment.future_state',
+          published_at: '2026-08-11T01:02:04.000Z',
+          resource_uid: paymentProviderUid,
+          resource_type: 'payto_payment',
+          body: { detail: 'must not be retained' },
+        },
+        {
+          id: 'event-refund-unsupported',
+          type: 'payto_refund.failed',
+          published_at: '2026-08-11T01:02:05.000Z',
+          resource_uid: 'refund_unknown_1',
+          resource_type: 'payto_refund',
+        },
+        {
+          id: 'event-payment-unknown-uid',
+          type: 'payto_payment.pending',
+          published_at: '2026-08-11T01:02:06.000Z',
+          resource_uid: 'payment_unknown_1',
+          resource_type: 'payto_payment',
+        },
+      ],
+    })
+
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...request })).status,
+    ).toBe(200)
+    const durable = await t.run(async (ctx) => ({
+      payment: await ctx.db.get('payToPayments', payToPaymentId),
+      events: await ctx.db.query('zeptoWebhookEvents').collect(),
+      paymentEvidence: await ctx.db.query('payToPaymentEvidence').collect(),
+      paymentWork: await ctx.db
+        .query('payToPaymentReconciliationWorkItems')
+        .unique(),
+    }))
+    expect(durable.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerEventId: 'event-payment-future-state',
+          classification: 'unsupported_event',
+        }),
+        expect.objectContaining({
+          providerEventId: 'event-refund-unsupported',
+          classification: 'unsupported_resource',
+        }),
+        expect.objectContaining({
+          providerEventId: 'event-payment-unknown-uid',
+          classification: 'supported_payment',
+        }),
+      ]),
+    )
+    expect(durable.events[0]).not.toHaveProperty('body')
+    expect(durable.payment).toMatchObject({ lifecycleState: 'pending' })
+    expect(durable.paymentEvidence).toEqual([
+      expect.objectContaining({
+        providerEventId: 'event-payment-future-state',
+        source: 'webhook',
+      }),
+    ])
+    expect(durable.paymentEvidence[0]).not.toHaveProperty('providerState')
+    expect(durable.paymentWork?.availableAt).toBeLessThan(Date.now() + 60_000)
+  })
+
+  test('routes a PayTo Payment event by resource type even when its UID matches a PayTo Agreement UID', async () => {
+    const { t, payToPaymentId, paymentProviderUid } = await setupPayment(
+      'agreement_webhook_1',
+    )
+    const request = await signedDelivery('delivery-shared-resource-uid', {
+      data: {
+        id: 'event-shared-resource-uid',
+        type: 'payto_payment.pending',
+        published_at: '2026-08-11T01:02:04.000Z',
+        resource_uid: paymentProviderUid,
+        resource_type: 'payto_payment',
+      },
+    })
+
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...request })).status,
+    ).toBe(200)
+    const durable = await t.run(async (ctx) => ({
+      evidence: await ctx.db.query('payToPaymentEvidence').collect(),
+      agreementEvidence: await ctx.db.query('payToAgreementEvidence').collect(),
+      agreementWork: await ctx.db
+        .query('payToAgreementReconciliationWorkItems')
+        .collect(),
+      work: await ctx.db
+        .query('payToPaymentReconciliationWorkItems')
+        .withIndex('by_payToPaymentId', (q) =>
+          q.eq('payToPaymentId', payToPaymentId),
+        )
+        .unique(),
+    }))
+    expect(durable.evidence).toHaveLength(1)
+    expect(durable.agreementEvidence).toEqual([])
+    expect(durable.agreementWork).toEqual([])
+    expect(durable.work?.availableAt).toBeLessThan(Date.now() + 60_000)
+  })
+
+  test('atomically rejects a malformed PayTo Payment item', async () => {
+    const { t, paymentProviderUid } = await setupPayment()
+    const request = await signedDelivery('delivery-malformed-payment', {
+      data: [
+        {
+          id: 'event-payment-valid',
+          type: 'payto_payment.pending',
+          published_at: '2026-08-11T01:02:04.000Z',
+          resource_uid: paymentProviderUid,
+          resource_type: 'payto_payment',
+        },
+        {
+          id: 'event-payment-malformed',
+          type: 'payto_payment.failed',
+          resource_uid: paymentProviderUid,
+          resource_type: 'payto_payment',
+        },
+      ],
+    })
+
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...request })).status,
+    ).toBe(400)
+    const durable = await t.run(async (ctx) => ({
+      deliveries: await ctx.db.query('zeptoWebhookDeliveries').collect(),
+      events: await ctx.db.query('zeptoWebhookEvents').collect(),
+      evidence: await ctx.db.query('payToPaymentEvidence').collect(),
+    }))
+    expect(durable).toEqual({ deliveries: [], events: [], evidence: [] })
+  })
+
+  test('deduplicates replayed, reordered, and conflicting PayTo Payment events', async () => {
+    const { t, payToPaymentId, paymentProviderUid } = await setupPayment()
+    const settled = {
+      id: 'event-payment-replayed',
+      type: 'payto_payment.settled',
+      published_at: '2026-08-11T01:02:04.000Z',
+      resource_uid: paymentProviderUid,
+      resource_type: 'payto_payment',
+    }
+    const first = await signedDelivery('delivery-payment-first', {
+      data: [settled, settled],
+    })
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...first })).status,
+    ).toBe(200)
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...first })).status,
+    ).toBe(200)
+
+    const reordered = await signedDelivery('delivery-payment-reordered', {
+      data: [
+        settled,
+        {
+          ...settled,
+          id: 'event-payment-older-failed',
+          type: 'payto_payment.failed',
+          published_at: '2026-08-11T01:02:03.000Z',
+        },
+      ],
+    })
+    expect(
+      (await t.fetch('/zepto/webhooks', { method: 'POST', ...reordered }))
+        .status,
+    ).toBe(200)
+
+    const durable = await t.run(async (ctx) => ({
+      payment: await ctx.db.get('payToPayments', payToPaymentId),
+      deliveries: await ctx.db.query('zeptoWebhookDeliveries').collect(),
+      events: await ctx.db.query('zeptoWebhookEvents').collect(),
+      evidence: await ctx.db.query('payToPaymentEvidence').collect(),
+    }))
+    expect(durable.deliveries).toHaveLength(2)
+    expect(durable.events).toHaveLength(2)
+    expect(durable.evidence).toHaveLength(2)
+    expect(durable.payment).toMatchObject({ lifecycleState: 'pending' })
+  })
+
+  test('returns 500 when durable webhook intake fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const applyDelivery = vi.fn(async () => {
+      throw new Error('storage unavailable')
+    })
+    const signed = await signedDelivery('delivery-storage-failure', {
+      data: {
+        id: 'event-storage-failure',
+        type: 'payto_payment.pending',
+        published_at: '2026-08-11T01:02:04.000Z',
+        resource_uid: 'payment_storage_failure',
+        resource_type: 'payto_payment',
+      },
+    })
+    const response = await handleZeptoWebhook(
+      new Request('https://example.convex.site/zepto/webhooks', {
+        method: 'POST',
+        ...signed,
+      }),
+      {
+        signingSecret: webhookSecret,
+        environment: 'sandbox',
+        nowMs: Date.now,
+        applyDelivery,
+      },
+    )
+
+    expect(response.status).toBe(500)
+    expect(applyDelivery).toHaveBeenCalledOnce()
+    expect(applyDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryId: 'delivery-storage-failure',
+        payloadHash: expect.any(String),
+      }),
+    )
+  })
+
+  test('returns bounded security telemetry for invalid authentication', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const applyDelivery = vi.fn(async () => undefined)
+    const signed = await signedDelivery('delivery-invalid-auth', {
+      data: {
+        id: 'event-invalid-auth',
+        type: 'payto_payment.pending',
+        published_at: '2026-08-11T01:02:04.000Z',
+        resource_uid: 'payment_invalid_auth',
+        resource_type: 'payto_payment',
+      },
+    })
+    const response = await handleZeptoWebhook(
+      new Request('https://example.convex.site/zepto/webhooks', {
+        method: 'POST',
+        body: `${signed.body} `,
+        headers: signed.headers,
+      }),
+      {
+        signingSecret: webhookSecret,
+        environment: 'sandbox',
+        nowMs: Date.now,
+        applyDelivery,
+      },
+    )
+
+    expect(response.status).toBe(400)
+    expect(applyDelivery).not.toHaveBeenCalled()
+    expect(error).toHaveBeenCalledWith('Zepto webhook verification failed', {
+      reason: 'invalid_signature',
+    })
+  })
+
   test('accepts Zepto PayTo webhook deliveries with a single data object', async () => {
     const providerUid = '019ff0c0-b888-7c66-af96-63972ad43d51'
     const { t, payToAgreementId } = await setupAgreement(providerUid)

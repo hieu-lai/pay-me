@@ -130,6 +130,10 @@ export const payToPaymentEvidenceValidator = v.object({
   operationId: v.optional(v.string()),
   classification: v.optional(payToPaymentOperationClassificationValidator),
   providerState: v.optional(v.string()),
+  deliveryId: v.optional(v.string()),
+  providerEventId: v.optional(v.string()),
+  eventType: v.optional(v.string()),
+  providerPublishedAt: v.optional(v.number()),
   providerCreatedAt: v.optional(v.number()),
   errorCategory: v.optional(payToPaymentCreateErrorCategoryValidator),
   outcome: v.optional(
