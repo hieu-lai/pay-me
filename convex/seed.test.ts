@@ -18,6 +18,57 @@ beforeEach(() => {
   process.env.PAYMENT_DESTINATION_FINGERPRINT_KEY = fingerprintKey
 })
 
+test('seeds one capped sandbox PayTo Payment runtime gate and is safe to rerun', async () => {
+  const t = convexTest(schema, modules)
+
+  await expect(
+    t.mutation(internal.seed.payToPaymentRuntimeGate, {}),
+  ).resolves.toMatchObject({
+    inserted: true,
+    activatedAt: expect.any(Number),
+    dailyPaymentCountCap: 1,
+    dailyPaymentValueCapCents: 10_000,
+  })
+  const gate = await t.run(async (ctx) =>
+    ctx.db
+      .query('payToPaymentRuntimeGates')
+      .withIndex('by_environment', (q) => q.eq('environment', 'sandbox'))
+      .unique(),
+  )
+  if (!gate) throw new Error('Expected sandbox PayTo Payment runtime gate')
+  await t.run((ctx) =>
+    ctx.db.patch('payToPaymentRuntimeGates', gate._id, {
+      budgetDate: '2026-08-13',
+      reservedPaymentCount: 1,
+      reservedPaymentValueCents: 5_000,
+    }),
+  )
+
+  await expect(
+    t.mutation(internal.seed.payToPaymentRuntimeGate, {}),
+  ).resolves.toMatchObject({
+    inserted: false,
+    activatedAt: expect.any(Number),
+    dailyPaymentCountCap: 1,
+    dailyPaymentValueCapCents: 10_000,
+  })
+
+  const gates = await t.run(async (ctx) =>
+    ctx.db.query('payToPaymentRuntimeGates').take(2),
+  )
+  expect(gates).toHaveLength(1)
+  expect(gates[0]).toMatchObject({
+    environment: 'sandbox',
+    mode: 'enabled_for_new_confirmations',
+    activatedAt: expect.any(Number),
+    dailyPaymentCountCap: 1,
+    dailyPaymentValueCapCents: 10_000,
+    budgetDate: '2026-08-13',
+    reservedPaymentCount: 1,
+    reservedPaymentValueCents: 5_000,
+  })
+})
+
 test('seeds exactly ten users and is safe to rerun', async () => {
   const t = convexTest(schema, modules)
 

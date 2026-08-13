@@ -69,6 +69,49 @@ const mockUsers = [
   },
 ] as const
 
+const manualPaymentTestDailyCountCap = 1
+const manualPaymentTestDailyValueCapCents = 10_000
+
+/** Enable one sandbox PayTo Payment of up to $100 per UTC day for manual testing. */
+export const payToPaymentRuntimeGate = internalMutation({
+  args: {},
+  returns: v.object({
+    inserted: v.boolean(),
+    activatedAt: v.number(),
+    dailyPaymentCountCap: v.number(),
+    dailyPaymentValueCapCents: v.number(),
+  }),
+  handler: async (ctx) => {
+    const activatedAt = Date.now()
+    const gate = await ctx.db
+      .query('payToPaymentRuntimeGates')
+      .withIndex('by_environment', (q) => q.eq('environment', 'sandbox'))
+      .unique()
+    const configuration = {
+      mode: 'enabled_for_new_confirmations' as const,
+      activatedAt,
+      dailyPaymentCountCap: manualPaymentTestDailyCountCap,
+      dailyPaymentValueCapCents: manualPaymentTestDailyValueCapCents,
+    }
+
+    if (gate) {
+      await ctx.db.patch('payToPaymentRuntimeGates', gate._id, configuration)
+    } else {
+      await ctx.db.insert('payToPaymentRuntimeGates', {
+        environment: 'sandbox',
+        ...configuration,
+      })
+    }
+
+    return {
+      inserted: gate === null,
+      activatedAt,
+      dailyPaymentCountCap: manualPaymentTestDailyCountCap,
+      dailyPaymentValueCapCents: manualPaymentTestDailyValueCapCents,
+    }
+  },
+})
+
 /** Add or refresh the ten fictional users used for local development. */
 export const users = internalMutation({
   args: {},
