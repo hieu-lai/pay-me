@@ -28,6 +28,7 @@ import {
   payToPaymentGateModeValidator,
   payToPaymentIntentValidator,
   payToPaymentOperationValidator,
+  providerPayToPaymentStateValidator,
 } from './validators/payToPayments'
 
 const agreementEvidenceBaseValidator = v.object({
@@ -351,7 +352,17 @@ export default defineSchema({
     intent: payToPaymentIntentValidator,
     creationState: payToPaymentCreationStateValidator,
     establishedAt: v.number(),
+    provisionalLifecycleState: v.optional(providerPayToPaymentStateValidator),
+    lifecycleState: v.optional(providerPayToPaymentStateValidator),
+    lifecycleObservedAt: v.optional(v.number()),
+    lastReconciledAt: v.optional(v.number()),
     attention: v.optional(payToPaymentAttentionValidator),
+    reconciliationAlert: v.optional(
+      v.object({
+        kind: v.literal('lifecycle_tracking_outage'),
+        observedAt: v.number(),
+      }),
+    ),
   })
     .index('by_payToAgreementId', ['payToAgreementId'])
     .index('by_moneyRequestId', ['moneyRequestId'])
@@ -381,6 +392,26 @@ export default defineSchema({
     operationId: v.optional(v.string()),
     completedAt: v.optional(v.number()),
   }).index('by_payToPaymentId', ['payToPaymentId']),
+
+  payToPaymentReconciliationWorkItems: defineTable({
+    payToPaymentId: v.id('payToPayments'),
+    state: v.union(
+      v.literal('queued'),
+      v.literal('running'),
+      v.literal('stopped'),
+    ),
+    availableAt: v.number(),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    operationId: v.optional(v.string()),
+    refreshRequestedAt: v.optional(v.number()),
+    consecutiveFailures: v.optional(v.number()),
+    failureStartedAt: v.optional(v.number()),
+    lastSuccessAt: v.optional(v.number()),
+  })
+    .index('by_payToPaymentId', ['payToPaymentId'])
+    .index('by_state_and_availableAt', ['state', 'availableAt'])
+    .index('by_state_and_leaseExpiresAt', ['state', 'leaseExpiresAt']),
 
   payToPaymentEvidence: defineTable(payToPaymentEvidenceValidator).index(
     'by_payToPaymentId_and_observedAt',

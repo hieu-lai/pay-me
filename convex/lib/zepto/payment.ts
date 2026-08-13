@@ -13,7 +13,7 @@ const paymentResponseValidator = z
     uid: z.string(),
     agreement_uid: z.string(),
     source_payto_refund_uid: z.string().nullable(),
-    state: z.enum(providerPayToPaymentStates),
+    state: z.string().min(1).max(100),
     reference: z.string().nullable(),
     description: z.string().nullable(),
     priority: z.enum(['unattended', 'attended']),
@@ -61,6 +61,8 @@ export type CreatedPayment = {
   state: ProviderPayToPaymentState
   createdAt: string
 }
+
+const knownProviderStates = new Set<string>(providerPayToPaymentStates)
 
 function invalidRequest(): never {
   throw new ZeptoClientError({
@@ -130,6 +132,7 @@ export async function createPayment(
     payment.agreement_uid !== input.agreementProviderUid ||
     payment.priority !== input.priority ||
     payment.amount !== input.amountCents ||
+    !knownProviderStates.has(payment.state) ||
     Number.isNaN(Date.parse(payment.created_at))
   ) {
     invalidResponse()
@@ -138,7 +141,39 @@ export async function createPayment(
   return {
     providerUid: payment.uid,
     agreementProviderUid: payment.agreement_uid,
-    state: payment.state,
+    state: payment.state as ProviderPayToPaymentState,
     createdAt: payment.created_at,
   }
+}
+
+export async function getPaymentLifecycleByUid(
+  client: ZeptoClient,
+  input: CreatePaymentInput,
+): Promise<{ providerState: string }> {
+  if (
+    !input.providerUid ||
+    input.providerUid.length > 64 ||
+    !unreservedUid.test(input.providerUid)
+  ) {
+    invalidRequest()
+  }
+  const { data } = await client.payTo.GET('/payto/payments/{payment_uid}', {
+    params: { path: { payment_uid: input.providerUid } },
+  })
+  let payment: z.infer<typeof paymentResponseValidator>
+  try {
+    payment = paymentResponseValidator.parse(data?.data)
+  } catch {
+    invalidResponse()
+  }
+  if (
+    payment.uid !== input.providerUid ||
+    payment.agreement_uid !== input.agreementProviderUid ||
+    payment.amount !== input.amountCents ||
+    payment.priority !== input.priority ||
+    Number.isNaN(Date.parse(payment.created_at))
+  ) {
+    invalidResponse()
+  }
+  return { providerState: payment.state }
 }

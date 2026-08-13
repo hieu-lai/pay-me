@@ -37,13 +37,6 @@ export const payToPaymentIntentValidator = v.object({
   fingerprint: v.string(),
 })
 
-export const payToPaymentAttentionValidator = v.object({
-  kind: v.literal('intent_fingerprint_mismatch'),
-  expectedFingerprint: v.string(),
-  observedFingerprint: v.string(),
-  observedAt: v.number(),
-})
-
 export const payToPaymentOperationKindValidator = literals(
   'create',
   'retry',
@@ -70,6 +63,24 @@ export const providerPayToPaymentStateValidator = literals(
 export type ProviderPayToPaymentState = Infer<
   typeof providerPayToPaymentStateValidator
 >
+
+export const payToPaymentAttentionValidator = v.union(
+  v.object({
+    kind: v.literal('intent_fingerprint_mismatch'),
+    expectedFingerprint: v.string(),
+    observedFingerprint: v.string(),
+    observedAt: v.number(),
+  }),
+  v.object({
+    kind: v.literal('unknown_provider_state'),
+    observedAt: v.number(),
+  }),
+  v.object({
+    kind: v.literal('settlement_contradiction'),
+    observedState: providerPayToPaymentStateValidator,
+    observedAt: v.number(),
+  }),
+)
 
 export const payToPaymentCreateErrorCategories = [
   'aborted',
@@ -118,8 +129,12 @@ export const payToPaymentEvidenceValidator = v.object({
   intentFingerprint: v.string(),
   operationId: v.optional(v.string()),
   classification: v.optional(payToPaymentOperationClassificationValidator),
-  providerState: v.optional(providerPayToPaymentStateValidator),
+  providerState: v.optional(v.string()),
   providerCreatedAt: v.optional(v.number()),
   errorCategory: v.optional(payToPaymentCreateErrorCategoryValidator),
+  outcome: v.optional(
+    literals('confirmed', 'unknown', 'contradiction', 'failure'),
+  ),
+  consecutiveFailures: v.optional(v.number()),
   observedAt: v.number(),
 })

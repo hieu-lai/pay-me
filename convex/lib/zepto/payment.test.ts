@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 
 import { createZeptoClient } from './client'
-import { createPayment } from './payment'
+import { createPayment, getPaymentLifecycleByUid } from './payment'
 
 function paymentResponse(
   overrides: Partial<{
@@ -158,4 +158,53 @@ describe('Zepto PayTo Payment creation', () => {
       expect(fetch).not.toHaveBeenCalled()
     },
   )
+})
+
+describe('Zepto PayTo Payment reconciliation', () => {
+  test('validates a same-UID GET while preserving an unknown lifecycle value', async () => {
+    const requests: Request[] = []
+    const client = createZeptoClient({
+      environment: 'sandbox',
+      accessToken: 'sandbox-token',
+      fetch: async (request) => {
+        requests.push(request.clone())
+        return paymentResponse({ state: 'provider_added_a_state' }, 200)
+      },
+      maxRetries: 0,
+    })
+
+    await expect(
+      getPaymentLifecycleByUid(client, {
+        providerUid: 'payment_36',
+        agreementProviderUid: 'agreement_36',
+        amountCents: 12_500,
+        priority: 'unattended',
+      }),
+    ).resolves.toEqual({ providerState: 'provider_added_a_state' })
+    expect(requests).toHaveLength(1)
+    expect(new URL(requests[0].url).pathname).toBe('/payto/payments/payment_36')
+    expect(requests[0]?.headers.get('Zepto-API-Version')).toBe('20260101')
+  })
+
+  test.each([
+    [{ uid: 'another_payment' }, 'another Payment UID'],
+    [{ agreement_uid: 'another_agreement' }, 'another Agreement UID'],
+    [{ amount: 99_999 }, 'another amount'],
+  ] as const)('rejects a GET response for %s', async (override, _case) => {
+    const client = createZeptoClient({
+      environment: 'sandbox',
+      accessToken: 'sandbox-token',
+      fetch: async () => paymentResponse(override, 200),
+      maxRetries: 0,
+    })
+
+    await expect(
+      getPaymentLifecycleByUid(client, {
+        providerUid: 'payment_36',
+        agreementProviderUid: 'agreement_36',
+        amountCents: 12_500,
+        priority: 'unattended',
+      }),
+    ).rejects.toMatchObject({ kind: 'invalid_response' })
+  })
 })

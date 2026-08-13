@@ -112,6 +112,69 @@ async function setupAgreement() {
   return { t, ...ids }
 }
 
+async function addSecondAgreement(
+  setup: Awaited<ReturnType<typeof setupAgreement>>,
+) {
+  return await setup.t.run(async (ctx) => {
+    const payerUserId = await ctx.db.insert('users', {
+      tokenIdentifier: 'https://clerk.example.test|payment_payer_two',
+      clerkUserId: 'payment_payer_two',
+      email: 'payment-payer-two@example.test',
+      name: 'Payment Payer Two',
+    })
+    const debtorDestinationId = await ctx.db.insert('paymentDestinations', {
+      ownerUserId: payerUserId,
+      type: 'bban',
+      searchLabel: 'payer two',
+      maskedDisplay: '111222••••444',
+      fingerprint: 'payment-payer-two-destination',
+      ciphertext: 'payer-two-ciphertext',
+      nonce: 'payer-two-nonce',
+      keyVersion: 'v1',
+    })
+    await ctx.db.patch('moneyRequests', setup.moneyRequestId, {
+      payerCount: 2,
+      paymentCounts: {
+        not_started: 2,
+        initiating: 0,
+        processing: 0,
+        under_investigation: 0,
+        failed: 0,
+        paid: 0,
+      },
+    })
+    return await ctx.db.insert('payToAgreements', {
+      moneyRequestId: setup.moneyRequestId,
+      payerUserId,
+      payerNameSnapshot: 'Payment Payer Two',
+      sourceDebtorPaymentDestinationId: debtorDestinationId,
+      debtorSnapshot: {
+        kind: 'bban',
+        maskedDisplay: '111222••••444',
+        ciphertext: 'payer-two-ciphertext',
+        nonce: 'payer-two-nonce',
+        keyVersion: 'v1',
+      },
+      provider: 'zepto',
+      environment: 'sandbox',
+      apiVersion: '20260101',
+      providerUid: 'agreement_payment_37_two',
+      activationProvenancePolicy: 'track_first_confirmation',
+      firstConfirmedActiveAt: 3_000,
+      paymentStatus: 'not_started',
+      paymentVerificationPending: false,
+      paymentAttentionRequired: false,
+      creationState: 'created',
+      creationUpdatedAt: 2_000,
+      lifecycleState: 'active',
+      lifecycleConfidence: 'confirmed',
+      lifecycleObservedAt: 3_000,
+      trackingState: 'current',
+      trackingUpdatedAt: 3_000,
+    })
+  })
+}
+
 async function establishPayment() {
   const setup = await setupAgreement()
   await setup.t.run(async (ctx) => {
@@ -127,6 +190,61 @@ async function establishPayment() {
   })
   if (result.kind !== 'created') throw new Error('Expected Payment intent')
   return { ...setup, payToPaymentId: result.payToPaymentId }
+}
+
+async function establishProviderPayment() {
+  const setup = await establishPayment()
+  const claimed = await setup.t.mutation(
+    internal.payToPayments.claimCreateWork,
+    {
+      payToPaymentId: setup.payToPaymentId,
+      leaseToken: 'provider-establishment-worker',
+      nowMs: 4_000,
+    },
+  )
+  if (!claimed) throw new Error('Expected claimed create work')
+  await setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+    payToPaymentId: setup.payToPaymentId,
+    operationId: claimed.operationId,
+    leaseToken: 'provider-establishment-worker',
+    observedAt: 4_001,
+  })
+  await setup.t.mutation(internal.payToPayments.recordCreateResult, {
+    payToPaymentId: setup.payToPaymentId,
+    operationId: claimed.operationId,
+    leaseToken: 'provider-establishment-worker',
+    providerState: 'pending',
+    providerCreatedAt: 3_500,
+    observedAt: 4_002,
+  })
+  return setup
+}
+
+async function establishExistingProviderPayment(
+  t: Awaited<ReturnType<typeof setupAgreement>>['t'],
+  payToPaymentId: Id<'payToPayments'>,
+  leaseToken: string,
+) {
+  const claimed = await t.mutation(internal.payToPayments.claimCreateWork, {
+    payToPaymentId,
+    leaseToken,
+    nowMs: 4_000,
+  })
+  if (!claimed) throw new Error('Expected claimed create work')
+  await t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+    payToPaymentId,
+    operationId: claimed.operationId,
+    leaseToken,
+    observedAt: 4_001,
+  })
+  await t.mutation(internal.payToPayments.recordCreateResult, {
+    payToPaymentId,
+    operationId: claimed.operationId,
+    leaseToken,
+    providerState: 'pending',
+    providerCreatedAt: 3_500,
+    observedAt: 4_002,
+  })
 }
 
 function createdPaymentResponseBody(
@@ -1056,4 +1174,806 @@ describe('PayTo Payment create operation', () => {
       })
     },
   )
+})
+
+describe('PayTo Payment authoritative lifecycle reconciliation', () => {
+  test('recovers an ambiguous create outcome through authoritative same-UID GET', async () => {
+    const setup = await establishPayment()
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const createWork = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'ambiguous-create-worker',
+        nowMs: 4_000,
+      },
+    )
+    if (!createWork) throw new Error('Expected create work')
+    await setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: createWork.operationId,
+      leaseToken: 'ambiguous-create-worker',
+      observedAt: 4_001,
+    })
+    await setup.t.mutation(internal.payToPayments.recordCreateFailure, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: createWork.operationId,
+      leaseToken: 'ambiguous-create-worker',
+      errorCategory: 'timeout',
+      observedAt: 4_002,
+    })
+    const getWork = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'ambiguity-get-worker',
+        nowMs: 4_002,
+      },
+    )
+    if (!getWork) throw new Error('Expected ambiguity GET work')
+    await setup.t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId: setup.payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'pending',
+        operationId: getWork.operationId,
+        leaseToken: 'ambiguity-get-worker',
+      },
+      observedAt: 4_003,
+    })
+
+    await expect(
+      paymentState(setup.t, setup.payToAgreementId),
+    ).resolves.toMatchObject({
+      agreement: {
+        paymentStatus: 'processing',
+        paymentVerificationPending: false,
+      },
+      payments: [
+        {
+          providerUid: payment.providerUid,
+          creationState: 'provider_established',
+          lifecycleState: 'pending',
+        },
+      ],
+    })
+  })
+
+  test('keeps create-response lifecycle provisional while mapping safe Payer state', async () => {
+    const setup = await establishPayment()
+    const claimed = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'investigation-create-worker',
+        nowMs: 4_000,
+      },
+    )
+    if (!claimed) throw new Error('Expected claimed create work')
+    await setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: claimed.operationId,
+      leaseToken: 'investigation-create-worker',
+      observedAt: 4_001,
+    })
+    await setup.t.mutation(internal.payToPayments.recordCreateResult, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: claimed.operationId,
+      leaseToken: 'investigation-create-worker',
+      providerState: 'under_investigation',
+      providerCreatedAt: 3_500,
+      observedAt: 4_002,
+    })
+
+    await expect(
+      paymentState(setup.t, setup.payToAgreementId),
+    ).resolves.toMatchObject({
+      agreement: {
+        paymentStatus: 'under_investigation',
+        paymentVerificationPending: true,
+      },
+      moneyRequest: {
+        paymentCounts: { processing: 0, under_investigation: 1 },
+        paymentVerificationPendingPayerCount: 1,
+      },
+      payments: [
+        {
+          provisionalLifecycleState: 'under_investigation',
+        },
+      ],
+    })
+  })
+
+  test('projects paid only when a per-UID GET confirms settlement', async () => {
+    const { t, payToAgreementId, payToPaymentId } =
+      await establishProviderPayment()
+    const payment = await t.run((ctx) =>
+      ctx.db.get('payToPayments', payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+
+    const work = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'settlement-get-worker',
+        nowMs: 4_002,
+      },
+    )
+    expect(work).toMatchObject({
+      operationId: expect.any(String),
+      providerUid: payment.providerUid,
+      environment: 'sandbox',
+    })
+    if (!work) throw new Error('Expected GET reconciliation work')
+
+    await expect(
+      t.mutation(internal.payToPayments.applyEvidence, {
+        payToPaymentId,
+        evidence: {
+          source: 'per_uid_get',
+          intentFingerprint: payment.intent.fingerprint,
+          providerState: 'settled',
+          operationId: work.operationId,
+          leaseToken: 'settlement-get-worker',
+        },
+        observedAt: 4_003,
+      }),
+    ).resolves.toEqual({ kind: 'accepted' })
+
+    await expect(paymentState(t, payToAgreementId)).resolves.toMatchObject({
+      agreement: {
+        paymentStatus: 'paid',
+        paymentVerificationPending: false,
+        paymentAttentionRequired: false,
+      },
+      moneyRequest: {
+        paymentStatus: 'paid',
+        paymentCounts: { processing: 0, paid: 1 },
+        paymentVerificationPendingPayerCount: 0,
+        paymentAttentionRequiredPayerCount: 0,
+      },
+      payments: [
+        {
+          lifecycleState: 'settled',
+          lifecycleObservedAt: 4_003,
+        },
+      ],
+    })
+    await expect(
+      t.run(async (ctx) =>
+        ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .unique(),
+      ),
+    ).resolves.toMatchObject({ state: 'stopped' })
+  })
+
+  test('settles from scheduled GET even when no webhook is delivered', async () => {
+    process.env.ZEPTO_ENVIRONMENT = 'sandbox'
+    process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-test-token'
+    const requests: Request[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      const copy = new Request(request)
+      requests.push(copy.clone())
+      return new Response(
+        JSON.stringify({
+          data: createdPaymentResponseBody(
+            {
+              uid: new URL(copy.url).pathname.split('/').at(-1) ?? '',
+              agreement_uid: 'agreement_payment_35',
+            },
+            { state: 'settled' },
+          ),
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    })
+    const { t, payToAgreementId, payToPaymentId } =
+      await establishProviderPayment()
+
+    await t.action(internal.payToPaymentReconciliation.reconcile, {
+      payToPaymentId,
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.method).toBe('GET')
+    await expect(paymentState(t, payToAgreementId)).resolves.toMatchObject({
+      agreement: { paymentStatus: 'paid' },
+      moneyRequest: { paymentStatus: 'paid' },
+      payments: [{ lifecycleState: 'settled' }],
+    })
+  })
+
+  test('preserves the last confirmed lifecycle when GET returns an unknown state', async () => {
+    const { t, payToAgreementId, payToPaymentId } =
+      await establishProviderPayment()
+    const payment = await t.run((ctx) =>
+      ctx.db.get('payToPayments', payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const firstWork = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'pending-get-worker',
+        nowMs: 4_002,
+      },
+    )
+    if (!firstWork) throw new Error('Expected initial GET work')
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'pending',
+        operationId: firstWork.operationId,
+        leaseToken: 'pending-get-worker',
+      },
+      observedAt: 4_003,
+    })
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'webhook',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'provider_added_a_state',
+      },
+      observedAt: 5_000,
+    })
+    const unknownWork = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'unknown-get-worker',
+        nowMs: 5_000,
+      },
+    )
+    if (!unknownWork) throw new Error('Expected immediate GET work')
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'provider_added_a_state',
+        operationId: unknownWork.operationId,
+        leaseToken: 'unknown-get-worker',
+      },
+      observedAt: 5_001,
+    })
+
+    await expect(paymentState(t, payToAgreementId)).resolves.toMatchObject({
+      agreement: {
+        paymentStatus: 'processing',
+        paymentVerificationPending: true,
+        paymentAttentionRequired: true,
+      },
+      moneyRequest: {
+        paymentCounts: { processing: 1, paid: 0 },
+        paymentVerificationPendingPayerCount: 1,
+        paymentAttentionRequiredPayerCount: 1,
+      },
+      payments: [
+        {
+          lifecycleState: 'pending',
+          lifecycleObservedAt: 4_003,
+          lastReconciledAt: 5_001,
+          attention: { kind: 'unknown_provider_state' },
+        },
+      ],
+    })
+  })
+
+  test('runs an immediate follow-up when evidence arrives during a GET lease', async () => {
+    const { t, payToPaymentId } = await establishProviderPayment()
+    const payment = await t.run((ctx) =>
+      ctx.db.get('payToPayments', payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const work = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'in-flight-get-worker',
+        nowMs: 4_002,
+      },
+    )
+    if (!work) throw new Error('Expected in-flight GET work')
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'webhook',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'under_investigation',
+      },
+      observedAt: 4_003,
+    })
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'pending',
+        operationId: work.operationId,
+        leaseToken: 'in-flight-get-worker',
+      },
+      observedAt: 4_004,
+    })
+
+    await expect(
+      t.run(async (ctx) =>
+        ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .unique(),
+      ),
+    ).resolves.toMatchObject({ state: 'queued', availableAt: 4_004 })
+  })
+
+  test('retains paid counts and raises critical attention after a settlement contradiction', async () => {
+    const { t, payToAgreementId, payToPaymentId } =
+      await establishProviderPayment()
+    const payment = await t.run((ctx) =>
+      ctx.db.get('payToPayments', payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const settlementWork = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'first-settlement-worker',
+        nowMs: 4_002,
+      },
+    )
+    if (!settlementWork) throw new Error('Expected settlement GET work')
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'settled',
+        operationId: settlementWork.operationId,
+        leaseToken: 'first-settlement-worker',
+      },
+      observedAt: 4_003,
+    })
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'webhook',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'failed',
+      },
+      observedAt: 5_000,
+    })
+    const contradictionWork = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'contradiction-get-worker',
+        nowMs: 5_000,
+      },
+    )
+    if (!contradictionWork) throw new Error('Expected contradiction GET work')
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'failed',
+        operationId: contradictionWork.operationId,
+        leaseToken: 'contradiction-get-worker',
+      },
+      observedAt: 5_001,
+    })
+
+    await expect(paymentState(t, payToAgreementId)).resolves.toMatchObject({
+      agreement: {
+        paymentStatus: 'paid',
+        paymentVerificationPending: true,
+        paymentAttentionRequired: true,
+      },
+      moneyRequest: {
+        paymentStatus: 'paid',
+        paymentCounts: { failed: 0, paid: 1 },
+        paymentAttentionRequiredPayerCount: 1,
+      },
+      payments: [
+        {
+          lifecycleState: 'settled',
+          lifecycleObservedAt: 4_003,
+          attention: {
+            kind: 'settlement_contradiction',
+            observedState: 'failed',
+            observedAt: 5_001,
+          },
+        },
+      ],
+    })
+    await expect(
+      t.run(async (ctx) =>
+        ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .unique(),
+      ),
+    ).resolves.toMatchObject({ state: 'queued', availableAt: 5_001 })
+  })
+
+  test('preserves confirmed truth through a GET outage and clears the alert on recovery', async () => {
+    const { t, payToAgreementId, payToPaymentId } =
+      await establishProviderPayment()
+    const payment = await t.run((ctx) =>
+      ctx.db.get('payToPayments', payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const initialWork = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'initial-confirmation-worker',
+        nowMs: 4_002,
+      },
+    )
+    if (!initialWork) throw new Error('Expected initial GET work')
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'pending',
+        operationId: initialWork.operationId,
+        leaseToken: 'initial-confirmation-worker',
+      },
+      observedAt: 4_003,
+    })
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'webhook',
+        intentFingerprint: payment.intent.fingerprint,
+      },
+      observedAt: 5_000,
+    })
+
+    for (let failure = 1; failure <= 6; failure += 1) {
+      const work = await t.run(async (ctx) =>
+        ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .unique(),
+      )
+      if (!work) throw new Error('Expected reconciliation work')
+      const leaseToken = `outage-worker-${failure}`
+      const claimed = await t.mutation(
+        internal.payToPaymentReconciliation.claimWork,
+        {
+          payToPaymentId,
+          leaseToken,
+          nowMs: work.availableAt,
+        },
+      )
+      if (!claimed) throw new Error('Expected claimed outage GET')
+      await expect(
+        t.mutation(internal.payToPaymentReconciliation.recordFailure, {
+          payToPaymentId,
+          operationId: claimed.operationId,
+          leaseToken,
+          category: 'network',
+          observedAt: work.availableAt + 1,
+        }),
+      ).resolves.toBe(true)
+    }
+
+    await expect(paymentState(t, payToAgreementId)).resolves.toMatchObject({
+      agreement: {
+        paymentStatus: 'processing',
+        paymentVerificationPending: false,
+        paymentAttentionRequired: false,
+      },
+      moneyRequest: {
+        paymentCounts: { processing: 1 },
+        paymentAttentionRequiredPayerCount: 0,
+      },
+      payments: [
+        {
+          lifecycleState: 'pending',
+          lifecycleObservedAt: 4_003,
+          reconciliationAlert: { kind: 'lifecycle_tracking_outage' },
+        },
+      ],
+    })
+
+    const recoveryWork = await t.run(async (ctx) =>
+      ctx.db
+        .query('payToPaymentReconciliationWorkItems')
+        .withIndex('by_payToPaymentId', (q) =>
+          q.eq('payToPaymentId', payToPaymentId),
+        )
+        .unique(),
+    )
+    if (!recoveryWork) throw new Error('Expected recovery work')
+    const recovery = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'recovery-worker',
+        nowMs: recoveryWork.availableAt,
+      },
+    )
+    if (!recovery) throw new Error('Expected recovery GET')
+    await t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'pending',
+        operationId: recovery.operationId,
+        leaseToken: 'recovery-worker',
+      },
+      observedAt: recoveryWork.availableAt + 1,
+    })
+    const recovered = await paymentState(t, payToAgreementId)
+    expect(recovered.payments[0]).not.toHaveProperty('reconciliationAlert')
+  })
+
+  test('alerts after 24 hours without any successful GET reconciliation', async () => {
+    const { t, payToPaymentId } = await establishProviderPayment()
+    const dayLater = 3_000 + 24 * 60 * 60_000
+    const work = await t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId,
+        leaseToken: 'aged-outage-worker',
+        nowMs: dayLater,
+      },
+    )
+    if (!work) throw new Error('Expected aged GET work')
+    await t.mutation(internal.payToPaymentReconciliation.recordFailure, {
+      payToPaymentId,
+      operationId: work.operationId,
+      leaseToken: 'aged-outage-worker',
+      category: 'network',
+      observedAt: dayLater,
+    })
+
+    await expect(
+      t.run((ctx) => ctx.db.get('payToPayments', payToPaymentId)),
+    ).resolves.toMatchObject({
+      reconciliationAlert: {
+        kind: 'lifecycle_tracking_outage',
+        observedAt: dayLater,
+      },
+    })
+  })
+
+  test('counts expired GET leases toward the outage threshold', async () => {
+    const { t, payToPaymentId } = await establishProviderPayment()
+    let nowMs = 4_002
+    for (let crash = 1; crash <= 6; crash += 1) {
+      const claimed = await t.mutation(
+        internal.payToPaymentReconciliation.claimWork,
+        {
+          payToPaymentId,
+          leaseToken: `crashed-get-worker-${crash}`,
+          nowMs,
+        },
+      )
+      if (!claimed) throw new Error('Expected crash-prone GET work')
+      nowMs += 3 * 60_000 + 1
+    }
+    await t.mutation(internal.payToPaymentReconciliation.claimWork, {
+      payToPaymentId,
+      leaseToken: 'post-threshold-get-worker',
+      nowMs,
+    })
+
+    await expect(
+      t.run((ctx) => ctx.db.get('payToPayments', payToPaymentId)),
+    ).resolves.toMatchObject({
+      reconciliationAlert: {
+        kind: 'lifecycle_tracking_outage',
+        observedAt: nowMs,
+      },
+    })
+  })
+
+  test.each([
+    ['created', 'processing'],
+    ['submitting', 'processing'],
+    ['pending', 'processing'],
+    ['under_investigation', 'under_investigation'],
+    ['failed', 'failed'],
+    ['settled', 'paid'],
+  ] as const)(
+    'persists GET-confirmed %s through the Payment module boundary',
+    async (providerState, paymentStatus) => {
+      const { t, payToAgreementId, payToPaymentId } =
+        await establishProviderPayment()
+      const payment = await t.run((ctx) =>
+        ctx.db.get('payToPayments', payToPaymentId),
+      )
+      if (!payment) throw new Error('Expected PayTo Payment')
+      const work = await t.mutation(
+        internal.payToPaymentReconciliation.claimWork,
+        {
+          payToPaymentId,
+          leaseToken: `transition-${providerState}`,
+          nowMs: 4_002,
+        },
+      )
+      if (!work) throw new Error('Expected transition GET work')
+      await t.mutation(internal.payToPayments.applyEvidence, {
+        payToPaymentId,
+        evidence: {
+          source: 'per_uid_get',
+          intentFingerprint: payment.intent.fingerprint,
+          providerState,
+          operationId: work.operationId,
+          leaseToken: `transition-${providerState}`,
+        },
+        observedAt: 4_003,
+      })
+
+      await expect(paymentState(t, payToAgreementId)).resolves.toMatchObject({
+        agreement: {
+          paymentStatus,
+          paymentVerificationPending: false,
+          paymentAttentionRequired: false,
+        },
+        payments: [{ lifecycleState: providerState }],
+      })
+    },
+  )
+
+  test('keeps exact mixed-Payer counts and converges simultaneous settlements atomically', async () => {
+    const setup = await setupAgreement()
+    const secondAgreementId = await addSecondAgreement(setup)
+    await setup.t.run(async (ctx) => {
+      await ctx.db.insert('payToPaymentRuntimeGates', {
+        environment: 'sandbox',
+        mode: 'enabled_for_new_confirmations',
+        activatedAt: 2_500,
+      })
+    })
+    const established = await Promise.all(
+      [setup.payToAgreementId, secondAgreementId].map((payToAgreementId) =>
+        setup.t.mutation(internal.payToPayments.ensure, {
+          payToAgreementId,
+          observedAt: 3_000,
+        }),
+      ),
+    )
+    const paymentIds = established.map((result) => {
+      if (result.kind === 'ineligible') {
+        throw new Error('Expected established PayTo Payment')
+      }
+      return result.payToPaymentId
+    })
+    await Promise.all([
+      establishExistingProviderPayment(
+        setup.t,
+        paymentIds[0],
+        'first-provider-worker',
+      ),
+      establishExistingProviderPayment(
+        setup.t,
+        paymentIds[1],
+        'second-provider-worker',
+      ),
+    ])
+    const payments = await setup.t.run(async (ctx) =>
+      Promise.all(paymentIds.map((paymentId) => ctx.db.get(paymentId))),
+    )
+    if (!payments[0] || !payments[1]) {
+      throw new Error('Expected both PayTo Payments')
+    }
+    const mixedWork = await Promise.all(
+      paymentIds.map((payToPaymentId, index) =>
+        setup.t.mutation(internal.payToPaymentReconciliation.claimWork, {
+          payToPaymentId,
+          leaseToken: `mixed-get-worker-${index}`,
+          nowMs: 4_002,
+        }),
+      ),
+    )
+    if (!mixedWork[0] || !mixedWork[1]) {
+      throw new Error('Expected both mixed-outcome GETs')
+    }
+    await Promise.all(
+      paymentIds.map((payToPaymentId, index) =>
+        setup.t.mutation(internal.payToPayments.applyEvidence, {
+          payToPaymentId,
+          evidence: {
+            source: 'per_uid_get',
+            intentFingerprint: payments[index]!.intent.fingerprint,
+            providerState: index === 0 ? 'settled' : 'failed',
+            operationId: mixedWork[index]!.operationId,
+            leaseToken: `mixed-get-worker-${index}`,
+          },
+          observedAt: 4_003,
+        }),
+      ),
+    )
+
+    await expect(
+      setup.t.run((ctx) => ctx.db.get('moneyRequests', setup.moneyRequestId)),
+    ).resolves.toMatchObject({
+      paymentStatus: 'unpaid',
+      paymentCounts: { failed: 1, paid: 1 },
+      paymentVerificationPendingPayerCount: 0,
+      paymentAttentionRequiredPayerCount: 0,
+    })
+
+    await Promise.all(
+      paymentIds.map((payToPaymentId, index) =>
+        setup.t.mutation(internal.payToPayments.applyEvidence, {
+          payToPaymentId,
+          evidence: {
+            source: 'webhook',
+            intentFingerprint: payments[index]!.intent.fingerprint,
+            providerState: 'settled',
+          },
+          observedAt: 5_000,
+        }),
+      ),
+    )
+    const settlementWork = await Promise.all(
+      paymentIds.map((payToPaymentId, index) =>
+        setup.t.mutation(internal.payToPaymentReconciliation.claimWork, {
+          payToPaymentId,
+          leaseToken: `simultaneous-settlement-${index}`,
+          nowMs: 5_000,
+        }),
+      ),
+    )
+    if (!settlementWork[0] || !settlementWork[1]) {
+      throw new Error('Expected simultaneous settlement GETs')
+    }
+    await Promise.all(
+      paymentIds.map((payToPaymentId, index) =>
+        setup.t.mutation(internal.payToPayments.applyEvidence, {
+          payToPaymentId,
+          evidence: {
+            source: 'per_uid_get',
+            intentFingerprint: payments[index]!.intent.fingerprint,
+            providerState: 'settled',
+            operationId: settlementWork[index]!.operationId,
+            leaseToken: `simultaneous-settlement-${index}`,
+          },
+          observedAt: 5_001,
+        }),
+      ),
+    )
+
+    await expect(
+      setup.t.run((ctx) => ctx.db.get('moneyRequests', setup.moneyRequestId)),
+    ).resolves.toMatchObject({
+      paymentStatus: 'paid',
+      payerCount: 2,
+      paymentCounts: {
+        not_started: 0,
+        initiating: 0,
+        processing: 0,
+        under_investigation: 0,
+        failed: 0,
+        paid: 2,
+      },
+      paymentVerificationPendingPayerCount: 0,
+      paymentAttentionRequiredPayerCount: 0,
+    })
+  })
 })

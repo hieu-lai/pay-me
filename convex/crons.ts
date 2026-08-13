@@ -11,4 +11,11 @@ crons.interval(
   {},
 )
 
+crons.interval(
+  'dispatch due PayTo Payment reconciliation',
+  { minutes: 1 },
+  internal.payToPaymentReconciliation.dispatchDue,
+  {},
+)
+
 export default crons

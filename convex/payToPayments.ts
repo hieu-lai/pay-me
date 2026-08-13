@@ -8,7 +8,11 @@ import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
 import { paymentCreationPool } from './lib/paymentCreationPool'
 import { projectPayerPayment } from './lib/payToPaymentProjection'
-import type { PayToPaymentGateMode } from './validators/payToPayments'
+import { decidePaymentReconciliationSuccess } from './payToPaymentReconciliationState'
+import type {
+  PayToPaymentGateMode,
+  ProviderPayToPaymentState,
+} from './validators/payToPayments'
 import {
   payToPaymentCreateErrorCategoryValidator,
   payToPaymentEvidenceSourceValidator,
@@ -196,7 +200,7 @@ async function allocateProviderUid(
   throw new Error('Could not allocate a unique PayTo Payment UID')
 }
 
-async function allocateOperationId(
+export async function allocatePayToPaymentOperationId(
   ctx: Pick<MutationCtx, 'db'>,
   observedAt: number,
 ) {
@@ -393,6 +397,74 @@ async function createWorkItem(
     .unique()
 }
 
+async function reconciliationWorkItem(
+  ctx: Pick<MutationCtx, 'db'>,
+  payToPaymentId: Id<'payToPayments'>,
+) {
+  return await ctx.db
+    .query('payToPaymentReconciliationWorkItems')
+    .withIndex('by_payToPaymentId', (q) =>
+      q.eq('payToPaymentId', payToPaymentId),
+    )
+    .unique()
+}
+
+export function reconciliationLeaseAuthorizes(input: {
+  workItem: Doc<'payToPaymentReconciliationWorkItems'> | null
+  operation: Doc<'payToPaymentOperations'> | null
+  payToPaymentId: Id<'payToPayments'>
+  operationId: string | undefined
+  leaseToken: string | undefined
+  observedAt: number
+}) {
+  return (
+    input.workItem !== null &&
+    input.operation !== null &&
+    input.workItem.state === 'running' &&
+    input.workItem.operationId === input.operation.operationId &&
+    input.workItem.operationId === input.operationId &&
+    input.workItem.leaseToken === input.leaseToken &&
+    input.workItem.leaseExpiresAt !== undefined &&
+    input.workItem.leaseExpiresAt >= input.observedAt &&
+    input.operation.payToPaymentId === input.payToPaymentId &&
+    input.operation.operationKind === 'get' &&
+    input.operation.leaseToken === input.leaseToken
+  )
+}
+
+export async function makePayToPaymentReconciliationDue(
+  ctx: MutationCtx,
+  payToPaymentId: Id<'payToPayments'>,
+  observedAt: number,
+) {
+  const existing = await reconciliationWorkItem(ctx, payToPaymentId)
+  if (!existing) {
+    await ctx.db.insert('payToPaymentReconciliationWorkItems', {
+      payToPaymentId,
+      state: 'queued',
+      availableAt: observedAt,
+    })
+    return
+  }
+  if (existing.state === 'running' && existing.leaseExpiresAt !== undefined) {
+    await ctx.db.patch('payToPaymentReconciliationWorkItems', existing._id, {
+      refreshRequestedAt: Math.min(
+        existing.refreshRequestedAt ?? observedAt,
+        observedAt,
+      ),
+    })
+    return
+  }
+  await ctx.db.patch('payToPaymentReconciliationWorkItems', existing._id, {
+    state: 'queued',
+    availableAt: Math.min(existing.availableAt, observedAt),
+    leaseToken: undefined,
+    leaseExpiresAt: undefined,
+    operationId: undefined,
+    refreshRequestedAt: undefined,
+  })
+}
+
 function leaseAuthorizes(
   workItem: Doc<'payToPaymentWorkItems'>,
   leaseToken: string,
@@ -456,7 +528,7 @@ export const claimCreateWork = internalMutation({
       return null
     }
 
-    const operationId = await allocateOperationId(ctx, args.nowMs)
+    const operationId = await allocatePayToPaymentOperationId(ctx, args.nowMs)
     const request = {
       providerUid: payment.providerUid,
       agreementProviderUid: payment.intent.agreementProviderUid,
@@ -632,6 +704,7 @@ export const recordCreateResult = internalMutation({
     })
     await ctx.db.patch('payToPayments', payment._id, {
       creationState: 'provider_established',
+      provisionalLifecycleState: args.providerState,
     })
     await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
       state: 'completed',
@@ -640,10 +713,11 @@ export const recordCreateResult = internalMutation({
       leaseExpiresAt: undefined,
     })
     await projectPayerPayment(ctx, agreement, {
-      paymentStatus: 'processing',
+      paymentStatus: payerStatusForProvisionalLifecycle(args.providerState),
       paymentVerificationPending: true,
       paymentAttentionRequired: false,
     })
+    await makePayToPaymentReconciliationDue(ctx, payment._id, args.observedAt)
     return true
   },
 })
@@ -686,6 +760,7 @@ export const recordCreateFailure = internalMutation({
       leaseToken: undefined,
       leaseExpiresAt: undefined,
     })
+    await makePayToPaymentReconciliationDue(ctx, payment._id, args.observedAt)
     return true
   },
 })
@@ -748,7 +823,10 @@ export const authorizeOperation = internalMutation({
         return { kind: 'denied' as const, reason: denial }
       }
     }
-    const operationId = await allocateOperationId(ctx, args.observedAt)
+    const operationId = await allocatePayToPaymentOperationId(
+      ctx,
+      args.observedAt,
+    )
     await ctx.db.insert('payToPaymentOperations', {
       payToPaymentId: current._id,
       operationId,
@@ -859,6 +937,9 @@ export const applyEvidence = internalMutation({
     evidence: v.object({
       source: payToPaymentEvidenceSourceValidator,
       intentFingerprint: v.string(),
+      providerState: v.optional(v.string()),
+      operationId: v.optional(v.string()),
+      leaseToken: v.optional(v.string()),
     }),
     observedAt: v.number(),
   },
@@ -870,12 +951,182 @@ export const applyEvidence = internalMutation({
       observedAt: args.observedAt,
     })
     if (accepted.kind !== 'accepted') return accepted
+    const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
+    if (!payment) return { kind: 'not_found' as const }
+    const agreement = await ctx.db.get(
+      'payToAgreements',
+      payment.payToAgreementId,
+    )
+    if (!agreement) throw new Error('PayTo Payment invariant failed')
+
+    if (args.evidence.source !== 'per_uid_get') {
+      await ctx.db.insert('payToPaymentEvidence', {
+        payToPaymentId: args.payToPaymentId,
+        source: args.evidence.source,
+        intentFingerprint: args.evidence.intentFingerprint,
+        providerState: args.evidence.providerState,
+        observedAt: args.observedAt,
+      })
+      await makePayToPaymentReconciliationDue(ctx, payment._id, args.observedAt)
+      return accepted
+    }
+
+    const workItem = await reconciliationWorkItem(ctx, payment._id)
+    const operation =
+      args.evidence.operationId === undefined
+        ? null
+        : await ctx.db
+            .query('payToPaymentOperations')
+            .withIndex('by_operationId', (q) =>
+              q.eq('operationId', args.evidence.operationId as string),
+            )
+            .unique()
+    const providerState = args.evidence.providerState
+    const currentLease =
+      providerState !== undefined &&
+      reconciliationLeaseAuthorizes({
+        workItem,
+        operation,
+        payToPaymentId: payment._id,
+        operationId: args.evidence.operationId,
+        leaseToken: args.evidence.leaseToken,
+        observedAt: args.observedAt,
+      })
+    if (!currentLease || !workItem || !operation) {
+      if (providerState !== undefined) {
+        await ctx.db.insert('payToPaymentEvidence', {
+          payToPaymentId: payment._id,
+          source: 'per_uid_get',
+          intentFingerprint: payment.intent.fingerprint,
+          operationId: args.evidence.operationId,
+          providerState,
+          observedAt: args.observedAt,
+        })
+      }
+      return { kind: 'not_found' as const }
+    }
+
+    const decision = decidePaymentReconciliationSuccess({
+      currentState: payment.lifecycleState,
+      providerState,
+      paymentAgeMs: Math.max(0, args.observedAt - payment.establishedAt),
+    })
     await ctx.db.insert('payToPaymentEvidence', {
       payToPaymentId: args.payToPaymentId,
-      source: args.evidence.source,
+      source: 'per_uid_get',
       intentFingerprint: args.evidence.intentFingerprint,
+      operationId: operation.operationId,
+      providerState,
+      outcome: decision.kind,
       observedAt: args.observedAt,
     })
+    await ctx.db.patch('payToPaymentOperations', operation._id, {
+      outcome: { classification: 'completed', observedAt: args.observedAt },
+    })
+    const immediateFollowUp = workItem.refreshRequestedAt !== undefined
+    const nextAvailableAt = (delayMs: number) =>
+      immediateFollowUp ? args.observedAt : args.observedAt + delayMs
+    const completedWorkPatch = {
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      operationId: undefined,
+      refreshRequestedAt: undefined,
+      consecutiveFailures: 0,
+      failureStartedAt: undefined,
+      lastSuccessAt: args.observedAt,
+    }
+
+    if (decision.kind === 'confirmed') {
+      const paymentStatus = payerStatusForConfirmedLifecycle(decision.state)
+      await ctx.db.patch('payToPayments', payment._id, {
+        creationState: 'provider_established',
+        lifecycleState: decision.state,
+        lifecycleObservedAt: args.observedAt,
+        lastReconciledAt: args.observedAt,
+        provisionalLifecycleState: undefined,
+        reconciliationAlert: undefined,
+        ...(payment.attention?.kind === 'unknown_provider_state'
+          ? { attention: undefined }
+          : {}),
+      })
+      await projectPayerPayment(ctx, agreement, {
+        paymentStatus,
+        paymentVerificationPending: false,
+        paymentAttentionRequired:
+          payment.attention !== undefined &&
+          payment.attention.kind !== 'unknown_provider_state',
+      })
+      await ctx.db.patch('payToPaymentReconciliationWorkItems', workItem._id, {
+        state: decision.delayMs === null ? 'stopped' : 'queued',
+        availableAt: nextAvailableAt(decision.delayMs ?? 0),
+        ...completedWorkPatch,
+      })
+    } else if (decision.kind === 'unknown') {
+      await ctx.db.patch('payToPayments', payment._id, {
+        creationState: 'provider_established',
+        lastReconciledAt: args.observedAt,
+        attention: {
+          kind: 'unknown_provider_state',
+          observedAt: args.observedAt,
+        },
+        reconciliationAlert: undefined,
+      })
+      await projectPayerPayment(ctx, agreement, {
+        paymentStatus: agreement.paymentStatus ?? 'initiating',
+        paymentVerificationPending: true,
+        paymentAttentionRequired: true,
+      })
+      await ctx.db.patch('payToPaymentReconciliationWorkItems', workItem._id, {
+        state: 'queued',
+        availableAt: nextAvailableAt(decision.delayMs),
+        ...completedWorkPatch,
+      })
+    } else {
+      await ctx.db.patch('payToPayments', payment._id, {
+        creationState: 'provider_established',
+        lastReconciledAt: args.observedAt,
+        attention: {
+          kind: 'settlement_contradiction',
+          observedState: decision.observedState,
+          observedAt: args.observedAt,
+        },
+        reconciliationAlert: undefined,
+      })
+      await projectPayerPayment(ctx, agreement, {
+        paymentStatus: 'paid',
+        paymentVerificationPending: true,
+        paymentAttentionRequired: true,
+      })
+      await ctx.db.patch('payToPaymentReconciliationWorkItems', workItem._id, {
+        state: 'queued',
+        availableAt: args.observedAt,
+        ...completedWorkPatch,
+      })
+      console.error('PayTo Payment settlement contradiction', {
+        payToPaymentId: payment._id,
+      })
+    }
     return accepted
   },
 })
+
+function payerStatusForConfirmedLifecycle(
+  state: ProviderPayToPaymentState,
+): 'processing' | 'under_investigation' | 'failed' | 'paid' {
+  if (state === 'settled') return 'paid'
+  return payerStatusForUnsettledLifecycle(state)
+}
+
+function payerStatusForProvisionalLifecycle(
+  state: ProviderPayToPaymentState,
+): 'processing' | 'under_investigation' | 'failed' {
+  return payerStatusForUnsettledLifecycle(state)
+}
+
+function payerStatusForUnsettledLifecycle(
+  state: ProviderPayToPaymentState,
+): 'processing' | 'under_investigation' | 'failed' {
+  if (state === 'under_investigation') return 'under_investigation'
+  if (state === 'failed') return 'failed'
+  return 'processing'
+}

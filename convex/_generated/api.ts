@@ -44,6 +44,8 @@ import type * as payToAgreementCreationState from "../payToAgreementCreationStat
 import type * as payToAgreementReconciliation from "../payToAgreementReconciliation.js";
 import type * as payToAgreementReconciliationState from "../payToAgreementReconciliationState.js";
 import type * as payToPaymentCreation from "../payToPaymentCreation.js";
+import type * as payToPaymentReconciliation from "../payToPaymentReconciliation.js";
+import type * as payToPaymentReconciliationState from "../payToPaymentReconciliationState.js";
 import type * as payToPayments from "../payToPayments.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as seed from "../seed.js";
@@ -100,6 +102,8 @@ const fullApi: ApiFromModules<{
   payToAgreementReconciliation: typeof payToAgreementReconciliation;
   payToAgreementReconciliationState: typeof payToAgreementReconciliationState;
   payToPaymentCreation: typeof payToPaymentCreation;
+  payToPaymentReconciliation: typeof payToPaymentReconciliation;
+  payToPaymentReconciliationState: typeof payToPaymentReconciliationState;
   payToPayments: typeof payToPayments;
   paymentDestinations: typeof paymentDestinations;
   seed: typeof seed;
