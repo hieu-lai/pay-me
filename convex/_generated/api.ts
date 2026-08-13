@@ -14,6 +14,7 @@ import type * as lib_agreementCreationPool from "../lib/agreementCreationPool.js
 import type * as lib_moneyRequestIngress from "../lib/moneyRequestIngress.js";
 import type * as lib_payIdCapability from "../lib/payIdCapability.js";
 import type * as lib_payToAgreementActivation from "../lib/payToAgreementActivation.js";
+import type * as lib_payToPaymentProjection from "../lib/payToPaymentProjection.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
@@ -44,6 +45,7 @@ import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as seed from "../seed.js";
 import type * as users from "../users.js";
 import type * as validators_payToAgreements from "../validators/payToAgreements.js";
+import type * as validators_payToPaymentProjections from "../validators/payToPaymentProjections.js";
 import type * as validators_paymentDestinations from "../validators/paymentDestinations.js";
 import type * as validators_users from "../validators/users.js";
 import type * as validators_zeptoWebhook from "../validators/zeptoWebhook.js";
@@ -63,6 +65,7 @@ const fullApi: ApiFromModules<{
   "lib/moneyRequestIngress": typeof lib_moneyRequestIngress;
   "lib/payIdCapability": typeof lib_payIdCapability;
   "lib/payToAgreementActivation": typeof lib_payToAgreementActivation;
+  "lib/payToPaymentProjection": typeof lib_payToPaymentProjection;
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
@@ -93,6 +96,7 @@ const fullApi: ApiFromModules<{
   seed: typeof seed;
   users: typeof users;
   "validators/payToAgreements": typeof validators_payToAgreements;
+  "validators/payToPaymentProjections": typeof validators_payToPaymentProjections;
   "validators/paymentDestinations": typeof validators_paymentDestinations;
   "validators/users": typeof validators_users;
   "validators/zeptoWebhook": typeof validators_zeptoWebhook;

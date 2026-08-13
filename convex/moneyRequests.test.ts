@@ -767,9 +767,28 @@ describe('Money Request submission and requester read', () => {
       purpose: 'other',
       description: 'Shared dinner',
       submittedAt: expect.any(Number),
+      payment: {
+        status: 'unpaid',
+        payerCount: 1,
+        counts: {
+          not_started: 1,
+          initiating: 0,
+          processing: 0,
+          under_investigation: 0,
+          failed: 0,
+          paid: 0,
+        },
+        verificationPendingPayerCount: 0,
+        attentionRequiredPayerCount: 0,
+      },
       agreements: [
         {
           payer: { name: payerIdentity.name },
+          payment: {
+            status: 'not_started',
+            verificationPending: false,
+            attentionRequired: false,
+          },
           creation: { state: 'queued', updatedAt: expect.any(Number) },
           lifecycle: {
             meaning: 'waitingForPayer',
@@ -793,6 +812,25 @@ describe('Money Request submission and requester read', () => {
       work: await ctx.db.query('payToAgreementWorkItems').take(2),
     }))
     expect(durable.agreements).toHaveLength(1)
+    expect(durable.request).toMatchObject({
+      payerCount: 1,
+      paymentStatus: 'unpaid',
+      paymentCounts: {
+        not_started: 1,
+        initiating: 0,
+        processing: 0,
+        under_investigation: 0,
+        failed: 0,
+        paid: 0,
+      },
+      paymentVerificationPendingPayerCount: 0,
+      paymentAttentionRequiredPayerCount: 0,
+    })
+    expect(durable.agreements[0]).toMatchObject({
+      paymentStatus: 'not_started',
+      paymentVerificationPending: false,
+      paymentAttentionRequired: false,
+    })
     expect(durable.evidence).toHaveLength(1)
     expect(durable.work).toHaveLength(1)
     expect(JSON.stringify(durable)).not.toContain('123456-0012345')
@@ -1330,6 +1368,52 @@ describe('Money Request submission and requester read', () => {
     ).toBe(5)
   })
 
+  test.each([1, 2, 3, 4, 5])(
+    'initializes exact Payment projections for %i Payers',
+    async (payerCount) => {
+      const { t, requester, payerUserId } = await setup()
+      const addedPayers = await Promise.all(
+        Array.from({ length: payerCount - 1 }, (_, index) =>
+          addPayer(t, index + 2),
+        ),
+      )
+      const moneyRequestId = await submit(requester, {
+        ...moneyRequestIntent(payerUserId),
+        payerIds: [
+          payerUserId,
+          ...addedPayers.map(({ payerUserId: id }) => id),
+        ],
+      })
+
+      const detail = await requester.query(api.moneyRequests.get, {
+        moneyRequestId,
+      })
+      if (!('agreements' in detail))
+        throw new Error('Expected Requester detail')
+      expect(detail.payment).toEqual({
+        status: 'unpaid',
+        payerCount,
+        counts: {
+          not_started: payerCount,
+          initiating: 0,
+          processing: 0,
+          under_investigation: 0,
+          failed: 0,
+          paid: 0,
+        },
+        verificationPendingPayerCount: 0,
+        attentionRequiredPayerCount: 0,
+      })
+      expect(detail.agreements.map(({ payment }) => payment)).toEqual(
+        Array.from({ length: payerCount }, () => ({
+          status: 'not_started',
+          verificationPending: false,
+          attentionRequired: false,
+        })),
+      )
+    },
+  )
+
   test('durably backpressures accepted work beyond the provider concurrency bound', async () => {
     const releases: Array<() => void> = []
     const trackedProviderUids = new Set<string>()
@@ -1754,6 +1838,11 @@ describe('Money Request submission and requester read', () => {
           username: 'payer-now',
           imageUrl: 'https://example.com/payer.png',
         },
+        payment: {
+          status: 'not_started',
+          verificationPending: false,
+          attentionRequired: false,
+        },
         creation: { state: 'queued', updatedAt: expect.any(Number) },
         lifecycle: {
           meaning: 'waitingForPayer',
@@ -1765,6 +1854,7 @@ describe('Money Request submission and requester read', () => {
     })
     expect(JSON.stringify(detail)).not.toContain(sibling.identity.name)
     expect(detail).not.toHaveProperty('agreements')
+    expect(detail).not.toHaveProperty('payment')
   })
 
   test('lists Money Requests requested by me newest first across cursor pages', async () => {
@@ -1822,6 +1912,13 @@ describe('Money Request submission and requester read', () => {
         lifecycle: { waitingForPayer: 1 },
         tracking: { verificationDue: 1 },
       },
+      payment: {
+        status: 'unpaid',
+        payerCount: 1,
+        counts: { not_started: 1, paid: 0 },
+        verificationPendingPayerCount: 0,
+        attentionRequiredPayerCount: 0,
+      },
     })
     expect(JSON.stringify(firstPage)).not.toContain('providerUid')
     expect(JSON.stringify(firstPage)).not.toContain('debtorSnapshot')
@@ -1865,6 +1962,11 @@ describe('Money Request submission and requester read', () => {
       },
       agreement: {
         payer: { name: payerIdentity.name },
+        payment: {
+          status: 'not_started',
+          verificationPending: false,
+          attentionRequired: false,
+        },
         creation: { state: 'queued' },
         lifecycle: { meaning: 'waitingForPayer' },
         tracking: { state: 'verificationDue' },
@@ -1874,6 +1976,7 @@ describe('Money Request submission and requester read', () => {
     expect(serialized).not.toContain(sibling.identity.name)
     expect(serialized).not.toContain('payers')
     expect(serialized).not.toContain('summary')
+    expect(items[0]).not.toHaveProperty('payment')
     expect(serialized).not.toContain('providerUid')
   })
 
@@ -2103,6 +2206,25 @@ describe('Money Request submission and requester read', () => {
     await expect(
       submit(requester, candidate, Date.now(), { loseResponse: true }),
     ).rejects.toThrow('Simulated response loss')
+    const acceptedState = await durableSubmissionState(t)
+    const acceptedProjection = {
+      request: acceptedState.requests[0] && {
+        payerCount: acceptedState.requests[0].payerCount,
+        paymentStatus: acceptedState.requests[0].paymentStatus,
+        paymentCounts: acceptedState.requests[0].paymentCounts,
+        paymentVerificationPendingPayerCount:
+          acceptedState.requests[0].paymentVerificationPendingPayerCount,
+        paymentAttentionRequiredPayerCount:
+          acceptedState.requests[0].paymentAttentionRequiredPayerCount,
+      },
+      payer: acceptedState.agreements[0] && {
+        paymentStatus: acceptedState.agreements[0].paymentStatus,
+        paymentVerificationPending:
+          acceptedState.agreements[0].paymentVerificationPending,
+        paymentAttentionRequired:
+          acceptedState.agreements[0].paymentAttentionRequired,
+      },
+    }
     await t.run(async (ctx) => {
       const destinations = await ctx.db.query('paymentDestinations').take(3)
       for (const destination of destinations) {
@@ -2116,6 +2238,24 @@ describe('Money Request submission and requester read', () => {
       requester.query(api.moneyRequests.get, { moneyRequestId: recoveredId }),
     ).resolves.toMatchObject({ id: recoveredId })
     const durable = await durableSubmissionState(t)
+    expect({
+      request: durable.requests[0] && {
+        payerCount: durable.requests[0].payerCount,
+        paymentStatus: durable.requests[0].paymentStatus,
+        paymentCounts: durable.requests[0].paymentCounts,
+        paymentVerificationPendingPayerCount:
+          durable.requests[0].paymentVerificationPendingPayerCount,
+        paymentAttentionRequiredPayerCount:
+          durable.requests[0].paymentAttentionRequiredPayerCount,
+      },
+      payer: durable.agreements[0] && {
+        paymentStatus: durable.agreements[0].paymentStatus,
+        paymentVerificationPending:
+          durable.agreements[0].paymentVerificationPending,
+        paymentAttentionRequired:
+          durable.agreements[0].paymentAttentionRequired,
+      },
+    }).toEqual(acceptedProjection)
     expect(durable.requests).toHaveLength(1)
     expect(durable.agreements).toHaveLength(1)
     expect(durable.evidence.map(({ kind }) => kind)).toContain('local_accepted')

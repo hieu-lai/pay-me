@@ -24,6 +24,12 @@ import {
 } from './lib/moneyRequestIngress'
 import { agreementCreationPool } from './lib/agreementCreationPool'
 import {
+  assertStoredPaymentProjection,
+  initialMoneyRequestPaymentProjection,
+  initialPayerPaymentProjection,
+  moneyRequestProjectionFromPayers,
+} from './lib/payToPaymentProjection'
+import {
   payIdCapabilityStatus,
   pseudonymousPayIdRequesterId,
 } from './lib/payIdCapability'
@@ -41,6 +47,11 @@ import {
   zeptoEnvironmentValidator,
 } from './validators/payToAgreements'
 import type { ZeptoEnvironment } from './validators/payToAgreements'
+import {
+  moneyRequestPaymentStatusValidator,
+  payerPaymentCountsValidator,
+  payerPaymentStatusValidator,
+} from './validators/payToPaymentProjections'
 
 const intentValidator = v.object({
   submissionKey: v.string(),
@@ -72,6 +83,11 @@ const publicUserIdentityValidator = v.object({
 })
 const publicAgreementValidator = v.object({
   payer: publicUserIdentityValidator,
+  payment: v.object({
+    status: payerPaymentStatusValidator,
+    verificationPending: v.boolean(),
+    attentionRequired: v.boolean(),
+  }),
   creation: v.object({
     state: v.union(
       v.literal('queued'),
@@ -131,7 +147,15 @@ const moneyRequestFieldsValidator = v.object({
   description: v.string(),
   submittedAt: v.number(),
 })
+const publicMoneyRequestPaymentValidator = v.object({
+  status: moneyRequestPaymentStatusValidator,
+  payerCount: v.number(),
+  counts: payerPaymentCountsValidator,
+  verificationPendingPayerCount: v.number(),
+  attentionRequiredPayerCount: v.number(),
+})
 const requesterDetailValidator = moneyRequestFieldsValidator.extend({
+  payment: publicMoneyRequestPaymentValidator,
   agreements: v.array(publicAgreementValidator),
 })
 const payerDetailValidator = moneyRequestFieldsValidator.extend({
@@ -165,6 +189,7 @@ const publicProjectionSummaryValidator = v.object({
   }),
 })
 const requestedHistoryItemValidator = moneyRequestFieldsValidator.extend({
+  payment: publicMoneyRequestPaymentValidator,
   payers: v.array(publicUserIdentityValidator),
   summary: publicProjectionSummaryValidator,
 })
@@ -673,6 +698,7 @@ export const accept = internalMutation({
       sourceCreditorPaymentDestinationId: requesterDestination.destination._id,
       creditorSnapshot: requesterDestination.snapshot,
       submittedAt: args.submittedAt,
+      ...initialMoneyRequestPaymentProjection(payers.length),
     })
     for (const { payer, payerDestination } of payers) {
       const allocation = allocationsByPayerId.get(payer._id)!
@@ -694,6 +720,7 @@ export const accept = internalMutation({
         lifecycleObservedAt: args.submittedAt,
         trackingState: 'verification_due',
         trackingUpdatedAt: args.submittedAt,
+        ...initialPayerPaymentProjection(),
       })
       await ctx.db.insert('payToAgreementEvidence', {
         payToAgreementId,
@@ -714,6 +741,7 @@ export const accept = internalMutation({
       )
       await ctx.db.patch('payToAgreementWorkItems', workItemId, { workId })
     }
+    await assertStoredPaymentProjection(ctx, moneyRequestId)
     return moneyRequestId
   },
 })
@@ -740,6 +768,7 @@ function publicAgreement(
   const failure = agreement.currentFailure ?? legacyAgreementFailure(agreement)
   return {
     payer: publicUserIdentity(agreement.payerNameSnapshot, currentPayer),
+    payment: publicPayerPayment(agreement),
     creation: {
       state:
         agreement.creationState === 'retry_wait'
@@ -761,6 +790,14 @@ function publicAgreement(
     ...(failure === undefined
       ? {}
       : { failure: publicAgreementFailure(failure) }),
+  }
+}
+
+function publicPayerPayment(agreement: Doc<'payToAgreements'>) {
+  return {
+    status: agreement.paymentStatus ?? ('not_started' as const),
+    verificationPending: agreement.paymentVerificationPending ?? false,
+    attentionRequired: agreement.paymentAttentionRequired ?? false,
   }
 }
 
@@ -870,6 +907,53 @@ function publicMoneyRequest(moneyRequest: Doc<'moneyRequests'>) {
   }
 }
 
+function publicMoneyRequestPayment(
+  moneyRequest: Doc<'moneyRequests'>,
+  agreements: Array<ReturnType<typeof publicAgreement>>,
+) {
+  if (
+    moneyRequest.payerCount !== undefined &&
+    moneyRequest.paymentStatus !== undefined &&
+    moneyRequest.paymentCounts !== undefined &&
+    moneyRequest.paymentVerificationPendingPayerCount !== undefined &&
+    moneyRequest.paymentAttentionRequiredPayerCount !== undefined
+  ) {
+    return {
+      status: moneyRequest.paymentStatus,
+      payerCount: moneyRequest.payerCount,
+      counts: moneyRequest.paymentCounts,
+      verificationPendingPayerCount:
+        moneyRequest.paymentVerificationPendingPayerCount,
+      attentionRequiredPayerCount:
+        moneyRequest.paymentAttentionRequiredPayerCount,
+    }
+  }
+  if (
+    agreements.length < 1 ||
+    agreements.length > MAX_MONEY_REQUEST_PAYER_COUNT
+  ) {
+    safeError(
+      'SERVICE_UNAVAILABLE',
+      'Money Request information is temporarily unavailable.',
+    )
+  }
+  const projection = moneyRequestProjectionFromPayers(
+    agreements.map(({ payment }) => ({
+      paymentStatus: payment.status,
+      paymentVerificationPending: payment.verificationPending,
+      paymentAttentionRequired: payment.attentionRequired,
+    })),
+  )
+  return {
+    status: projection.paymentStatus,
+    payerCount: projection.payerCount,
+    counts: projection.paymentCounts,
+    verificationPendingPayerCount:
+      projection.paymentVerificationPendingPayerCount,
+    attentionRequiredPayerCount: projection.paymentAttentionRequiredPayerCount,
+  }
+}
+
 function validatePageTarget(numItems: number) {
   if (!Number.isInteger(numItems) || numItems < 1 || numItems > 50) {
     throw new ConvexError({
@@ -954,9 +1038,14 @@ export const get = query({
     }
     const moneyRequestFields = publicMoneyRequest(moneyRequest)
     if (moneyRequest.requesterUserId === viewer._id) {
+      const agreements = await requesterAgreementProjections(
+        ctx,
+        moneyRequest._id,
+      )
       return {
         ...moneyRequestFields,
-        agreements: await requesterAgreementProjections(ctx, moneyRequest._id),
+        payment: publicMoneyRequestPayment(moneyRequest, agreements),
+        agreements,
       }
     }
 
@@ -1005,6 +1094,7 @@ export const listRequestedByMe = query({
         )
         return {
           ...publicMoneyRequest(moneyRequest),
+          payment: publicMoneyRequestPayment(moneyRequest, agreements),
           payers: agreements.map(({ payer }) => payer),
           summary: publicProjectionSummary(agreements),
         }

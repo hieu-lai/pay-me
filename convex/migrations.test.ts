@@ -9,6 +9,7 @@ import { v } from 'convex/values'
 import { expect, test } from 'vitest'
 
 import { components, internal } from './_generated/api'
+import { repairPaymentProjection } from './lib/payToPaymentProjection'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -313,6 +314,164 @@ test('permanently excludes legacy PayTo Agreements from new activation provenanc
     activationProvenancePolicy: 'legacy_excluded',
   })
   expect(agreement?.firstConfirmedActiveAt).toBeUndefined()
+})
+
+test('repairs missing Payment projections idempotently without changing legacy exclusion or creating work', async () => {
+  const t = convexTest(schema, modules)
+  migrationComponent.register(t)
+  workpoolTest.register(t, 'agreementCreationWorkpool')
+  const payToAgreementId = await insertLegacyPayToAgreement(t)
+  const agreementBefore = await t.run(async (ctx) =>
+    ctx.db.get('payToAgreements', payToAgreementId),
+  )
+  if (!agreementBefore) throw new Error('Expected legacy PayTo Agreement')
+  await t.run(async (ctx) => {
+    await ctx.db.patch('moneyRequests', agreementBefore.moneyRequestId, {
+      payerCount: 5,
+      paymentStatus: 'paid',
+      paymentCounts: {
+        not_started: -1,
+        initiating: 0,
+        processing: 0,
+        under_investigation: 0,
+        failed: 0,
+        paid: 6,
+      },
+      paymentVerificationPendingPayerCount: 5,
+      paymentAttentionRequiredPayerCount: 5,
+    })
+  })
+
+  for (const migration of [
+    internal.migrations.excludeLegacyPayToAgreements,
+    internal.migrations.repairMoneyRequestPaymentProjections,
+    internal.migrations.repairMoneyRequestPaymentProjections,
+  ]) {
+    await t.run(async (ctx) => {
+      await runToCompletion(ctx, components.migrations, migration)
+    })
+  }
+
+  const repaired = await t.run(async (ctx) => ({
+    request: await ctx.db.get('moneyRequests', agreementBefore.moneyRequestId),
+    agreement: await ctx.db.get('payToAgreements', payToAgreementId),
+    paymentWork: await ctx.db.query('payToAgreementWorkItems').collect(),
+    evidence: await ctx.db.query('payToAgreementEvidence').collect(),
+  }))
+  expect(repaired.request).toMatchObject({
+    payerCount: 1,
+    paymentStatus: 'unpaid',
+    paymentCounts: {
+      not_started: 1,
+      initiating: 0,
+      processing: 0,
+      under_investigation: 0,
+      failed: 0,
+      paid: 0,
+    },
+    paymentVerificationPendingPayerCount: 0,
+    paymentAttentionRequiredPayerCount: 0,
+  })
+  expect(repaired.agreement).toMatchObject({
+    activationProvenancePolicy: 'legacy_excluded',
+    paymentStatus: 'not_started',
+    paymentVerificationPending: false,
+    paymentAttentionRequired: false,
+  })
+  expect(repaired.paymentWork).toEqual([])
+  expect(repaired.evidence).toEqual([])
+})
+
+test('repairs exact mixed Payer counts and becomes paid only when every Payer is paid', async () => {
+  const t = convexTest(schema, modules)
+  migrationComponent.register(t)
+  workpoolTest.register(t, 'agreementCreationWorkpool')
+  const firstAgreementId = await insertLegacyPayToAgreement(t)
+  const moneyRequestId = await t.run(async (ctx) => {
+    const first = await ctx.db.get('payToAgreements', firstAgreementId)
+    if (!first) throw new Error('Expected legacy PayTo Agreement')
+    const {
+      _id: _firstId,
+      _creationTime: _createdAt,
+      ...agreementFields
+    } = first
+    await ctx.db.patch('payToAgreements', firstAgreementId, {
+      paymentStatus: 'paid',
+      paymentVerificationPending: true,
+      paymentAttentionRequired: false,
+    })
+    for (const [index, paymentStatus] of (
+      ['failed', 'not_started'] as const
+    ).entries()) {
+      const payerUserId = await ctx.db.insert('users', {
+        tokenIdentifier: `issuer|repair-payer-${index}`,
+        clerkUserId: `repair-payer-${index}`,
+        email: `repair-payer-${index}@example.com`,
+        name: `Repair Payer ${index}`,
+        searchText: `Repair Payer ${index}`,
+      })
+      await ctx.db.insert('payToAgreements', {
+        ...agreementFields,
+        payerUserId,
+        payerNameSnapshot: `Repair Payer ${index}`,
+        providerUid: `repair-agreement-${index}`,
+        paymentStatus,
+        paymentVerificationPending: false,
+        paymentAttentionRequired: index === 0,
+      })
+    }
+    return first.moneyRequestId
+  })
+
+  await t.run(async (ctx) => {
+    await repairPaymentProjection(ctx, moneyRequestId)
+  })
+  await expect(
+    t.run(async (ctx) => ctx.db.get('moneyRequests', moneyRequestId)),
+  ).resolves.toMatchObject({
+    payerCount: 3,
+    paymentStatus: 'unpaid',
+    paymentCounts: {
+      not_started: 1,
+      initiating: 0,
+      processing: 0,
+      under_investigation: 0,
+      failed: 1,
+      paid: 1,
+    },
+    paymentVerificationPendingPayerCount: 1,
+    paymentAttentionRequiredPayerCount: 1,
+  })
+
+  await t.run(async (ctx) => {
+    const agreements = await ctx.db
+      .query('payToAgreements')
+      .withIndex('by_moneyRequestId', (q) =>
+        q.eq('moneyRequestId', moneyRequestId),
+      )
+      .take(4)
+    for (const agreement of agreements) {
+      await ctx.db.patch('payToAgreements', agreement._id, {
+        paymentStatus: 'paid',
+        paymentVerificationPending: false,
+        paymentAttentionRequired: false,
+      })
+    }
+    await runToCompletion(
+      ctx,
+      components.migrations,
+      internal.migrations.repairMoneyRequestPaymentProjections,
+    )
+  })
+  await expect(
+    t.run(async (ctx) => ctx.db.get('moneyRequests', moneyRequestId)),
+  ).resolves.toMatchObject({
+    payerCount: 3,
+    paymentStatus: 'paid',
+    paymentCounts: { paid: 3 },
+    paymentVerificationPendingPayerCount: 0,
+    paymentAttentionRequiredPayerCount: 0,
+  })
 })
 
 test('deletes all money request and PayTo agreement data', async () => {

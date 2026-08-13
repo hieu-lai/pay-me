@@ -16,6 +16,11 @@ import {
   zeptoWebhookReasonValidator,
 } from './validators/zeptoWebhook'
 import { paymentDestinationTypeConvexValidator } from './validators/paymentDestinations'
+import {
+  moneyRequestPaymentStatusValidator,
+  payerPaymentCountsValidator,
+  payerPaymentStatusValidator,
+} from './validators/payToPaymentProjections'
 
 const agreementEvidenceBaseValidator = v.object({
   payToAgreementId: v.id('payToAgreements'),
@@ -69,6 +74,11 @@ export default defineSchema({
     sourceCreditorPaymentDestinationId: v.id('paymentDestinations'),
     creditorSnapshot: routingSnapshotValidator,
     submittedAt: v.number(),
+    payerCount: v.optional(v.number()),
+    paymentStatus: v.optional(moneyRequestPaymentStatusValidator),
+    paymentCounts: v.optional(payerPaymentCountsValidator),
+    paymentVerificationPendingPayerCount: v.optional(v.number()),
+    paymentAttentionRequiredPayerCount: v.optional(v.number()),
   })
     .index('by_requesterUserId', ['requesterUserId'])
     .index('by_requesterUserId_and_submissionKey', [
@@ -88,6 +98,9 @@ export default defineSchema({
     providerUid: v.string(),
     activationProvenancePolicy: v.optional(activationProvenancePolicyValidator),
     firstConfirmedActiveAt: v.optional(v.number()),
+    paymentStatus: v.optional(payerPaymentStatusValidator),
+    paymentVerificationPending: v.optional(v.boolean()),
+    paymentAttentionRequired: v.optional(v.boolean()),
     creationState: v.union(
       v.literal('queued'),
       v.literal('submitting'),

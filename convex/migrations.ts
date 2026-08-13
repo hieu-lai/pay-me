@@ -2,6 +2,7 @@ import { Migrations } from '@convex-dev/migrations'
 
 import { components, internal } from './_generated/api'
 import type { DataModel } from './_generated/dataModel'
+import { repairPaymentProjection } from './lib/payToPaymentProjection'
 import { userSearchText } from './lib/userSearch'
 
 export const migrations = new Migrations<DataModel>(components.migrations)
@@ -60,6 +61,17 @@ export const excludeLegacyPayToAgreements = migrations.define({
 
 export const runExcludeLegacyPayToAgreements = migrations.runner(
   internal.migrations.excludeLegacyPayToAgreements,
+)
+
+export const repairMoneyRequestPaymentProjections = migrations.define({
+  table: 'moneyRequests',
+  migrateOne: async (ctx, moneyRequest) => {
+    await repairPaymentProjection(ctx, moneyRequest._id)
+  },
+})
+
+export const runRepairMoneyRequestPaymentProjections = migrations.runner(
+  internal.migrations.repairMoneyRequestPaymentProjections,
 )
 
 export const deleteAllPayToAgreementEvidence = migrations.define({
