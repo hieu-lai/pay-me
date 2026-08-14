@@ -49,6 +49,11 @@ export const payToPaymentOperationClassificationValidator = literals(
   'refused',
 )
 
+export const payToPaymentDispatchCertaintyValidator = literals(
+  'not_dispatched',
+  'possibly_dispatched',
+)
+
 export const providerPayToPaymentStates = [
   'created',
   'submitting',
@@ -80,11 +85,21 @@ export const payToPaymentAttentionValidator = v.union(
     observedState: providerPayToPaymentStateValidator,
     observedAt: v.number(),
   }),
+  v.object({
+    kind: v.literal('creation_recovery_required'),
+    reason: literals(
+      'recovery_exhausted',
+      'deterministic_failure',
+      'agreement_invalid',
+    ),
+    observedAt: v.number(),
+  }),
 )
 
 export const payToPaymentCreateErrorCategories = [
   'aborted',
   'configuration',
+  'duplicate_uid',
   'http',
   'invalid_response',
   'network',
@@ -103,6 +118,9 @@ export const payToPaymentOperationValidator = v.object({
   payToPaymentId: v.id('payToPayments'),
   operationId: v.string(),
   operationKind: payToPaymentOperationKindValidator,
+  providerUid: v.optional(v.string()),
+  apiVersion: v.optional(v.literal('20260101')),
+  dispatchCertainty: v.optional(payToPaymentDispatchCertaintyValidator),
   intentFingerprint: v.string(),
   requestFingerprint: v.optional(v.string()),
   authorizedAt: v.number(),
@@ -128,8 +146,18 @@ export const payToPaymentEvidenceValidator = v.object({
   source: payToPaymentEvidenceSourceValidator,
   intentFingerprint: v.string(),
   operationId: v.optional(v.string()),
+  operationKind: v.optional(payToPaymentOperationKindValidator),
+  providerUid: v.optional(v.string()),
+  apiVersion: v.optional(v.literal('20260101')),
+  dispatchCertainty: v.optional(payToPaymentDispatchCertaintyValidator),
+  operationAuthorizedAt: v.optional(v.number()),
+  operationLeaseExpiresAt: v.optional(v.number()),
+  operationDispatchStartedAt: v.optional(v.number()),
+  leaseToken: v.optional(v.string()),
+  requestFingerprint: v.optional(v.string()),
   classification: v.optional(payToPaymentOperationClassificationValidator),
   providerState: v.optional(v.string()),
+  providerAbsent: v.optional(v.boolean()),
   deliveryId: v.optional(v.string()),
   providerEventId: v.optional(v.string()),
   eventType: v.optional(v.string()),
@@ -137,7 +165,7 @@ export const payToPaymentEvidenceValidator = v.object({
   providerCreatedAt: v.optional(v.number()),
   errorCategory: v.optional(payToPaymentCreateErrorCategoryValidator),
   outcome: v.optional(
-    literals('confirmed', 'unknown', 'contradiction', 'failure'),
+    literals('confirmed', 'unknown', 'contradiction', 'failure', 'absence'),
   ),
   consecutiveFailures: v.optional(v.number()),
   observedAt: v.number(),

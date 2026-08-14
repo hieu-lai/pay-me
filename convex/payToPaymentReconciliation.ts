@@ -7,8 +7,11 @@ import { createEnvironmentZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import { getPaymentLifecycleByUid } from './lib/zepto/payment'
 import {
+  CREATE_RECOVERY_WINDOW_MS,
   allocatePayToPaymentOperationId,
+  payToPaymentOperationEvidenceProvenance,
   reconciliationLeaseAuthorizes,
+  requireCreationRecoveryAttention,
 } from './payToPayments'
 import {
   decidePaymentReconciliationFailure,
@@ -22,6 +25,13 @@ import {
 } from './validators/payToPayments'
 
 const LEASE_DURATION_MS = 3 * 60_000
+const CREATION_RECONCILIATION_TARGETS_MS = [
+  30_000,
+  2 * 60_000,
+  5 * 60_000,
+  10 * 60_000,
+  15 * 60_000,
+] as const
 const errorCategories = new Set<string>(payToPaymentCreateErrorCategories)
 
 function paymentErrorCategory(error: unknown): PayToPaymentCreateErrorCategory {
@@ -29,6 +39,17 @@ function paymentErrorCategory(error: unknown): PayToPaymentCreateErrorCategory {
     return error.kind as PayToPaymentCreateErrorCategory
   }
   return 'unclassified'
+}
+
+async function fingerprintGetRequest(providerUid: string) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify([1, '20260101', providerUid])),
+  )
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/, '')
 }
 
 const claimResultValidator = v.object({
@@ -115,6 +136,20 @@ export const claimWork = internalMutation({
       return null
     }
     if (
+      payment.creationState === 'creation_uncertain' &&
+      payment.creationRecovery !== undefined &&
+      args.nowMs >=
+        payment.creationRecovery.startedAt + CREATE_RECOVERY_WINDOW_MS
+    ) {
+      await requireCreationRecoveryAttention(
+        ctx,
+        payment,
+        'recovery_exhausted',
+        args.nowMs,
+      )
+      return null
+    }
+    if (
       workItem.state === 'running' &&
       workItem.leaseExpiresAt !== undefined &&
       workItem.leaseExpiresAt > args.nowMs
@@ -145,6 +180,9 @@ export const claimWork = internalMutation({
         source: 'per_uid_get',
         intentFingerprint: payment.intent.fingerprint,
         operationId: workItem.operationId,
+        ...(expiredOperation
+          ? payToPaymentOperationEvidenceProvenance(payment, expiredOperation)
+          : { providerUid: payment.providerUid }),
         classification: 'uncertain',
         errorCategory: 'unclassified',
         outcome: 'failure',
@@ -161,12 +199,17 @@ export const claimWork = internalMutation({
       }
     }
     const operationId = await allocatePayToPaymentOperationId(ctx, args.nowMs)
+    const requestFingerprint = await fingerprintGetRequest(payment.providerUid)
     const leaseExpiresAt = args.nowMs + LEASE_DURATION_MS
     await ctx.db.insert('payToPaymentOperations', {
       payToPaymentId: payment._id,
       operationId,
       operationKind: 'get',
+      providerUid: payment.providerUid,
+      apiVersion: payment.intent.apiVersion,
+      dispatchCertainty: 'possibly_dispatched',
       intentFingerprint: payment.intent.fingerprint,
+      requestFingerprint,
       authorizedAt: args.nowMs,
       leaseToken: args.leaseToken,
       leaseExpiresAt,
@@ -256,11 +299,10 @@ export const recordFailure = internalMutation({
       .query('payToPaymentOperations')
       .withIndex('by_operationId', (q) => q.eq('operationId', args.operationId))
       .unique()
-    if (
-      !payment ||
-      !workItem ||
-      !operation ||
-      !reconciliationLeaseAuthorizes({
+    if (!payment || !operation) return false
+    const currentLease =
+      workItem !== null &&
+      reconciliationLeaseAuthorizes({
         workItem,
         operation,
         payToPaymentId: args.payToPaymentId,
@@ -268,8 +310,88 @@ export const recordFailure = internalMutation({
         leaseToken: args.leaseToken,
         observedAt: args.observedAt,
       })
-    ) {
+    if (!currentLease) {
+      if (
+        operation.payToPaymentId === payment._id &&
+        operation.operationKind === 'get' &&
+        operation.leaseToken === args.leaseToken
+      ) {
+        await ctx.db.insert('payToPaymentEvidence', {
+          payToPaymentId: payment._id,
+          source: 'per_uid_get',
+          intentFingerprint: payment.intent.fingerprint,
+          operationId: operation.operationId,
+          ...payToPaymentOperationEvidenceProvenance(payment, operation),
+          classification: 'uncertain',
+          errorCategory: args.category,
+          outcome: 'failure',
+          observedAt: args.observedAt,
+        })
+      }
       return false
+    }
+    if (
+      payment.creationState === 'creation_uncertain' &&
+      payment.creationRecovery !== undefined
+    ) {
+      const recovery = payment.creationRecovery
+      const getAttempts = recovery.getAttempts + 1
+      await ctx.db.insert('payToPaymentEvidence', {
+        payToPaymentId: payment._id,
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        operationId: operation.operationId,
+        ...payToPaymentOperationEvidenceProvenance(payment, operation),
+        classification: 'uncertain',
+        errorCategory: args.category,
+        outcome: 'failure',
+        consecutiveFailures: getAttempts,
+        observedAt: args.observedAt,
+      })
+      await ctx.db.patch('payToPaymentOperations', operation._id, {
+        outcome: { classification: 'uncertain', observedAt: args.observedAt },
+      })
+      await ctx.db.patch('payToPayments', payment._id, {
+        creationRecovery: { ...recovery, getAttempts },
+      })
+      if (args.observedAt >= recovery.startedAt + CREATE_RECOVERY_WINDOW_MS) {
+        await requireCreationRecoveryAttention(
+          ctx,
+          payment,
+          'recovery_exhausted',
+          args.observedAt,
+        )
+        return true
+      }
+      const targetIndex = Math.min(
+        getAttempts - 1,
+        CREATION_RECONCILIATION_TARGETS_MS.length - 1,
+      )
+      const uncertainSince = recovery.uncertainSince ?? recovery.startedAt
+      const nextTarget = Math.min(
+        uncertainSince + CREATION_RECONCILIATION_TARGETS_MS[targetIndex],
+        recovery.startedAt + CREATE_RECOVERY_WINDOW_MS,
+      )
+      const availableAt =
+        workItem.refreshRequestedAt === undefined
+          ? Math.max(args.observedAt, nextTarget)
+          : args.observedAt
+      await ctx.db.patch('payToPaymentReconciliationWorkItems', workItem._id, {
+        state: 'queued',
+        availableAt,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        operationId: undefined,
+        refreshRequestedAt: undefined,
+        consecutiveFailures: getAttempts,
+        failureStartedAt: recovery.uncertainSince ?? recovery.startedAt,
+      })
+      await ctx.scheduler.runAfter(
+        Math.max(0, availableAt - args.observedAt),
+        internal.payToPaymentReconciliation.reconcile,
+        { payToPaymentId: payment._id },
+      )
+      return true
     }
     const { consecutiveFailures, failureStartedAt, decision } =
       reconciliationFailureProgress(payment, workItem, args.observedAt)
@@ -278,6 +400,7 @@ export const recordFailure = internalMutation({
       source: 'per_uid_get',
       intentFingerprint: payment.intent.fingerprint,
       operationId: operation.operationId,
+      ...payToPaymentOperationEvidenceProvenance(payment, operation),
       classification: 'uncertain',
       errorCategory: args.category,
       outcome: 'failure',
@@ -356,6 +479,20 @@ export const reconcile = internalAction({
         observedAt: Date.now(),
       })
     } catch (error) {
+      if (error instanceof ZeptoClientError && error.status === 404) {
+        await ctx.runMutation(internal.payToPayments.applyEvidence, {
+          payToPaymentId: args.payToPaymentId,
+          evidence: {
+            source: 'per_uid_get',
+            intentFingerprint: input.intentFingerprint,
+            providerAbsent: true,
+            operationId: input.operationId,
+            leaseToken,
+          },
+          observedAt: Date.now(),
+        })
+        return null
+      }
       const recorded: boolean = await ctx.runMutation(
         internal.payToPaymentReconciliation.recordFailure,
         {

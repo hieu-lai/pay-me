@@ -352,6 +352,15 @@ export default defineSchema({
     intent: payToPaymentIntentValidator,
     creationState: payToPaymentCreationStateValidator,
     establishedAt: v.number(),
+    creationRecovery: v.optional(
+      v.object({
+        startedAt: v.number(),
+        postAttempts: v.number(),
+        recoveryCycles: v.number(),
+        getAttempts: v.number(),
+        uncertainSince: v.optional(v.number()),
+      }),
+    ),
     provisionalLifecycleState: v.optional(providerPayToPaymentStateValidator),
     lifecycleState: v.optional(providerPayToPaymentStateValidator),
     lifecycleObservedAt: v.optional(v.number()),
@@ -391,7 +400,10 @@ export default defineSchema({
     leaseExpiresAt: v.optional(v.number()),
     operationId: v.optional(v.string()),
     completedAt: v.optional(v.number()),
-  }).index('by_payToPaymentId', ['payToPaymentId']),
+  })
+    .index('by_payToPaymentId', ['payToPaymentId'])
+    .index('by_state_and_availableAt', ['state', 'availableAt'])
+    .index('by_state_and_leaseExpiresAt', ['state', 'leaseExpiresAt']),
 
   payToPaymentReconciliationWorkItems: defineTable({
     payToPaymentId: v.id('payToPayments'),

@@ -15,7 +15,7 @@ import type {
 } from './validators/payToPayments'
 import {
   payToPaymentCreateErrorCategoryValidator,
-  payToPaymentEvidenceSourceValidator,
+  payToPaymentEvidenceValidator,
   payToPaymentIntentValidator,
   payToPaymentOperationClassificationValidator,
   payToPaymentOperationKindValidator,
@@ -47,6 +47,11 @@ const ensureResultValidator = v.union(
 )
 
 const CREATE_LEASE_DURATION_MS = 3 * 60_000
+const CREATE_OUTCOME_DEADLINE_MS = 10_000
+const IMMEDIATE_RECONCILIATION_DELAY_MS = 1_000
+export const CREATE_RECOVERY_WINDOW_MS = 15 * 60_000
+const MAX_CREATE_POST_ATTEMPTS = 3
+const MAX_CREATE_RECOVERY_CYCLES = 2
 
 type PaymentOperationKind = Infer<typeof payToPaymentOperationKindValidator>
 
@@ -213,6 +218,23 @@ export async function allocatePayToPaymentOperationId(
     if (!collision) return operationId
   }
   throw new Error('Could not allocate a unique PayTo Payment operation ID')
+}
+
+export function payToPaymentOperationEvidenceProvenance(
+  payment: Doc<'payToPayments'>,
+  operation: Doc<'payToPaymentOperations'>,
+) {
+  return {
+    operationKind: operation.operationKind,
+    providerUid: operation.providerUid ?? payment.providerUid,
+    apiVersion: operation.apiVersion ?? payment.intent.apiVersion,
+    dispatchCertainty: operation.dispatchCertainty,
+    operationAuthorizedAt: operation.authorizedAt,
+    operationLeaseExpiresAt: operation.leaseExpiresAt,
+    operationDispatchStartedAt: operation.dispatchStartedAt,
+    leaseToken: operation.leaseToken,
+    requestFingerprint: operation.requestFingerprint,
+  }
 }
 
 async function recordIntentMismatch(
@@ -409,6 +431,63 @@ async function reconciliationWorkItem(
     .unique()
 }
 
+function creationRecoveryFor(payment: Doc<'payToPayments'>, nowMs: number) {
+  return (
+    payment.creationRecovery ?? {
+      startedAt: nowMs,
+      postAttempts: 0,
+      recoveryCycles: 0,
+      getAttempts: 0,
+    }
+  )
+}
+
+export async function requireCreationRecoveryAttention(
+  ctx: MutationCtx,
+  payment: Doc<'payToPayments'>,
+  reason: 'recovery_exhausted' | 'deterministic_failure' | 'agreement_invalid',
+  observedAt: number,
+) {
+  const agreement = await ctx.db.get(
+    'payToAgreements',
+    payment.payToAgreementId,
+  )
+  if (!agreement) throw new Error('PayTo Payment invariant failed')
+  const createWork = await createWorkItem(ctx, payment._id)
+  const getWork = await reconciliationWorkItem(ctx, payment._id)
+  await ctx.db.patch('payToPayments', payment._id, {
+    creationState: 'creation_attention_required',
+    attention: {
+      kind: 'creation_recovery_required',
+      reason,
+      observedAt,
+    },
+  })
+  if (createWork) {
+    await ctx.db.patch('payToPaymentWorkItems', createWork._id, {
+      state: 'held',
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      operationId: undefined,
+    })
+  }
+  if (getWork) {
+    await ctx.db.patch('payToPaymentReconciliationWorkItems', getWork._id, {
+      state: 'stopped',
+      availableAt: observedAt,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      operationId: undefined,
+      refreshRequestedAt: undefined,
+    })
+  }
+  await projectPayerPayment(ctx, agreement, {
+    paymentStatus: agreement.paymentStatus ?? 'initiating',
+    paymentVerificationPending: true,
+    paymentAttentionRequired: true,
+  })
+}
+
 export function reconciliationLeaseAuthorizes(input: {
   workItem: Doc<'payToPaymentReconciliationWorkItems'> | null
   operation: Doc<'payToPaymentOperations'> | null
@@ -437,6 +516,11 @@ export async function makePayToPaymentReconciliationDue(
   payToPaymentId: Id<'payToPayments'>,
   observedAt: number,
 ) {
+  await ctx.scheduler.runAfter(
+    IMMEDIATE_RECONCILIATION_DELAY_MS,
+    internal.payToPaymentReconciliation.reconcile,
+    { payToPaymentId },
+  )
   const existing = await reconciliationWorkItem(ctx, payToPaymentId)
   if (!existing) {
     await ctx.db.insert('payToPaymentReconciliationWorkItems', {
@@ -519,9 +603,56 @@ export const claimCreateWork = internalMutation({
   },
   returns: v.union(createWorkValidator, v.null()),
   handler: async (ctx, args): Promise<CreateWork | null> => {
-    const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
-    if (!payment || payment.creationState !== 'create_pending') return null
-    const workItem = await createWorkItem(ctx, payment._id)
+    let payment = await ctx.db.get('payToPayments', args.payToPaymentId)
+    if (!payment) return null
+    let workItem = await createWorkItem(ctx, payment._id)
+    if (
+      workItem?.state === 'running' &&
+      workItem.leaseExpiresAt !== undefined &&
+      workItem.leaseExpiresAt <= args.nowMs
+    ) {
+      const expiredOperation =
+        workItem.operationId === undefined
+          ? null
+          : await ctx.db
+              .query('payToPaymentOperations')
+              .withIndex('by_operationId', (q) =>
+                q.eq('operationId', workItem?.operationId as string),
+              )
+              .unique()
+      if (expiredOperation?.dispatchStartedAt !== undefined) {
+        if (expiredOperation.outcome === undefined) {
+          await ctx.db.patch('payToPaymentOperations', expiredOperation._id, {
+            outcome: { classification: 'uncertain', observedAt: args.nowMs },
+          })
+        }
+        await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
+          state: 'held',
+          leaseToken: undefined,
+          leaseExpiresAt: undefined,
+        })
+        await makePayToPaymentReconciliationDue(ctx, payment._id, args.nowMs)
+        return null
+      }
+      if (expiredOperation && expiredOperation.outcome === undefined) {
+        await ctx.db.patch('payToPaymentOperations', expiredOperation._id, {
+          outcome: { classification: 'refused', observedAt: args.nowMs },
+        })
+      }
+      await ctx.db.patch('payToPayments', payment._id, {
+        creationState: 'create_pending',
+      })
+      await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
+        state: 'queued',
+        availableAt: args.nowMs,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        operationId: undefined,
+      })
+      payment = (await ctx.db.get('payToPayments', payment._id)) ?? payment
+      workItem = (await createWorkItem(ctx, payment._id)) ?? workItem
+    }
+    if (payment.creationState !== 'create_pending') return null
     if (
       !workItem ||
       workItem.state !== 'queued' ||
@@ -540,14 +671,32 @@ export const claimCreateWork = internalMutation({
     }
     if (!gate) return null
 
+    const recovery = creationRecoveryFor(payment, args.nowMs)
+    if (
+      args.nowMs >= recovery.startedAt + CREATE_RECOVERY_WINDOW_MS ||
+      recovery.postAttempts >= MAX_CREATE_POST_ATTEMPTS ||
+      recovery.recoveryCycles >= MAX_CREATE_RECOVERY_CYCLES
+    ) {
+      await requireCreationRecoveryAttention(
+        ctx,
+        payment,
+        'recovery_exhausted',
+        args.nowMs,
+      )
+      return null
+    }
+
     const budgetDate = utcBudgetDate(args.nowMs)
     const existingCount =
       gate.budgetDate === budgetDate ? (gate.reservedPaymentCount ?? 0) : 0
     const existingValue =
       gate.budgetDate === budgetDate ? (gate.reservedPaymentValueCents ?? 0) : 0
-    const reservedPaymentCount = existingCount + 1
+    const reservesPaymentCapacity = recovery.postAttempts === 0
+    const reservedPaymentCount =
+      existingCount + (reservesPaymentCapacity ? 1 : 0)
     const reservedPaymentValueCents =
-      existingValue + payment.intent.amount.cents
+      existingValue +
+      (reservesPaymentCapacity ? payment.intent.amount.cents : 0)
     if (
       (gate.dailyPaymentCountCap !== undefined &&
         reservedPaymentCount > gate.dailyPaymentCountCap) ||
@@ -575,6 +724,9 @@ export const claimCreateWork = internalMutation({
       payToPaymentId: payment._id,
       operationId,
       operationKind: 'create',
+      providerUid: payment.providerUid,
+      apiVersion: payment.intent.apiVersion,
+      dispatchCertainty: 'not_dispatched',
       intentFingerprint: payment.intent.fingerprint,
       requestFingerprint,
       authorizedAt: args.nowMs,
@@ -583,6 +735,14 @@ export const claimCreateWork = internalMutation({
     })
     await ctx.db.patch('payToPayments', payment._id, {
       creationState: 'creation_uncertain',
+      creationRecovery: {
+        ...recovery,
+        postAttempts: recovery.postAttempts + 1,
+        recoveryCycles:
+          recovery.recoveryCycles + (recovery.postAttempts === 0 ? 0 : 1),
+        getAttempts: 0,
+        uncertainSince: undefined,
+      },
     })
     await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
       state: 'running',
@@ -654,7 +814,75 @@ export const markCreateDispatchStarted = internalMutation({
     }
     await ctx.db.patch('payToPaymentOperations', operation._id, {
       dispatchStartedAt: args.observedAt,
+      dispatchCertainty: 'possibly_dispatched',
     })
+    const recovery = creationRecoveryFor(payment, args.observedAt)
+    await ctx.db.patch('payToPayments', payment._id, {
+      creationRecovery: {
+        ...recovery,
+        getAttempts: 0,
+        uncertainSince: args.observedAt,
+      },
+    })
+    await ctx.scheduler.runAfter(
+      CREATE_OUTCOME_DEADLINE_MS,
+      internal.payToPayments.expireUncommittedCreateOutcome,
+      {
+        payToPaymentId: payment._id,
+        operationId: operation.operationId,
+      },
+    )
+    return true
+  },
+})
+
+export const expireUncommittedCreateOutcome = internalMutation({
+  args: {
+    payToPaymentId: v.id('payToPayments'),
+    operationId: v.string(),
+    observedAt: v.optional(v.number()),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const observedAt = args.observedAt ?? Date.now()
+    const attempt = await createAttemptContext(ctx, args)
+    if (
+      !attempt ||
+      !attempt.workItem ||
+      attempt.workItem.operationId !== attempt.operation.operationId ||
+      attempt.operation.dispatchStartedAt === undefined ||
+      attempt.operation.outcome !== undefined ||
+      observedAt <
+        attempt.operation.dispatchStartedAt + CREATE_OUTCOME_DEADLINE_MS
+    ) {
+      return false
+    }
+    await ctx.db.patch('payToPaymentOperations', attempt.operation._id, {
+      outcome: { classification: 'uncertain', observedAt },
+    })
+    await ctx.db.insert('payToPaymentEvidence', {
+      payToPaymentId: attempt.payment._id,
+      source: 'create_response',
+      intentFingerprint: attempt.payment.intent.fingerprint,
+      operationId: attempt.operation.operationId,
+      ...payToPaymentOperationEvidenceProvenance(
+        attempt.payment,
+        attempt.operation,
+      ),
+      classification: 'uncertain',
+      errorCategory: 'unclassified',
+      observedAt,
+    })
+    await ctx.db.patch('payToPaymentWorkItems', attempt.workItem._id, {
+      state: 'held',
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+    })
+    await makePayToPaymentReconciliationDue(
+      ctx,
+      attempt.payment._id,
+      observedAt,
+    )
     return true
   },
 })
@@ -708,6 +936,7 @@ export const recordCreateResult = internalMutation({
       source: 'create_response',
       intentFingerprint: payment.intent.fingerprint,
       operationId: args.operationId,
+      ...payToPaymentOperationEvidenceProvenance(payment, operation),
       classification: 'completed',
       providerState: args.providerState,
       providerCreatedAt: args.providerCreatedAt,
@@ -754,6 +983,9 @@ export const recordCreateResult = internalMutation({
 export const recordCreateFailure = internalMutation({
   args: createAttemptArgsValidator.extend({
     errorCategory: payToPaymentCreateErrorCategoryValidator,
+    failureDisposition: v.optional(
+      v.union(v.literal('ambiguous'), v.literal('deterministic')),
+    ),
   }).fields,
   returns: v.boolean(),
   handler: async (ctx, args) => {
@@ -767,7 +999,9 @@ export const recordCreateFailure = internalMutation({
       source: 'create_response',
       intentFingerprint: payment.intent.fingerprint,
       operationId: args.operationId,
-      classification: 'uncertain',
+      ...payToPaymentOperationEvidenceProvenance(payment, operation),
+      classification:
+        args.failureDisposition === 'deterministic' ? 'refused' : 'uncertain',
       errorCategory: args.errorCategory,
       observedAt: args.observedAt,
     })
@@ -781,6 +1015,18 @@ export const recordCreateFailure = internalMutation({
       return false
     }
     if (!workItem) return false
+    if (args.failureDisposition === 'deterministic') {
+      await ctx.db.patch('payToPaymentOperations', operation._id, {
+        outcome: { classification: 'refused', observedAt: args.observedAt },
+      })
+      await requireCreationRecoveryAttention(
+        ctx,
+        payment,
+        'deterministic_failure',
+        args.observedAt,
+      )
+      return true
+    }
     await ctx.db.patch('payToPaymentOperations', operation._id, {
       outcome: { classification: 'uncertain', observedAt: args.observedAt },
     })
@@ -790,6 +1036,52 @@ export const recordCreateFailure = internalMutation({
       leaseExpiresAt: undefined,
     })
     await makePayToPaymentReconciliationDue(ctx, payment._id, args.observedAt)
+    return true
+  },
+})
+
+export const recordCreatePreDispatchFailure = internalMutation({
+  args: createAttemptArgsValidator.extend({
+    errorCategory: payToPaymentCreateErrorCategoryValidator,
+  }).fields,
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const attempt = await createAttemptContext(ctx, args)
+    if (
+      !attempt ||
+      attempt.operation.leaseToken !== args.leaseToken ||
+      attempt.operation.dispatchStartedAt !== undefined
+    ) {
+      return false
+    }
+    await ctx.db.insert('payToPaymentEvidence', {
+      payToPaymentId: attempt.payment._id,
+      source: 'create_response',
+      intentFingerprint: attempt.payment.intent.fingerprint,
+      operationId: args.operationId,
+      ...payToPaymentOperationEvidenceProvenance(
+        attempt.payment,
+        attempt.operation,
+      ),
+      classification: 'refused',
+      errorCategory: args.errorCategory,
+      observedAt: args.observedAt,
+    })
+    if (
+      !attempt.workItem ||
+      !leaseAuthorizes(attempt.workItem, args.leaseToken, args.observedAt)
+    ) {
+      return false
+    }
+    await ctx.db.patch('payToPaymentOperations', attempt.operation._id, {
+      outcome: { classification: 'refused', observedAt: args.observedAt },
+    })
+    await requireCreationRecoveryAttention(
+      ctx,
+      attempt.payment,
+      'deterministic_failure',
+      args.observedAt,
+    )
     return true
   },
 })
@@ -860,6 +1152,9 @@ export const authorizeOperation = internalMutation({
       payToPaymentId: current._id,
       operationId,
       operationKind: args.operationKind,
+      providerUid: current.providerUid,
+      apiVersion: current.intent.apiVersion,
+      dispatchCertainty: 'not_dispatched',
       intentFingerprint: current.intent.fingerprint,
       authorizedAt: args.observedAt,
     })
@@ -960,35 +1255,33 @@ export const recordOutcome = internalMutation({
   },
 })
 
+const applyEvidenceInputValidator = payToPaymentEvidenceValidator.pick(
+  'source',
+  'intentFingerprint',
+  'providerState',
+  'providerAbsent',
+  'operationId',
+  'leaseToken',
+)
+
 export const applyEvidence = internalMutation({
   args: {
     payToPaymentId: v.id('payToPayments'),
-    evidence: v.object({
-      source: payToPaymentEvidenceSourceValidator,
-      intentFingerprint: v.string(),
-      providerState: v.optional(v.string()),
-      operationId: v.optional(v.string()),
-      leaseToken: v.optional(v.string()),
-    }),
+    evidence: applyEvidenceInputValidator,
     observedAt: v.number(),
   },
   returns: intentReferenceResultValidator,
   handler: async (ctx, args) => {
-    const accepted = await acceptIntentReference(ctx, {
-      payToPaymentId: args.payToPaymentId,
-      intentFingerprint: args.evidence.intentFingerprint,
-      observedAt: args.observedAt,
-    })
-    if (accepted.kind !== 'accepted') return accepted
     const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
     if (!payment) return { kind: 'not_found' as const }
-    const agreement = await ctx.db.get(
-      'payToAgreements',
-      payment.payToAgreementId,
-    )
-    if (!agreement) throw new Error('PayTo Payment invariant failed')
 
     if (args.evidence.source !== 'per_uid_get') {
+      const accepted = await acceptIntentReference(ctx, {
+        payToPaymentId: args.payToPaymentId,
+        intentFingerprint: args.evidence.intentFingerprint,
+        observedAt: args.observedAt,
+      })
+      if (accepted.kind !== 'accepted') return accepted
       await ctx.db.insert('payToPaymentEvidence', {
         payToPaymentId: args.payToPaymentId,
         source: args.evidence.source,
@@ -1011,8 +1304,9 @@ export const applyEvidence = internalMutation({
             )
             .unique()
     const providerState = args.evidence.providerState
+    const providerAbsent = args.evidence.providerAbsent === true
     const currentLease =
-      providerState !== undefined &&
+      (providerState !== undefined || providerAbsent) &&
       reconciliationLeaseAuthorizes({
         workItem,
         operation,
@@ -1022,18 +1316,106 @@ export const applyEvidence = internalMutation({
         observedAt: args.observedAt,
       })
     if (!currentLease || !workItem || !operation) {
-      if (providerState !== undefined) {
+      if (providerState !== undefined || providerAbsent) {
         await ctx.db.insert('payToPaymentEvidence', {
           payToPaymentId: payment._id,
           source: 'per_uid_get',
-          intentFingerprint: payment.intent.fingerprint,
+          intentFingerprint: args.evidence.intentFingerprint,
           operationId: args.evidence.operationId,
+          ...(operation
+            ? payToPaymentOperationEvidenceProvenance(payment, operation)
+            : { providerUid: payment.providerUid }),
           providerState,
+          providerAbsent: providerAbsent || undefined,
           observedAt: args.observedAt,
         })
       }
       return { kind: 'not_found' as const }
     }
+
+    const accepted = await acceptIntentReference(ctx, {
+      payToPaymentId: args.payToPaymentId,
+      intentFingerprint: args.evidence.intentFingerprint,
+      observedAt: args.observedAt,
+    })
+    if (accepted.kind !== 'accepted') return accepted
+    const agreement = await ctx.db.get(
+      'payToAgreements',
+      payment.payToAgreementId,
+    )
+    if (!agreement) throw new Error('PayTo Payment invariant failed')
+
+    if (providerAbsent) {
+      await ctx.db.insert('payToPaymentEvidence', {
+        payToPaymentId: payment._id,
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        operationId: operation.operationId,
+        ...payToPaymentOperationEvidenceProvenance(payment, operation),
+        classification: 'completed',
+        providerAbsent: true,
+        outcome: 'absence',
+        observedAt: args.observedAt,
+      })
+      await ctx.db.patch('payToPaymentOperations', operation._id, {
+        outcome: { classification: 'completed', observedAt: args.observedAt },
+      })
+      const recovery = creationRecoveryFor(payment, args.observedAt)
+      const agreementStillValid =
+        agreement.lifecycleState === 'active' &&
+        agreement.lifecycleConfidence === 'confirmed'
+      const recoveryAvailable =
+        args.observedAt < recovery.startedAt + CREATE_RECOVERY_WINDOW_MS &&
+        recovery.postAttempts < MAX_CREATE_POST_ATTEMPTS &&
+        recovery.recoveryCycles < MAX_CREATE_RECOVERY_CYCLES
+      if (
+        payment.creationState === 'creation_uncertain' &&
+        agreementStillValid &&
+        recoveryAvailable
+      ) {
+        const createWork = await createWorkItem(ctx, payment._id)
+        if (!createWork) throw new Error('PayTo Payment create work missing')
+        await ctx.db.patch('payToPayments', payment._id, {
+          creationState: 'create_pending',
+        })
+        await ctx.db.patch(
+          'payToPaymentReconciliationWorkItems',
+          workItem._id,
+          {
+            state: 'stopped',
+            availableAt: args.observedAt,
+            leaseToken: undefined,
+            leaseExpiresAt: undefined,
+            operationId: undefined,
+            refreshRequestedAt: undefined,
+            consecutiveFailures: 0,
+            failureStartedAt: undefined,
+            lastSuccessAt: args.observedAt,
+          },
+        )
+        await ctx.db.patch('payToPaymentWorkItems', createWork._id, {
+          state: 'queued',
+          availableAt: args.observedAt,
+          leaseToken: undefined,
+          leaseExpiresAt: undefined,
+          operationId: undefined,
+        })
+        await projectPayerPayment(ctx, agreement, {
+          paymentStatus: 'initiating',
+          paymentVerificationPending: false,
+          paymentAttentionRequired: false,
+        })
+        return accepted
+      }
+      await requireCreationRecoveryAttention(
+        ctx,
+        payment,
+        agreementStillValid ? 'recovery_exhausted' : 'agreement_invalid',
+        args.observedAt,
+      )
+      return accepted
+    }
+    if (providerState === undefined) return { kind: 'not_found' as const }
 
     const decision = decidePaymentReconciliationSuccess({
       currentState: payment.lifecycleState,
@@ -1045,6 +1427,7 @@ export const applyEvidence = internalMutation({
       source: 'per_uid_get',
       intentFingerprint: args.evidence.intentFingerprint,
       operationId: operation.operationId,
+      ...payToPaymentOperationEvidenceProvenance(payment, operation),
       providerState,
       outcome: decision.kind,
       observedAt: args.observedAt,
@@ -1135,7 +1518,40 @@ export const applyEvidence = internalMutation({
         payToPaymentId: payment._id,
       })
     }
+    if (immediateFollowUp) {
+      await ctx.scheduler.runAfter(
+        IMMEDIATE_RECONCILIATION_DELAY_MS,
+        internal.payToPaymentReconciliation.reconcile,
+        { payToPaymentId: payment._id },
+      )
+    }
     return accepted
+  },
+})
+
+export const dispatchCreationRecoveryDue = internalMutation({
+  args: { nowMs: v.optional(v.number()) },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const nowMs = args.nowMs ?? Date.now()
+    const queued = await ctx.db
+      .query('payToPaymentWorkItems')
+      .withIndex('by_state_and_availableAt', (q) =>
+        q.eq('state', 'queued').lte('availableAt', nowMs),
+      )
+      .take(50)
+    const expired = await ctx.db
+      .query('payToPaymentWorkItems')
+      .withIndex('by_state_and_leaseExpiresAt', (q) =>
+        q.eq('state', 'running').lte('leaseExpiresAt', nowMs),
+      )
+      .take(Math.max(0, 50 - queued.length))
+    for (const workItem of [...queued, ...expired]) {
+      await ctx.scheduler.runAfter(0, internal.payToPaymentCreation.create, {
+        payToPaymentId: workItem.payToPaymentId,
+      })
+    }
+    return queued.length + expired.length
   },
 })
 

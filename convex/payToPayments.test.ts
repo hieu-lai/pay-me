@@ -668,7 +668,7 @@ describe('PayTo Payment immutable intent', () => {
       t.mutation(internal.payToPayments.applyEvidence, {
         payToPaymentId: payToPayment._id,
         evidence: {
-          source: 'per_uid_get',
+          source: 'webhook',
           intentFingerprint: 'different-fingerprint',
         },
         observedAt: 4_000,
@@ -899,6 +899,207 @@ describe('PayTo Payment create operation', () => {
     expect(durable).toMatchObject({ authorizedAt: 4_000 })
     expect(durable).not.toHaveProperty('dispatchStartedAt')
     expect(durable).not.toHaveProperty('outcome')
+  })
+
+  test('recovers an expired pre-dispatch lease with the same permanent UID', async () => {
+    const { t, payToPaymentId } = await establishPayment()
+    const first = await t.mutation(internal.payToPayments.claimCreateWork, {
+      payToPaymentId,
+      leaseToken: 'crashed-before-dispatch',
+      nowMs: 4_000,
+    })
+    if (!first) throw new Error('Expected first create operation')
+
+    const recovered = await t.mutation(internal.payToPayments.claimCreateWork, {
+      payToPaymentId,
+      leaseToken: 'safe-recovery-worker',
+      nowMs: first.leaseExpiresAt,
+    })
+
+    expect(recovered).toMatchObject({
+      providerUid: first.providerUid,
+      agreementProviderUid: first.agreementProviderUid,
+      leaseToken: 'safe-recovery-worker',
+    })
+    expect(recovered?.operationId).not.toBe(first.operationId)
+    await expect(
+      t.run(async (ctx) => ({
+        payment: await ctx.db.get('payToPayments', payToPaymentId),
+        operations: await ctx.db
+          .query('payToPaymentOperations')
+          .withIndex('by_payToPaymentId_and_authorizedAt', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .take(4),
+      })),
+    ).resolves.toMatchObject({
+      payment: {
+        creationRecovery: {
+          postAttempts: 2,
+          recoveryCycles: 1,
+        },
+      },
+      operations: [
+        { outcome: { classification: 'refused' } },
+        { operationKind: 'create', apiVersion: '20260101' },
+      ],
+    })
+  })
+
+  test('starts GET recovery when a worker crashes after provider acceptance but before outcome commit', async () => {
+    const { t, payToPaymentId } = await establishPayment()
+    const first = await t.mutation(internal.payToPayments.claimCreateWork, {
+      payToPaymentId,
+      leaseToken: 'crashed-after-dispatch',
+      nowMs: 4_000,
+    })
+    if (!first) throw new Error('Expected create operation')
+    await t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+      payToPaymentId,
+      operationId: first.operationId,
+      leaseToken: 'crashed-after-dispatch',
+      observedAt: 4_001,
+    })
+
+    await expect(
+      t.mutation(internal.payToPayments.expireUncommittedCreateOutcome, {
+        payToPaymentId,
+        operationId: first.operationId,
+        observedAt: 14_000,
+      }),
+    ).resolves.toBe(false)
+    await expect(
+      t.mutation(internal.payToPayments.expireUncommittedCreateOutcome, {
+        payToPaymentId,
+        operationId: first.operationId,
+        observedAt: 14_001,
+      }),
+    ).resolves.toBe(true)
+    await expect(
+      t.run(async (ctx) => ({
+        operation: await ctx.db
+          .query('payToPaymentOperations')
+          .withIndex('by_operationId', (q) =>
+            q.eq('operationId', first.operationId),
+          )
+          .unique(),
+        reconciliation: await ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .unique(),
+      })),
+    ).resolves.toMatchObject({
+      operation: { outcome: { classification: 'uncertain' } },
+      reconciliation: { state: 'queued', availableAt: 14_001 },
+    })
+  })
+
+  test('retains accepted provider evidence when the worker vanishes before commit', async () => {
+    const setup = await establishPayment()
+    await setup.t.run(async (ctx) => {
+      const gate = await ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'sandbox'))
+        .unique()
+      if (!gate) throw new Error('Expected runtime gate')
+      await ctx.db.patch(gate._id, { mode: 'reconcile_only' })
+    })
+    await setup.t.finishAllScheduledFunctions(() => {})
+    await setup.t.run(async (ctx) => {
+      const gate = await ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'sandbox'))
+        .unique()
+      if (!gate) throw new Error('Expected runtime gate')
+      await ctx.db.patch(gate._id, { mode: 'enabled_for_new_confirmations' })
+    })
+
+    let providerAccepted!: () => void
+    const accepted = new Promise<void>((resolve) => {
+      providerAccepted = resolve
+    })
+    let releaseResponse!: () => void
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      const body = (await new Request(request).json()) as {
+        uid: string
+        agreement_uid: string
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          releaseResponse = () => {
+            controller.enqueue(
+              new TextEncoder().encode(
+                JSON.stringify({ data: createdPaymentResponseBody(body) }),
+              ),
+            )
+            controller.close()
+          }
+        },
+      })
+      providerAccepted()
+      return new Response(stream, {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+
+    const worker = setup.t.action(internal.payToPaymentCreation.create, {
+      payToPaymentId: setup.payToPaymentId,
+    })
+    await accepted
+    const operation = await setup.t.run(async (ctx) =>
+      ctx.db
+        .query('payToPaymentOperations')
+        .withIndex('by_payToPaymentId_and_authorizedAt', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .order('desc')
+        .first(),
+    )
+    if (!operation?.dispatchStartedAt) {
+      throw new Error('Expected dispatched create operation')
+    }
+    await expect(
+      setup.t.mutation(internal.payToPayments.expireUncommittedCreateOutcome, {
+        payToPaymentId: setup.payToPaymentId,
+        operationId: operation.operationId,
+        observedAt: operation.dispatchStartedAt + 9_999,
+      }),
+    ).resolves.toBe(false)
+    await expect(
+      setup.t.mutation(internal.payToPayments.expireUncommittedCreateOutcome, {
+        payToPaymentId: setup.payToPaymentId,
+        operationId: operation.operationId,
+        observedAt: operation.dispatchStartedAt + 10_000,
+      }),
+    ).resolves.toBe(true)
+    releaseResponse()
+    await worker
+
+    await expect(
+      setup.t.run(async (ctx) => ({
+        payment: await ctx.db.get('payToPayments', setup.payToPaymentId),
+        evidence: await ctx.db
+          .query('payToPaymentEvidence')
+          .withIndex('by_payToPaymentId_and_observedAt', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .take(4),
+      })),
+    ).resolves.toMatchObject({
+      payment: { creationState: 'creation_uncertain' },
+      evidence: expect.arrayContaining([
+        expect.objectContaining({
+          operationId: operation.operationId,
+          providerUid: expect.any(String),
+          dispatchCertainty: 'possibly_dispatched',
+          classification: 'completed',
+          providerState: 'pending',
+        }),
+      ]),
+    })
   })
 
   test('refuses create authorization when leased capacity cannot be reserved', async () => {
@@ -1133,6 +1334,111 @@ describe('PayTo Payment create operation', () => {
     })
   })
 
+  test('reconciles when the provider accepts but its response is lost before outcome commit', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error('response disconnected'))
+          },
+        }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    const { t, payToPaymentId } = await establishPayment()
+
+    await t.finishAllScheduledFunctions(() => {})
+
+    expect(fetch).toHaveBeenCalledOnce()
+    await expect(
+      t.run(async (ctx) => ({
+        payment: await ctx.db.get('payToPayments', payToPaymentId),
+        operation: await ctx.db
+          .query('payToPaymentOperations')
+          .withIndex('by_payToPaymentId_and_authorizedAt', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .first(),
+        reconciliation: await ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .unique(),
+      })),
+    ).resolves.toMatchObject({
+      payment: { creationState: 'creation_uncertain' },
+      operation: {
+        dispatchStartedAt: expect.any(Number),
+        outcome: { classification: 'uncertain' },
+      },
+      reconciliation: { state: 'queued' },
+    })
+  })
+
+  test('classifies duplicate UID as ambiguity and schedules same-UID GET', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ errors: [{ code: 'ZPPAY00' }] }), {
+        status: 422,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { t, payToPaymentId } = await establishPayment()
+
+    await t.finishAllScheduledFunctions(() => {})
+
+    expect(fetch).toHaveBeenCalledOnce()
+    await expect(
+      t.run(async (ctx) => ({
+        evidence: await ctx.db
+          .query('payToPaymentEvidence')
+          .withIndex('by_payToPaymentId_and_observedAt', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .take(2),
+        reconciliation: await ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', payToPaymentId),
+          )
+          .unique(),
+      })),
+    ).resolves.toMatchObject({
+      evidence: [
+        {
+          classification: 'uncertain',
+          errorCategory: 'duplicate_uid',
+        },
+      ],
+      reconciliation: { state: 'queued' },
+    })
+  })
+
+  test('requires attention after a deterministic dispatched rejection', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ errors: [{ code: 'invalid_terms' }] }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { t, payToAgreementId } = await establishPayment()
+
+    await t.finishAllScheduledFunctions(() => {})
+
+    await expect(paymentState(t, payToAgreementId)).resolves.toMatchObject({
+      agreement: { paymentAttentionRequired: true },
+      payments: [
+        {
+          creationState: 'creation_attention_required',
+          attention: {
+            kind: 'creation_recovery_required',
+            reason: 'deterministic_failure',
+          },
+        },
+      ],
+    })
+  })
+
   test.each([
     ['a mismatched UID', { uid: 'another-payment' }],
     ['a malformed success body', { created_at: 'not-a-date' }],
@@ -1238,6 +1544,366 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
           providerUid: payment.providerUid,
           creationState: 'provider_established',
           lifecycleState: 'pending',
+        },
+      ],
+    })
+  })
+
+  test('authoritative absence unlocks only two same-UID recovery POSTs', async () => {
+    const setup = await establishPayment()
+    await setup.t.run(async (ctx) => {
+      const gate = await ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'sandbox'))
+        .unique()
+      if (!gate) throw new Error('Expected runtime gate')
+      await ctx.db.patch(gate._id, { mode: 'reconcile_only' })
+    })
+    await setup.t.finishAllScheduledFunctions(() => {})
+    await setup.t.run(async (ctx) => {
+      const gate = await ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'sandbox'))
+        .unique()
+      if (!gate) throw new Error('Expected runtime gate')
+      await ctx.db.patch(gate._id, { mode: 'enabled_for_new_confirmations' })
+    })
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+
+    let nowMs = 4_000
+    const expectedUid = payment.providerUid
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      const create = await setup.t.mutation(
+        internal.payToPayments.claimCreateWork,
+        {
+          payToPaymentId: setup.payToPaymentId,
+          leaseToken: `create-${cycle}`,
+          nowMs,
+        },
+      )
+      if (!create) throw new Error(`Expected create cycle ${cycle}`)
+      expect(create.providerUid).toBe(expectedUid)
+      await expect(
+        setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: create.operationId,
+          leaseToken: `create-${cycle}`,
+          observedAt: nowMs + 1,
+        }),
+      ).resolves.toBe(true)
+      await expect(
+        setup.t.mutation(internal.payToPayments.recordCreateFailure, {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: create.operationId,
+          leaseToken: `create-${cycle}`,
+          errorCategory: cycle === 0 ? 'duplicate_uid' : 'timeout',
+          observedAt: nowMs + 2,
+        }),
+      ).resolves.toBe(true)
+      const get = await setup.t.mutation(
+        internal.payToPaymentReconciliation.claimWork,
+        {
+          payToPaymentId: setup.payToPaymentId,
+          leaseToken: `get-${cycle}`,
+          nowMs: nowMs + 2,
+        },
+      )
+      if (!get) throw new Error(`Expected GET cycle ${cycle}`)
+      await setup.t.mutation(internal.payToPayments.applyEvidence, {
+        payToPaymentId: setup.payToPaymentId,
+        evidence: {
+          source: 'per_uid_get',
+          intentFingerprint: payment.intent.fingerprint,
+          providerAbsent: true,
+          operationId: get.operationId,
+          leaseToken: `get-${cycle}`,
+        },
+        observedAt: nowMs + 3,
+      })
+      nowMs += 1_000
+    }
+
+    await expect(
+      paymentState(setup.t, setup.payToAgreementId),
+    ).resolves.toMatchObject({
+      agreement: {
+        paymentStatus: 'initiating',
+        paymentAttentionRequired: true,
+      },
+      payments: [
+        {
+          providerUid: expectedUid,
+          creationState: 'creation_attention_required',
+          creationRecovery: { postAttempts: 3, recoveryCycles: 2 },
+          attention: {
+            kind: 'creation_recovery_required',
+            reason: 'recovery_exhausted',
+          },
+        },
+      ],
+    })
+  })
+
+  test('ends unresolved creation recovery at fifteen minutes', async () => {
+    const setup = await establishPayment()
+    const create = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'uncertain-create',
+        nowMs: 4_000,
+      },
+    )
+    if (!create) throw new Error('Expected create work')
+    await setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: create.operationId,
+      leaseToken: 'uncertain-create',
+      observedAt: 4_001,
+    })
+    await setup.t.mutation(internal.payToPayments.recordCreateFailure, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: create.operationId,
+      leaseToken: 'uncertain-create',
+      errorCategory: 'timeout',
+      observedAt: 4_002,
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentReconciliation.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'too-late-get',
+        nowMs: 4_000 + 15 * 60_000,
+      }),
+    ).resolves.toBeNull()
+    await expect(
+      paymentState(setup.t, setup.payToAgreementId),
+    ).resolves.toMatchObject({
+      agreement: { paymentAttentionRequired: true },
+      payments: [
+        {
+          creationState: 'creation_attention_required',
+          attention: {
+            kind: 'creation_recovery_required',
+            reason: 'recovery_exhausted',
+          },
+        },
+      ],
+    })
+  })
+
+  test('uses the 30-second then 2-minute uncertainty cadence', async () => {
+    const setup = await establishPayment()
+    const create = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'cadence-create',
+        nowMs: 4_000,
+      },
+    )
+    if (!create) throw new Error('Expected create work')
+    await setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: create.operationId,
+      leaseToken: 'cadence-create',
+      observedAt: 4_001,
+    })
+    await setup.t.mutation(internal.payToPayments.recordCreateFailure, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: create.operationId,
+      leaseToken: 'cadence-create',
+      errorCategory: 'timeout',
+      observedAt: 4_002,
+    })
+
+    for (const [attempt, nowMs, expectedNextAt] of [
+      [1, 4_002, 34_001],
+      [2, 34_001, 124_001],
+      [3, 124_001, 304_001],
+      [4, 304_001, 604_001],
+    ] as const) {
+      const get = await setup.t.mutation(
+        internal.payToPaymentReconciliation.claimWork,
+        {
+          payToPaymentId: setup.payToPaymentId,
+          leaseToken: `cadence-get-${attempt}`,
+          nowMs,
+        },
+      )
+      if (!get) throw new Error(`Expected cadence GET ${attempt}`)
+      await setup.t.mutation(
+        internal.payToPaymentReconciliation.recordFailure,
+        {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: get.operationId,
+          leaseToken: `cadence-get-${attempt}`,
+          category: 'network',
+          observedAt: nowMs + 1,
+        },
+      )
+      await expect(
+        setup.t.run(async (ctx) =>
+          ctx.db
+            .query('payToPaymentReconciliationWorkItems')
+            .withIndex('by_payToPaymentId', (q) =>
+              q.eq('payToPaymentId', setup.payToPaymentId),
+            )
+            .unique(),
+        ),
+      ).resolves.toMatchObject({
+        state: 'queued',
+        availableAt: expectedNextAt,
+      })
+    }
+  })
+
+  test('retains a stale GET failure without changing recovery state', async () => {
+    const setup = await establishProviderPayment()
+    const due = await setup.t.run(async (ctx) =>
+      ctx.db
+        .query('payToPaymentReconciliationWorkItems')
+        .withIndex('by_payToPaymentId', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .unique(),
+    )
+    if (!due) throw new Error('Expected reconciliation work')
+    const get = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'stale-get',
+        nowMs: due.availableAt,
+      },
+    )
+    if (!get) throw new Error('Expected GET work')
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.applyEvidence, {
+        payToPaymentId: setup.payToPaymentId,
+        evidence: {
+          source: 'per_uid_get',
+          intentFingerprint: 'stale-mismatched-fingerprint',
+          providerState: 'pending',
+          operationId: get.operationId,
+          leaseToken: 'stale-get',
+        },
+        observedAt: due.availableAt + 3 * 60_000 + 1,
+      }),
+    ).resolves.toEqual({ kind: 'not_found' })
+    const paymentAfterStaleEvidence = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    expect(paymentAfterStaleEvidence).toMatchObject({
+      creationState: 'provider_established',
+    })
+    expect(paymentAfterStaleEvidence?.attention).toBeUndefined()
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentReconciliation.recordFailure, {
+        payToPaymentId: setup.payToPaymentId,
+        operationId: get.operationId,
+        leaseToken: 'stale-get',
+        category: 'timeout',
+        observedAt: due.availableAt + 3 * 60_000 + 1,
+      }),
+    ).resolves.toBe(false)
+    await expect(
+      setup.t.run(async (ctx) => ({
+        work: await ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+        evidence: await ctx.db
+          .query('payToPaymentEvidence')
+          .withIndex('by_payToPaymentId_and_observedAt', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .order('desc')
+          .first(),
+      })),
+    ).resolves.toMatchObject({
+      work: { state: 'running', operationId: get.operationId },
+      evidence: {
+        operationId: get.operationId,
+        classification: 'uncertain',
+        errorCategory: 'timeout',
+      },
+    })
+  })
+
+  test('turns a same-UID 404 GET into safe create recovery', async () => {
+    const setup = await establishPayment()
+    await setup.t.run(async (ctx) => {
+      const gate = await ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'sandbox'))
+        .unique()
+      if (!gate) throw new Error('Expected runtime gate')
+      await ctx.db.patch(gate._id, { mode: 'reconcile_only' })
+    })
+    await setup.t.finishAllScheduledFunctions(() => {})
+    await setup.t.run(async (ctx) => {
+      const gate = await ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'sandbox'))
+        .unique()
+      if (!gate) throw new Error('Expected runtime gate')
+      await ctx.db.patch(gate._id, { mode: 'enabled_for_new_confirmations' })
+    })
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const nowMs = 10_000
+    vi.spyOn(Date, 'now').mockReturnValue(nowMs + 3)
+    const create = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: '404-create',
+        nowMs,
+      },
+    )
+    if (!create) throw new Error('Expected create work')
+    await setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: create.operationId,
+      leaseToken: '404-create',
+      observedAt: nowMs + 1,
+    })
+    await setup.t.mutation(internal.payToPayments.recordCreateFailure, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: create.operationId,
+      leaseToken: '404-create',
+      errorCategory: 'timeout',
+      observedAt: nowMs + 2,
+    })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ errors: [{ code: 'not_found' }] }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await setup.t.action(internal.payToPaymentReconciliation.reconcile, {
+      payToPaymentId: setup.payToPaymentId,
+    })
+
+    await expect(
+      paymentState(setup.t, setup.payToAgreementId),
+    ).resolves.toMatchObject({
+      payments: [
+        {
+          providerUid: payment.providerUid,
+          creationState: 'create_pending',
+          creationRecovery: { postAttempts: 1, recoveryCycles: 0 },
         },
       ],
     })

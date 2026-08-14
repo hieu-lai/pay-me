@@ -13,11 +13,49 @@ const createErrorCategories = new Set<string>(payToPaymentCreateErrorCategories)
 function errorCategory(error: unknown): PayToPaymentCreateErrorCategory {
   if (
     error instanceof ZeptoClientError &&
+    error.status === 422 &&
+    duplicateUidCode(error.body)
+  ) {
+    return 'duplicate_uid'
+  }
+  if (
+    error instanceof ZeptoClientError &&
     createErrorCategories.has(error.kind)
   ) {
     return error.kind as PayToPaymentCreateErrorCategory
   }
   return 'unclassified'
+}
+
+function duplicateUidCode(body: unknown) {
+  if (typeof body !== 'object' || body === null) return false
+  const record = body as Record<string, unknown>
+  if (record.code === 'ZPPAY00') return true
+  if (typeof record.error === 'object' && record.error !== null) {
+    if ((record.error as Record<string, unknown>).code === 'ZPPAY00') {
+      return true
+    }
+  }
+  return (
+    Array.isArray(record.errors) &&
+    record.errors.some(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        (item as Record<string, unknown>).code === 'ZPPAY00',
+    )
+  )
+}
+
+function deterministicCreateFailure(error: unknown) {
+  return (
+    error instanceof ZeptoClientError &&
+    error.kind === 'http' &&
+    error.status !== undefined &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    errorCategory(error) !== 'duplicate_uid'
+  )
 }
 
 export const create = internalAction({
@@ -35,6 +73,25 @@ export const create = internalAction({
     )
     if (!input) return null
 
+    let client: ReturnType<typeof createEnvironmentZeptoClientFromEnv>
+    try {
+      client = createEnvironmentZeptoClientFromEnv(input.environment, {
+        maxRetries: 0,
+      })
+    } catch (error) {
+      await ctx.runMutation(
+        internal.payToPayments.recordCreatePreDispatchFailure,
+        {
+          payToPaymentId: input.payToPaymentId,
+          operationId: input.operationId,
+          leaseToken,
+          errorCategory: errorCategory(error),
+          observedAt: Date.now(),
+        },
+      )
+      return null
+    }
+
     const dispatchAuthorized: boolean = await ctx.runMutation(
       internal.payToPayments.markCreateDispatchStarted,
       {
@@ -47,9 +104,6 @@ export const create = internalAction({
     if (!dispatchAuthorized) return null
 
     try {
-      const client = createEnvironmentZeptoClientFromEnv(input.environment, {
-        maxRetries: 0,
-      })
       const created = await createPayment(client, {
         providerUid: input.providerUid,
         agreementProviderUid: input.agreementProviderUid,
@@ -70,6 +124,9 @@ export const create = internalAction({
         operationId: input.operationId,
         leaseToken,
         errorCategory: errorCategory(error),
+        failureDisposition: deterministicCreateFailure(error)
+          ? 'deterministic'
+          : 'ambiguous',
         observedAt: Date.now(),
       })
     }

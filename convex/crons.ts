@@ -18,4 +18,11 @@ crons.interval(
   {},
 )
 
+crons.interval(
+  'dispatch due PayTo Payment creation recovery',
+  { seconds: 30 },
+  internal.payToPayments.dispatchCreationRecoveryDue,
+  {},
+)
+
 export default crons
