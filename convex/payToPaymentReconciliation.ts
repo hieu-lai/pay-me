@@ -473,6 +473,8 @@ export const reconcile = internalAction({
           source: 'per_uid_get',
           intentFingerprint: input.intentFingerprint,
           providerState: result.providerState,
+          providerFailureCode: result.failure?.code,
+          providerFailureRetryable: result.failure?.retryable,
           operationId: input.operationId,
           leaseToken,
         },

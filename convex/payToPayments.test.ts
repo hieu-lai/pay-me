@@ -1,11 +1,13 @@
 /// <reference types="vite/client" />
 
 import workpoolTest from '@convex-dev/workpool/test'
+import rateLimiterTest from '@convex-dev/rate-limiter/test'
 import { convexTest } from 'convex-test'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
+import { consumePaymentRetryEndpointCall } from './lib/paymentRetryRateLimiter'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -14,6 +16,8 @@ async function setupAgreement() {
   const t = convexTest(schema, modules)
   workpoolTest.register(t, 'agreementCreationWorkpool')
   workpoolTest.register(t, 'paymentCreationWorkpool')
+  workpoolTest.register(t, 'paymentRetryWorkpool')
+  rateLimiterTest.register(t, 'paymentRetryRateLimiter')
   const ids = await t.run(async (ctx) => {
     const requesterUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'https://clerk.example.test|payment_requester',
@@ -218,6 +222,81 @@ async function establishProviderPayment() {
     observedAt: 4_002,
   })
   return setup
+}
+
+async function prepareFirstRetry(
+  setup: Awaited<ReturnType<typeof establishProviderPayment>>,
+  leaseToken: string,
+) {
+  const payment = await setup.t.run((ctx) =>
+    ctx.db.get('payToPayments', setup.payToPaymentId),
+  )
+  if (!payment) throw new Error('Expected PayTo Payment')
+  const firstGet = await setup.t.mutation(
+    internal.payToPaymentReconciliation.claimWork,
+    {
+      payToPaymentId: setup.payToPaymentId,
+      leaseToken: `${leaseToken}-first-get`,
+      nowMs: 4_002,
+    },
+  )
+  if (!firstGet) throw new Error('Expected first failed GET')
+  await setup.t.mutation(internal.payToPayments.applyEvidence, {
+    payToPaymentId: setup.payToPaymentId,
+    evidence: {
+      source: 'per_uid_get',
+      intentFingerprint: payment.intent.fingerprint,
+      providerState: 'failed',
+      providerFailureCode: 'AB01',
+      providerFailureRetryable: true,
+      operationId: firstGet.operationId,
+      leaseToken: `${leaseToken}-first-get`,
+    },
+    observedAt: 5_000,
+  })
+  const dueAt = 5_000 + 15 * 60_000
+  await setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+    payToPaymentId: setup.payToPaymentId,
+    leaseToken: `${leaseToken}-refresh`,
+    nowMs: dueAt,
+  })
+  const freshGet = await setup.t.mutation(
+    internal.payToPaymentReconciliation.claimWork,
+    {
+      payToPaymentId: setup.payToPaymentId,
+      leaseToken: `${leaseToken}-fresh-get`,
+      nowMs: dueAt,
+    },
+  )
+  if (!freshGet) throw new Error('Expected fresh failed GET')
+  await setup.t.mutation(internal.payToPayments.applyEvidence, {
+    payToPaymentId: setup.payToPaymentId,
+    evidence: {
+      source: 'per_uid_get',
+      intentFingerprint: payment.intent.fingerprint,
+      providerState: 'failed',
+      providerFailureCode: 'AB01',
+      providerFailureRetryable: true,
+      operationId: freshGet.operationId,
+      leaseToken: `${leaseToken}-fresh-get`,
+    },
+    observedAt: dueAt + 1,
+  })
+  return { payment, dueAt }
+}
+
+async function claimFirstRetry(
+  setup: Awaited<ReturnType<typeof establishProviderPayment>>,
+  leaseToken: string,
+) {
+  const { payment, dueAt } = await prepareFirstRetry(setup, leaseToken)
+  const retry = await setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+    payToPaymentId: setup.payToPaymentId,
+    leaseToken,
+    nowMs: dueAt + 1,
+  })
+  if (!retry) throw new Error('Expected retry claim')
+  return { payment, retry, dueAt }
 }
 
 async function establishExistingProviderPayment(
@@ -1483,6 +1562,727 @@ describe('PayTo Payment create operation', () => {
 })
 
 describe('PayTo Payment authoritative lifecycle reconciliation', () => {
+  test.each([
+    [0, 15 * 60_000, 1],
+    [1, 4 * 60 * 60_000, 2],
+    [2, 24 * 60 * 60_000, 3],
+  ] as const)(
+    'uses the fixed retry delay after %i accepted retries',
+    async (acceptedRetries, delayMs, retryNumber) => {
+      const setup = await establishProviderPayment()
+      const payment = await setup.t.run((ctx) =>
+        ctx.db.get('payToPayments', setup.payToPaymentId),
+      )
+      if (!payment) throw new Error('Expected PayTo Payment')
+      await setup.t.run(async (ctx) => {
+        for (let index = 0; index < acceptedRetries; index += 1) {
+          await ctx.db.insert('payToPaymentOperations', {
+            payToPaymentId: setup.payToPaymentId,
+            operationId: `accepted-retry-${index}`,
+            operationKind: 'retry',
+            providerUid: payment.providerUid,
+            apiVersion: '20260101',
+            dispatchCertainty: 'possibly_dispatched',
+            intentFingerprint: payment.intent.fingerprint,
+            authorizedAt: 4_100 + index,
+            dispatchStartedAt: 4_101 + index,
+            outcome: { classification: 'completed', observedAt: 4_102 + index },
+          })
+        }
+      })
+      const get = await setup.t.mutation(
+        internal.payToPaymentReconciliation.claimWork,
+        {
+          payToPaymentId: setup.payToPaymentId,
+          leaseToken: `timing-get-${acceptedRetries}`,
+          nowMs: 4_002,
+        },
+      )
+      if (!get) throw new Error('Expected failed GET')
+      await setup.t.mutation(internal.payToPayments.applyEvidence, {
+        payToPaymentId: setup.payToPaymentId,
+        evidence: {
+          source: 'per_uid_get',
+          intentFingerprint: payment.intent.fingerprint,
+          providerState: 'failed',
+          providerFailureCode: 'AB01',
+          providerFailureRetryable: true,
+          operationId: get.operationId,
+          leaseToken: `timing-get-${acceptedRetries}`,
+        },
+        observedAt: 5_000,
+      })
+
+      await expect(
+        setup.t.run((ctx) =>
+          ctx.db
+            .query('payToPaymentRetryWorkItems')
+            .withIndex('by_payToPaymentId', (q) =>
+              q.eq('payToPaymentId', setup.payToPaymentId),
+            )
+            .unique(),
+        ),
+      ).resolves.toMatchObject({
+        retryNumber,
+        availableAt: 5_000 + delayMs,
+      })
+    },
+  )
+
+  test('allocates only one retry operation under concurrent claims', async () => {
+    const setup = await establishProviderPayment()
+    await prepareFirstRetry(setup, 'concurrent-retry')
+    const results = await Promise.all([
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'concurrent-a',
+        nowMs: 5_000 + 15 * 60_000 + 1,
+      }),
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'concurrent-b',
+        nowMs: 5_000 + 15 * 60_000 + 1,
+      }),
+    ])
+    expect(results.filter(Boolean)).toHaveLength(1)
+  })
+
+  test('locks a stale retry worker after dispatch instead of replaying it', async () => {
+    const setup = await establishProviderPayment()
+    const { retry, dueAt } = await claimFirstRetry(setup, 'stale-retry')
+    await setup.t.mutation(internal.payToPaymentRetry.markDispatchStarted, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: retry.operationId,
+      leaseToken: 'stale-retry',
+      observedAt: dueAt + 2,
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'replacement-retry',
+        nowMs: retry.leaseExpiresAt,
+      }),
+    ).resolves.toBeNull()
+    await expect(
+      setup.t.run(async (ctx) => ({
+        operation: await ctx.db
+          .query('payToPaymentOperations')
+          .withIndex('by_operationId', (q) =>
+            q.eq('operationId', retry.operationId),
+          )
+          .unique(),
+        work: await ctx.db
+          .query('payToPaymentRetryWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+      })),
+    ).resolves.toMatchObject({
+      operation: { outcome: { classification: 'uncertain' } },
+      work: { state: 'locked' },
+    })
+  })
+
+  test('stops before a seventh retry-endpoint call', async () => {
+    const setup = await establishProviderPayment()
+    const { payment, dueAt } = await prepareFirstRetry(setup, 'call-budget')
+    await setup.t.run(async (ctx) => {
+      for (let index = 0; index < 6; index += 1) {
+        await ctx.db.insert('payToPaymentOperations', {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: `refused-retry-${index}`,
+          operationKind: 'retry',
+          providerUid: payment.providerUid,
+          apiVersion: '20260101',
+          dispatchCertainty: 'possibly_dispatched',
+          intentFingerprint: payment.intent.fingerprint,
+          authorizedAt: dueAt - 100 + index,
+          dispatchStartedAt: dueAt - 99 + index,
+          outcome: {
+            classification: 'refused',
+            observedAt: dueAt - 98 + index,
+          },
+        })
+      }
+      for (let index = 0; index < 10; index += 1) {
+        await ctx.db.insert('payToPaymentOperations', {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: `later-get-${index}`,
+          operationKind: 'get',
+          providerUid: payment.providerUid,
+          apiVersion: '20260101',
+          dispatchCertainty: 'possibly_dispatched',
+          intentFingerprint: payment.intent.fingerprint,
+          authorizedAt: dueAt + index,
+          dispatchStartedAt: dueAt + index,
+          outcome: {
+            classification: 'completed',
+            observedAt: dueAt + index,
+          },
+        })
+      }
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'seventh-call',
+        nowMs: dueAt + 1,
+      }),
+    ).resolves.toBeNull()
+  })
+
+  test('waits when newer reconciliation work overlaps a ready retry', async () => {
+    const setup = await establishProviderPayment()
+    const { dueAt } = await prepareFirstRetry(setup, 'overlapping-get')
+    await setup.t.run(async (ctx) => {
+      const work = await ctx.db
+        .query('payToPaymentReconciliationWorkItems')
+        .withIndex('by_payToPaymentId', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .unique()
+      if (!work) throw new Error('Expected reconciliation work')
+      await ctx.db.patch('payToPaymentReconciliationWorkItems', work._id, {
+        state: 'queued',
+        availableAt: dueAt + 1,
+      })
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'overlapping-retry',
+        nowMs: dueAt + 1,
+      }),
+    ).resolves.toBeNull()
+  })
+
+  test('stops after three accepted-or-possibly-accepted retry submissions', async () => {
+    const setup = await establishProviderPayment()
+    const { payment, dueAt } = await prepareFirstRetry(
+      setup,
+      'submission-budget',
+    )
+    await setup.t.run(async (ctx) => {
+      for (let index = 0; index < 3; index += 1) {
+        await ctx.db.insert('payToPaymentOperations', {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: `possibly-accepted-retry-${index}`,
+          operationKind: 'retry',
+          providerUid: payment.providerUid,
+          apiVersion: '20260101',
+          dispatchCertainty: 'possibly_dispatched',
+          intentFingerprint: payment.intent.fingerprint,
+          authorizedAt: dueAt - 100 + index,
+          dispatchStartedAt: dueAt - 99 + index,
+          outcome: {
+            classification: 'uncertain',
+            observedAt: dueAt - 98 + index,
+          },
+        })
+      }
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'fourth-submission',
+        nowMs: dueAt + 1,
+      }),
+    ).resolves.toBeNull()
+  })
+
+  test('stops when the conservative rolling ledger already contains five submissions', async () => {
+    const setup = await establishProviderPayment()
+    const { payment, dueAt } = await prepareFirstRetry(
+      setup,
+      'rolling-submission-budget',
+    )
+    await setup.t.run(async (ctx) => {
+      for (let index = 0; index < 2; index += 1) {
+        await ctx.db.insert('payToPaymentOperations', {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: `worst-case-original-${index}`,
+          operationKind: 'create',
+          providerUid: payment.providerUid,
+          apiVersion: '20260101',
+          dispatchCertainty: 'possibly_dispatched',
+          intentFingerprint: payment.intent.fingerprint,
+          authorizedAt: dueAt - 1_000 + index,
+          dispatchStartedAt: dueAt - 999 + index,
+          outcome: {
+            classification: 'completed',
+            observedAt: dueAt - 998 + index,
+          },
+        })
+      }
+      for (let index = 0; index < 2; index += 1) {
+        await ctx.db.insert('payToPaymentOperations', {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: `worst-case-retry-${index}`,
+          operationKind: 'retry',
+          providerUid: payment.providerUid,
+          apiVersion: '20260101',
+          dispatchCertainty: 'possibly_dispatched',
+          intentFingerprint: payment.intent.fingerprint,
+          authorizedAt: dueAt - 500 + index,
+          dispatchStartedAt: dueAt - 499 + index,
+          outcome: {
+            classification: 'completed',
+            observedAt: dueAt - 498 + index,
+          },
+        })
+      }
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'rolling-capacity-exhausted',
+        nowMs: dueAt + 1,
+      }),
+    ).resolves.toBeNull()
+  })
+
+  test('transactionally denies a seventh lifetime retry endpoint call', async () => {
+    const setup = await establishProviderPayment()
+    await expect(
+      setup.t.run(async (ctx) => {
+        const outcomes = []
+        for (let index = 0; index < 7; index += 1) {
+          outcomes.push(
+            await consumePaymentRetryEndpointCall(ctx, setup.payToPaymentId),
+          )
+        }
+        return outcomes.map(({ ok }) => ok)
+      }),
+    ).resolves.toEqual([true, true, true, true, true, true, false])
+  })
+
+  test('honors one provider cooldown without consuming a submission slot', async () => {
+    const setup = await establishProviderPayment()
+    const { retry, dueAt } = await claimFirstRetry(setup, 'cooldown-retry')
+    await setup.t.mutation(internal.payToPaymentRetry.markDispatchStarted, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: retry.operationId,
+      leaseToken: 'cooldown-retry',
+      observedAt: dueAt + 2,
+    })
+    await setup.t.mutation(internal.payToPaymentRetry.recordFailure, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: retry.operationId,
+      leaseToken: 'cooldown-retry',
+      ambiguous: false,
+      providerCode: 'ZPPRY03',
+      retryAfterMs: 60_000,
+      observedAt: dueAt + 3,
+    })
+
+    await expect(
+      setup.t.run(async (ctx) => ({
+        operation: await ctx.db
+          .query('payToPaymentOperations')
+          .withIndex('by_operationId', (q) =>
+            q.eq('operationId', retry.operationId),
+          )
+          .unique(),
+        work: await ctx.db
+          .query('payToPaymentRetryWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+      })),
+    ).resolves.toMatchObject({
+      operation: { outcome: { classification: 'refused' } },
+      work: {
+        state: 'queued',
+        availableAt: dueAt + 3 + 60_000,
+        cooldownReschedules: 1,
+      },
+    })
+  })
+
+  test('stops retry recovery when the Agreement is no longer valid', async () => {
+    const setup = await establishProviderPayment()
+    const { dueAt } = await prepareFirstRetry(setup, 'expired-agreement')
+    await setup.t.run((ctx) =>
+      ctx.db.patch('payToAgreements', setup.payToAgreementId, {
+        lifecycleState: 'expired',
+      }),
+    )
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'expired-retry',
+        nowMs: dueAt + 1,
+      }),
+    ).resolves.toBeNull()
+    await expect(
+      setup.t.run((ctx) =>
+        ctx.db
+          .query('payToPaymentRetryWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+      ),
+    ).resolves.toMatchObject({ state: 'stopped' })
+  })
+
+  test('keeps retry work isolated from a sibling Payer Payment', async () => {
+    const setup = await establishProviderPayment()
+    const secondAgreementId = await addSecondAgreement(setup)
+    const second = await setup.t.mutation(internal.payToPayments.ensure, {
+      payToAgreementId: secondAgreementId,
+      observedAt: 3_000,
+    })
+    if (second.kind !== 'created') throw new Error('Expected sibling Payment')
+    await establishExistingProviderPayment(
+      setup.t,
+      second.payToPaymentId,
+      'sibling-create',
+    )
+
+    await prepareFirstRetry(setup, 'isolated-retry')
+
+    await expect(
+      setup.t.run(async (ctx) => ({
+        sibling: await ctx.db.get('payToPayments', second.payToPaymentId),
+        siblingRetry: await ctx.db
+          .query('payToPaymentRetryWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', second.payToPaymentId),
+          )
+          .unique(),
+      })),
+    ).resolves.toMatchObject({
+      sibling: { creationState: 'provider_established' },
+      siblingRetry: null,
+    })
+  })
+
+  test('dispatches one provider POST for one authorized retry operation', async () => {
+    vi.restoreAllMocks()
+    process.env.ZEPTO_ENVIRONMENT = 'sandbox'
+    process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN = 'sandbox-test-token'
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 202 }))
+    const setup = await establishProviderPayment()
+    await prepareFirstRetry(setup, 'action-retry')
+
+    await setup.t.action(internal.payToPaymentRetry.retry, {
+      payToPaymentId: setup.payToPaymentId,
+    })
+
+    const retryRequests = fetch.mock.calls
+      .map(([request]) =>
+        request instanceof Request ? request : new Request(request),
+      )
+      .filter(
+        (request) =>
+          request.method === 'POST' &&
+          new URL(request.url).pathname.endsWith('/retry'),
+      )
+    expect(retryRequests).toHaveLength(1)
+    await expect(
+      setup.t.run(async (ctx) => {
+        const operations = await ctx.db
+          .query('payToPaymentOperations')
+          .withIndex('by_payToPaymentId_and_authorizedAt', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .order('desc')
+          .take(8)
+        return operations.find(
+          (operation) => operation.operationKind === 'retry',
+        )
+      }),
+    ).resolves.toMatchObject({
+      dispatchCertainty: 'possibly_dispatched',
+      outcome: { classification: 'completed' },
+    })
+  })
+
+  test('locks an ambiguously acknowledged retry and requires attention when GET still sees failed', async () => {
+    const setup = await establishProviderPayment()
+    const { payment, retry, dueAt } = await claimFirstRetry(
+      setup,
+      'ambiguous-retry',
+    )
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.markDispatchStarted, {
+        payToPaymentId: setup.payToPaymentId,
+        operationId: retry.operationId,
+        leaseToken: 'ambiguous-retry',
+        observedAt: dueAt + 2,
+      }),
+    ).resolves.toBe(true)
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.recordFailure, {
+        payToPaymentId: setup.payToPaymentId,
+        operationId: retry.operationId,
+        leaseToken: 'ambiguous-retry',
+        ambiguous: true,
+        observedAt: dueAt + 3,
+      }),
+    ).resolves.toBe(true)
+    const get = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'ambiguous-retry-get',
+        nowMs: dueAt + 3,
+      },
+    )
+    if (!get) throw new Error('Expected ambiguity GET')
+    await setup.t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId: setup.payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'failed',
+        providerFailureCode: 'AB01',
+        providerFailureRetryable: true,
+        operationId: get.operationId,
+        leaseToken: 'ambiguous-retry-get',
+      },
+      observedAt: dueAt + 4,
+    })
+
+    await expect(
+      setup.t.run(async (ctx) => ({
+        payment: await ctx.db.get('payToPayments', setup.payToPaymentId),
+        agreement: await ctx.db.get('payToAgreements', setup.payToAgreementId),
+        operation: await ctx.db
+          .query('payToPaymentOperations')
+          .withIndex('by_operationId', (q) =>
+            q.eq('operationId', retry.operationId),
+          )
+          .unique(),
+        work: await ctx.db
+          .query('payToPaymentRetryWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+      })),
+    ).resolves.toMatchObject({
+      payment: { attention: { kind: 'retry_acknowledgement_uncertain' } },
+      agreement: { paymentAttentionRequired: true },
+      operation: { outcome: { classification: 'uncertain' } },
+      work: { state: 'stopped', retryNumber: 1 },
+    })
+  })
+
+  test('does not schedule retry work for a GET-confirmed non-retryable failure', async () => {
+    const setup = await establishProviderPayment()
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const get = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'non-retryable-get',
+        nowMs: 4_002,
+      },
+    )
+    if (!get) throw new Error('Expected reconciliation GET')
+    await setup.t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId: setup.payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'failed',
+        providerFailureCode: 'AC02',
+        providerFailureRetryable: false,
+        operationId: get.operationId,
+        leaseToken: 'non-retryable-get',
+      },
+      observedAt: 5_000,
+    })
+
+    await expect(
+      setup.t.run((ctx) =>
+        ctx.db
+          .query('payToPaymentRetryWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+      ),
+    ).resolves.toBeNull()
+  })
+
+  test('stops queued retry work when fresh GET changes retryability to false', async () => {
+    const setup = await establishProviderPayment()
+    const { payment, dueAt } = await prepareFirstRetry(
+      setup,
+      'retryability-changed',
+    )
+    await setup.t.run(async (ctx) => {
+      const work = await ctx.db
+        .query('payToPaymentReconciliationWorkItems')
+        .withIndex('by_payToPaymentId', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .unique()
+      if (!work) throw new Error('Expected reconciliation work')
+      await ctx.db.patch('payToPaymentReconciliationWorkItems', work._id, {
+        state: 'queued',
+        availableAt: dueAt + 2,
+      })
+    })
+    const get = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'non-retryable-refresh',
+        nowMs: dueAt + 2,
+      },
+    )
+    if (!get) throw new Error('Expected refreshed GET')
+    await setup.t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId: setup.payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'failed',
+        providerFailureCode: 'AC02',
+        providerFailureRetryable: false,
+        operationId: get.operationId,
+        leaseToken: 'non-retryable-refresh',
+      },
+      observedAt: dueAt + 3,
+    })
+
+    await expect(
+      setup.t.run((ctx) =>
+        ctx.db
+          .query('payToPaymentRetryWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+      ),
+    ).resolves.toMatchObject({ state: 'stopped' })
+  })
+
+  test('refuses the generic operation interface as an arbitrary retry override', async () => {
+    const setup = await establishProviderPayment()
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.authorizeOperation, {
+        payToPaymentId: setup.payToPaymentId,
+        operationKind: 'retry',
+        observedAt: 5_000,
+      }),
+    ).resolves.toEqual({ kind: 'denied', reason: 'operation_not_allowed' })
+  })
+
+  test.each([
+    ['provider UID replacement', { providerUid: 'replacement-uid' }],
+    ['intent replacement', { intentFingerprint: 'replacement-intent' }],
+    ['retryability override', { retryable: true }],
+    ['budget reset', { resetRetryBudget: true }],
+    ['manufactured settlement', { lifecycleState: 'settled' }],
+  ] as const)('rejects a caller-supplied %s', async (_override, extraArgs) => {
+    const setup = await establishProviderPayment()
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'override-attempt',
+        nowMs: 5_000,
+        ...extraArgs,
+      }),
+    ).rejects.toThrow('Unexpected field')
+  })
+
+  test('schedules the first retry fifteen minutes after a fresh retryable failure', async () => {
+    const setup = await establishProviderPayment()
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const get = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'failed-get-worker',
+        nowMs: 4_002,
+      },
+    )
+    if (!get) throw new Error('Expected reconciliation GET')
+
+    await setup.t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId: setup.payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'failed',
+        providerFailureCode: 'AB01',
+        providerFailureRetryable: true,
+        operationId: get.operationId,
+        leaseToken: 'failed-get-worker',
+      },
+      observedAt: 5_000,
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'too-early-retry',
+        nowMs: 5_000 + 15 * 60_000 - 1,
+      }),
+    ).resolves.toBeNull()
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'request-fresh-get',
+        nowMs: 5_000 + 15 * 60_000,
+      }),
+    ).resolves.toBeNull()
+    const freshGet = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'fresh-failed-get-worker',
+        nowMs: 5_000 + 15 * 60_000,
+      },
+    )
+    if (!freshGet) throw new Error('Expected fresh pre-retry GET')
+    await setup.t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId: setup.payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'failed',
+        providerFailureCode: 'AB01',
+        providerFailureRetryable: true,
+        operationId: freshGet.operationId,
+        leaseToken: 'fresh-failed-get-worker',
+      },
+      observedAt: 5_000 + 15 * 60_000 + 1,
+    })
+    await expect(
+      setup.t.mutation(internal.payToPaymentRetry.claimWork, {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'first-retry',
+        nowMs: 5_000 + 15 * 60_000 + 1,
+      }),
+    ).resolves.toMatchObject({
+      providerUid: payment.providerUid,
+      retryNumber: 1,
+    })
+  })
+
   test('recovers an ambiguous create outcome through authoritative same-UID GET', async () => {
     const setup = await establishPayment()
     const payment = await setup.t.run((ctx) =>

@@ -1,7 +1,11 @@
 import { describe, expect, test, vi } from 'vitest'
 
 import { createZeptoClient } from './client'
-import { createPayment, getPaymentLifecycleByUid } from './payment'
+import {
+  createPayment,
+  getPaymentLifecycleByUid,
+  retryPayment,
+} from './payment'
 
 function paymentResponse(
   overrides: Partial<{
@@ -10,6 +14,12 @@ function paymentResponse(
     state: string
     created_at: string
     amount: number | undefined
+    failure: {
+      title: string
+      detail: string
+      code: string
+      retryable: boolean
+    }
   }> = {},
   status = 201,
 ) {
@@ -206,5 +216,63 @@ describe('Zepto PayTo Payment reconciliation', () => {
         priority: 'unattended',
       }),
     ).rejects.toMatchObject({ kind: 'invalid_response' })
+  })
+
+  test('returns only the retry evidence from a failed Payment', async () => {
+    const client = createZeptoClient({
+      environment: 'sandbox',
+      accessToken: 'sandbox-token',
+      fetch: async () =>
+        paymentResponse(
+          {
+            state: 'failed',
+            failure: {
+              title: 'Insufficient funds',
+              detail: 'sensitive provider detail',
+              code: 'AB01',
+              retryable: true,
+            },
+          },
+          200,
+        ),
+      maxRetries: 0,
+    })
+
+    await expect(
+      getPaymentLifecycleByUid(client, {
+        providerUid: 'payment_36',
+        agreementProviderUid: 'agreement_36',
+        amountCents: 12_500,
+        priority: 'unattended',
+      }),
+    ).resolves.toEqual({
+      providerState: 'failed',
+      failure: { code: 'AB01', retryable: true },
+    })
+  })
+})
+
+describe('Zepto PayTo Payment retry', () => {
+  test('posts once to the permanent Payment retry resource', async () => {
+    const requests: Request[] = []
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request.clone())
+      return new Response(null, { status: 202 })
+    })
+    const client = createZeptoClient({
+      environment: 'sandbox',
+      accessToken: 'sandbox-token',
+      fetch,
+      maxRetries: 0,
+    })
+
+    await expect(
+      retryPayment(client, { providerUid: 'payment_36' }),
+    ).resolves.toEqual({ accepted: true })
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(new URL(requests[0].url).pathname).toBe(
+      '/payto/payments/payment_36/retry',
+    )
+    expect(requests[0]?.headers.get('Zepto-API-Version')).toBe('20260101')
   })
 })

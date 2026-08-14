@@ -25,4 +25,11 @@ crons.interval(
   {},
 )
 
+crons.interval(
+  'dispatch due PayTo Payment retries',
+  { minutes: 1 },
+  internal.payToPaymentRetry.dispatchDue,
+  {},
+)
+
 export default crons

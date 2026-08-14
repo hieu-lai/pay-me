@@ -17,6 +17,8 @@ import type * as lib_payToAgreementActivation from "../lib/payToAgreementActivat
 import type * as lib_payToPaymentProjection from "../lib/payToPaymentProjection.js";
 import type * as lib_paymentCreationPool from "../lib/paymentCreationPool.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
+import type * as lib_paymentRetryPool from "../lib/paymentRetryPool.js";
+import type * as lib_paymentRetryRateLimiter from "../lib/paymentRetryRateLimiter.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
 import type * as lib_userSearch from "../lib/userSearch.js";
@@ -47,6 +49,7 @@ import type * as payToAgreementReconciliationState from "../payToAgreementReconc
 import type * as payToPaymentCreation from "../payToPaymentCreation.js";
 import type * as payToPaymentReconciliation from "../payToPaymentReconciliation.js";
 import type * as payToPaymentReconciliationState from "../payToPaymentReconciliationState.js";
+import type * as payToPaymentRetry from "../payToPaymentRetry.js";
 import type * as payToPayments from "../payToPayments.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as seed from "../seed.js";
@@ -76,6 +79,8 @@ const fullApi: ApiFromModules<{
   "lib/payToPaymentProjection": typeof lib_payToPaymentProjection;
   "lib/paymentCreationPool": typeof lib_paymentCreationPool;
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
+  "lib/paymentRetryPool": typeof lib_paymentRetryPool;
+  "lib/paymentRetryRateLimiter": typeof lib_paymentRetryRateLimiter;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
   "lib/userSearch": typeof lib_userSearch;
@@ -106,6 +111,7 @@ const fullApi: ApiFromModules<{
   payToPaymentCreation: typeof payToPaymentCreation;
   payToPaymentReconciliation: typeof payToPaymentReconciliation;
   payToPaymentReconciliationState: typeof payToPaymentReconciliationState;
+  payToPaymentRetry: typeof payToPaymentRetry;
   payToPayments: typeof payToPayments;
   paymentDestinations: typeof paymentDestinations;
   seed: typeof seed;
@@ -147,6 +153,8 @@ export const internal: FilterApi<
 
 export const components = componentsGeneric() as unknown as {
   migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
+  paymentRetryRateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"paymentRetryRateLimiter">;
   agreementCreationWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"agreementCreationWorkpool">;
   paymentCreationWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"paymentCreationWorkpool">;
+  paymentRetryWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"paymentRetryWorkpool">;
 };

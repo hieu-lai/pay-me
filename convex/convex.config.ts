@@ -1,4 +1,5 @@
 import migrations from '@convex-dev/migrations/convex.config.js'
+import rateLimiter from '@convex-dev/rate-limiter/convex.config'
 import workpool from '@convex-dev/workpool/convex.config'
 import { defineApp } from 'convex/server'
 import { v } from 'convex/values'
@@ -25,7 +26,9 @@ const app = defineApp({
 })
 
 app.use(migrations)
+app.use(rateLimiter, { name: 'paymentRetryRateLimiter' })
 app.use(workpool, { name: 'agreementCreationWorkpool' })
 app.use(workpool, { name: 'paymentCreationWorkpool' })
+app.use(workpool, { name: 'paymentRetryWorkpool' })
 
 export default app

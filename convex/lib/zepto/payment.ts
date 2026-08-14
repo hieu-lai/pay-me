@@ -149,7 +149,10 @@ export async function createPayment(
 export async function getPaymentLifecycleByUid(
   client: ZeptoClient,
   input: CreatePaymentInput,
-): Promise<{ providerState: string }> {
+): Promise<{
+  providerState: string
+  failure?: { code: string; retryable: boolean }
+}> {
   if (
     !input.providerUid ||
     input.providerUid.length > 64 ||
@@ -175,5 +178,37 @@ export async function getPaymentLifecycleByUid(
   ) {
     invalidResponse()
   }
-  return { providerState: payment.state }
+  return {
+    providerState: payment.state,
+    ...(payment.failure === null
+      ? {}
+      : {
+          failure: {
+            code: payment.failure.code,
+            retryable: payment.failure.retryable,
+          },
+        }),
+  }
+}
+
+export async function retryPayment(
+  client: ZeptoClient,
+  input: { providerUid: string },
+): Promise<{ accepted: true }> {
+  if (
+    !input.providerUid ||
+    input.providerUid.length > 64 ||
+    !unreservedUid.test(input.providerUid)
+  ) {
+    invalidRequest()
+  }
+  const { response } = await client.payTo.POST(
+    '/payto/payments/{payment_uid}/retry',
+    {
+      params: { path: { payment_uid: input.providerUid } },
+      body: {},
+    },
+  )
+  if (response.status !== 202) invalidResponse()
+  return { accepted: true }
 }

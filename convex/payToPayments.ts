@@ -86,7 +86,7 @@ const authorizeOperationResultValidator = v.union(
 
 type PaymentIntent = Infer<typeof payToPaymentIntentValidator>
 
-function moneyMovingDenial(
+export function moneyMovingDenial(
   mode: PayToPaymentGateMode | undefined,
   environment: Doc<'payToAgreements'>['environment'],
 ) {
@@ -429,6 +429,110 @@ async function reconciliationWorkItem(
       q.eq('payToPaymentId', payToPaymentId),
     )
     .unique()
+}
+
+async function retryWorkItem(
+  ctx: Pick<MutationCtx, 'db'>,
+  payToPaymentId: Id<'payToPayments'>,
+) {
+  return await ctx.db
+    .query('payToPaymentRetryWorkItems')
+    .withIndex('by_payToPaymentId', (q) =>
+      q.eq('payToPaymentId', payToPaymentId),
+    )
+    .unique()
+}
+
+const RETRY_DELAYS_MS = [15 * 60_000, 4 * 60 * 60_000, 24 * 60 * 60_000]
+
+async function scheduleRetryAfterConfirmedFailure(
+  ctx: MutationCtx,
+  payment: Doc<'payToPayments'>,
+  observedAt: number,
+) {
+  const retryOperations = await ctx.db
+    .query('payToPaymentOperations')
+    .withIndex('by_payToPaymentId_and_operationKind_and_authorizedAt', (q) =>
+      q.eq('payToPaymentId', payment._id).eq('operationKind', 'retry'),
+    )
+    .order('desc')
+    .take(4)
+  const possiblyAcceptedRetries = retryOperations.filter(
+    (operation) =>
+      operation.dispatchCertainty === 'possibly_dispatched' &&
+      operation.outcome?.classification !== 'refused',
+  ).length
+  const retryNumber = possiblyAcceptedRetries + 1
+  const existing = await retryWorkItem(ctx, payment._id)
+  if (existing?.state === 'locked' && existing.operationId !== undefined) {
+    const lockedOperation = await ctx.db
+      .query('payToPaymentOperations')
+      .withIndex('by_operationId', (q) =>
+        q.eq('operationId', existing.operationId as string),
+      )
+      .unique()
+    if (lockedOperation?.outcome?.classification === 'uncertain') {
+      const agreement = await ctx.db.get(
+        'payToAgreements',
+        payment.payToAgreementId,
+      )
+      if (!agreement) throw new Error('PayTo Payment invariant failed')
+      await ctx.db.patch('payToPayments', payment._id, {
+        attention: {
+          kind: 'retry_acknowledgement_uncertain',
+          observedAt,
+        },
+      })
+      await ctx.db.patch('payToPaymentRetryWorkItems', existing._id, {
+        state: 'stopped',
+      })
+      await projectPayerPayment(ctx, agreement, {
+        paymentStatus: agreement.paymentStatus ?? 'failed',
+        paymentVerificationPending: false,
+        paymentAttentionRequired: true,
+      })
+      return
+    }
+  }
+  if (retryNumber > RETRY_DELAYS_MS.length) {
+    if (existing) {
+      await ctx.db.patch('payToPaymentRetryWorkItems', existing._id, {
+        state: 'stopped',
+        availableAt: observedAt,
+      })
+    }
+    return
+  }
+  if (
+    existing?.freshGetRequestedAt !== undefined &&
+    observedAt >= existing.freshGetRequestedAt &&
+    existing.retryNumber === retryNumber
+  ) {
+    await ctx.db.patch('payToPaymentRetryWorkItems', existing._id, {
+      state: 'queued',
+      availableAt: observedAt,
+    })
+    return
+  }
+  const availableAt = observedAt + RETRY_DELAYS_MS[retryNumber - 1]
+  if (existing) {
+    await ctx.db.patch('payToPaymentRetryWorkItems', existing._id, {
+      state: 'queued',
+      retryNumber,
+      availableAt,
+      freshGetRequestedAt: undefined,
+      leaseToken: undefined,
+      leaseExpiresAt: undefined,
+      operationId: undefined,
+    })
+  } else {
+    await ctx.db.insert('payToPaymentRetryWorkItems', {
+      payToPaymentId: payment._id,
+      state: 'queued',
+      retryNumber,
+      availableAt,
+    })
+  }
 }
 
 function creationRecoveryFor(payment: Doc<'payToPayments'>, nowMs: number) {
@@ -1091,9 +1195,7 @@ function creationStateAllowsOperation(
   operationKind: PaymentOperationKind,
 ) {
   if (operationKind === 'create') return false
-  if (operationKind === 'retry') {
-    return creationState === 'provider_established'
-  }
+  if (operationKind === 'retry') return false
   return (
     creationState === 'creation_uncertain' ||
     creationState === 'provider_established'
@@ -1259,6 +1361,8 @@ const applyEvidenceInputValidator = payToPaymentEvidenceValidator.pick(
   'source',
   'intentFingerprint',
   'providerState',
+  'providerFailureCode',
+  'providerFailureRetryable',
   'providerAbsent',
   'operationId',
   'leaseToken',
@@ -1429,6 +1533,8 @@ export const applyEvidence = internalMutation({
       operationId: operation.operationId,
       ...payToPaymentOperationEvidenceProvenance(payment, operation),
       providerState,
+      providerFailureCode: args.evidence.providerFailureCode,
+      providerFailureRetryable: args.evidence.providerFailureRetryable,
       outcome: decision.kind,
       observedAt: args.observedAt,
     })
@@ -1457,16 +1563,46 @@ export const applyEvidence = internalMutation({
         lastReconciledAt: args.observedAt,
         provisionalLifecycleState: undefined,
         reconciliationAlert: undefined,
+        confirmedFailure:
+          decision.state === 'failed' &&
+          args.evidence.providerFailureCode !== undefined &&
+          args.evidence.providerFailureRetryable !== undefined
+            ? {
+                code: args.evidence.providerFailureCode,
+                retryable: args.evidence.providerFailureRetryable,
+                observedAt: args.observedAt,
+              }
+            : undefined,
         ...(payment.attention?.kind === 'unknown_provider_state'
           ? { attention: undefined }
           : {}),
       })
+      if (
+        decision.state === 'failed' &&
+        args.evidence.providerFailureRetryable === true &&
+        args.evidence.providerFailureCode !== undefined
+      ) {
+        await scheduleRetryAfterConfirmedFailure(ctx, payment, args.observedAt)
+      } else {
+        const retryWork = await retryWorkItem(ctx, payment._id)
+        if (retryWork) {
+          await ctx.db.patch('payToPaymentRetryWorkItems', retryWork._id, {
+            state: 'stopped',
+            availableAt: args.observedAt,
+            freshGetRequestedAt: undefined,
+            leaseToken: undefined,
+            leaseExpiresAt: undefined,
+          })
+        }
+      }
+      const paymentAfterRetryPolicy =
+        (await ctx.db.get('payToPayments', payment._id)) ?? payment
       await projectPayerPayment(ctx, agreement, {
         paymentStatus,
         paymentVerificationPending: false,
         paymentAttentionRequired:
-          payment.attention !== undefined &&
-          payment.attention.kind !== 'unknown_provider_state',
+          paymentAfterRetryPolicy.attention !== undefined &&
+          paymentAfterRetryPolicy.attention.kind !== 'unknown_provider_state',
       })
       await ctx.db.patch('payToPaymentReconciliationWorkItems', workItem._id, {
         state: decision.delayMs === null ? 'stopped' : 'queued',

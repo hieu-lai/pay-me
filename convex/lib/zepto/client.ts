@@ -417,6 +417,8 @@ export function createZeptoClient(
       if (
         response.status === 204 ||
         response.status === 205 ||
+        (response.status === 202 &&
+          /^\/payto\/payments\/[^/]+\/retry$/.test(requestPath(request))) ||
         request.method === 'HEAD'
       ) {
         return

@@ -94,6 +94,10 @@ export const payToPaymentAttentionValidator = v.union(
     ),
     observedAt: v.number(),
   }),
+  v.object({
+    kind: v.literal('retry_acknowledgement_uncertain'),
+    observedAt: v.number(),
+  }),
 )
 
 export const payToPaymentCreateErrorCategories = [
@@ -137,6 +141,7 @@ export const payToPaymentOperationValidator = v.object({
 
 export const payToPaymentEvidenceSourceValidator = literals(
   'create_response',
+  'retry_response',
   'per_uid_get',
   'webhook',
 )
@@ -157,6 +162,8 @@ export const payToPaymentEvidenceValidator = v.object({
   requestFingerprint: v.optional(v.string()),
   classification: v.optional(payToPaymentOperationClassificationValidator),
   providerState: v.optional(v.string()),
+  providerFailureCode: v.optional(v.string()),
+  providerFailureRetryable: v.optional(v.boolean()),
   providerAbsent: v.optional(v.boolean()),
   deliveryId: v.optional(v.string()),
   providerEventId: v.optional(v.string()),

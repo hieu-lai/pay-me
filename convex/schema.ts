@@ -364,6 +364,13 @@ export default defineSchema({
     provisionalLifecycleState: v.optional(providerPayToPaymentStateValidator),
     lifecycleState: v.optional(providerPayToPaymentStateValidator),
     lifecycleObservedAt: v.optional(v.number()),
+    confirmedFailure: v.optional(
+      v.object({
+        code: v.string(),
+        retryable: v.boolean(),
+        observedAt: v.number(),
+      }),
+    ),
     lastReconciledAt: v.optional(v.number()),
     attention: v.optional(payToPaymentAttentionValidator),
     reconciliationAlert: v.optional(
@@ -381,6 +388,11 @@ export default defineSchema({
   payToPaymentOperations: defineTable(payToPaymentOperationValidator)
     .index('by_payToPaymentId_and_authorizedAt', [
       'payToPaymentId',
+      'authorizedAt',
+    ])
+    .index('by_payToPaymentId_and_operationKind_and_authorizedAt', [
+      'payToPaymentId',
+      'operationKind',
       'authorizedAt',
     ])
     .index('by_operationId', ['operationId']),
@@ -420,6 +432,26 @@ export default defineSchema({
     consecutiveFailures: v.optional(v.number()),
     failureStartedAt: v.optional(v.number()),
     lastSuccessAt: v.optional(v.number()),
+  })
+    .index('by_payToPaymentId', ['payToPaymentId'])
+    .index('by_state_and_availableAt', ['state', 'availableAt'])
+    .index('by_state_and_leaseExpiresAt', ['state', 'leaseExpiresAt']),
+
+  payToPaymentRetryWorkItems: defineTable({
+    payToPaymentId: v.id('payToPayments'),
+    state: v.union(
+      v.literal('queued'),
+      v.literal('running'),
+      v.literal('locked'),
+      v.literal('stopped'),
+    ),
+    retryNumber: v.number(),
+    availableAt: v.number(),
+    freshGetRequestedAt: v.optional(v.number()),
+    cooldownReschedules: v.optional(v.number()),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    operationId: v.optional(v.string()),
   })
     .index('by_payToPaymentId', ['payToPaymentId'])
     .index('by_state_and_availableAt', ['state', 'availableAt'])
