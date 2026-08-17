@@ -40,6 +40,13 @@ crons.interval(
 )
 
 crons.interval(
+  'scan PayTo Payment rollout safety',
+  { hours: 1 },
+  internal.payToPaymentRolloutMonitoring.start,
+  {},
+)
+
+crons.interval(
   'sweep aged unresolved PayTo Payments',
   { hours: 1 },
   internal.payToPaymentMonitoring.sweepAgedUnresolved,

@@ -17,6 +17,7 @@ import type * as lib_payIdCapability from "../lib/payIdCapability.js";
 import type * as lib_payToAgreementActivation from "../lib/payToAgreementActivation.js";
 import type * as lib_payToPaymentProjection from "../lib/payToPaymentProjection.js";
 import type * as lib_payToPaymentRetentionPolicy from "../lib/payToPaymentRetentionPolicy.js";
+import type * as lib_payToPaymentRollout from "../lib/payToPaymentRollout.js";
 import type * as lib_payToPaymentTelemetry from "../lib/payToPaymentTelemetry.js";
 import type * as lib_paymentCreationPool from "../lib/paymentCreationPool.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
@@ -58,6 +59,7 @@ import type * as payToPaymentReconciliation from "../payToPaymentReconciliation.
 import type * as payToPaymentReconciliationState from "../payToPaymentReconciliationState.js";
 import type * as payToPaymentRetention from "../payToPaymentRetention.js";
 import type * as payToPaymentRetry from "../payToPaymentRetry.js";
+import type * as payToPaymentRolloutMonitoring from "../payToPaymentRolloutMonitoring.js";
 import type * as payToPayments from "../payToPayments.js";
 import type * as paymentDestinations from "../paymentDestinations.js";
 import type * as seed from "../seed.js";
@@ -88,6 +90,7 @@ const fullApi: ApiFromModules<{
   "lib/payToAgreementActivation": typeof lib_payToAgreementActivation;
   "lib/payToPaymentProjection": typeof lib_payToPaymentProjection;
   "lib/payToPaymentRetentionPolicy": typeof lib_payToPaymentRetentionPolicy;
+  "lib/payToPaymentRollout": typeof lib_payToPaymentRollout;
   "lib/payToPaymentTelemetry": typeof lib_payToPaymentTelemetry;
   "lib/paymentCreationPool": typeof lib_paymentCreationPool;
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
@@ -129,6 +132,7 @@ const fullApi: ApiFromModules<{
   payToPaymentReconciliationState: typeof payToPaymentReconciliationState;
   payToPaymentRetention: typeof payToPaymentRetention;
   payToPaymentRetry: typeof payToPaymentRetry;
+  payToPaymentRolloutMonitoring: typeof payToPaymentRolloutMonitoring;
   payToPayments: typeof payToPayments;
   paymentDestinations: typeof paymentDestinations;
   seed: typeof seed;

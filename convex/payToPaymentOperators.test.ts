@@ -286,11 +286,22 @@ test('refuses unauthenticated access to Payment diagnostics', async () => {
   const { t, payToPaymentId } = await setupPayment()
 
   await expect(
-    t.query(api.payToPaymentOperators.diagnostics, {
+    t.action(api.payToPaymentOperators.diagnostics, {
       payToPaymentId,
       nowMs: 10_000,
     }),
   ).rejects.toThrow('signed in')
+  await expect(
+    t.run(async (ctx) =>
+      ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+        .unique(),
+    ),
+  ).resolves.toMatchObject({
+    mode: 'reconcile_only',
+    lastSafetyCause: 'authorization_failure',
+  })
 })
 
 test('refuses diagnostics when the authenticated user lacks the Payment operator role', async () => {
@@ -298,11 +309,22 @@ test('refuses diagnostics when the authenticated user lacks the Payment operator
   const signedIn = t.withIdentity(operatorIdentity)
 
   await expect(
-    signedIn.query(api.payToPaymentOperators.diagnostics, {
+    signedIn.action(api.payToPaymentOperators.diagnostics, {
       payToPaymentId,
       nowMs: 10_000,
     }),
   ).rejects.toThrow('not a Payment operator')
+  await expect(
+    t.run(async (ctx) =>
+      ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+        .unique(),
+    ),
+  ).resolves.toMatchObject({
+    mode: 'reconcile_only',
+    lastSafetyCause: 'authorization_failure',
+  })
 })
 
 test('returns bounded operational summaries without routing, auth, or lease secrets', async () => {
@@ -310,7 +332,7 @@ test('returns bounded operational summaries without routing, auth, or lease secr
 
   const diagnostics = await t
     .withIdentity(operatorIdentity)
-    .query(api.payToPaymentOperators.diagnostics, {
+    .action(api.payToPaymentOperators.diagnostics, {
       payToPaymentId,
       nowMs: 10 * 60_000,
     })

@@ -11,6 +11,52 @@ export const payToPaymentGateModeValidator = literals(
 )
 export type PayToPaymentGateMode = Infer<typeof payToPaymentGateModeValidator>
 
+export const payToPaymentRolloutStageValidator = literals(
+  'reconcile_only_soak',
+  'small_allowlist',
+  'expanded_allowlist',
+)
+
+export const payToPaymentRolloutReasonValidator = literals(
+  'prepare_production_soak',
+  'begin_limited_rollout',
+  'expand_production_allowlist',
+)
+
+export const payToPaymentRolloutSafetyCauseValidator = literals(
+  'suspected_duplicate_initiation',
+  'permanent_uid_invariant_breach',
+  'settlement_contradiction',
+  'projection_inconsistency',
+  'authorization_failure',
+  'unknown_provider_state',
+  'certification_mismatch',
+  'unresolved_creation_ambiguity',
+  'unresolved_retry_ambiguity',
+  'webhook_verification_failure',
+  'reconciliation_outage',
+  'cap_breach',
+)
+export type PayToPaymentRolloutSafetyCause = Infer<
+  typeof payToPaymentRolloutSafetyCauseValidator
+>
+
+export const payToPaymentRolloutActionValidator = literals(
+  'start_reconcile_only_soak',
+  'activate_small_allowlist',
+  'expand_allowlist',
+  'automatic_safety_stop',
+)
+
+export const payToPaymentRolloutResultCodeValidator = literals(
+  'changed',
+  'unauthenticated',
+  'insufficient_role',
+  'clean_period_incomplete',
+  'invalid_transition',
+  'prerequisites_missing',
+)
+
 export const payToPaymentActivationCohortValidator = v.object({
   kind: v.literal('payer_allowlist'),
 })

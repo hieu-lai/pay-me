@@ -15,5 +15,6 @@ export const userValidator = z.object(
     profileImageSource: profileImageSourceZodValidator.optional(),
     defaultPaymentDestinationId: zid('paymentDestinations').optional(),
     roles: z.array(z.literal('payment_operator')).optional(),
+    paymentRolloutCohort: z.literal('internal_test').optional(),
   }),
 )

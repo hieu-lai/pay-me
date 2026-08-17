@@ -7,6 +7,7 @@ import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
 import { assertStoredPaymentProjection } from './lib/payToPaymentProjection'
 import { emitPayToPaymentAggregateMetric } from './lib/payToPaymentTelemetry'
+import { failProductionRolloutClosed } from './lib/payToPaymentRollout'
 
 const DAY_MS = 24 * 60 * 60_000
 const PAYMENT_SAMPLE_LIMIT = 200
@@ -177,6 +178,12 @@ export const emitAggregateSnapshot = internalMutation({
       } catch {
         projectionInconsistencyCount += 1
       }
+    }
+    if (projectionInconsistencyCount > 0) {
+      await failProductionRolloutClosed(ctx, {
+        cause: 'projection_inconsistency',
+        observedAt: nowMs,
+      })
     }
     const confirmedFailureCount = payments.filter(
       (payment) => payment.lifecycleState === 'failed',

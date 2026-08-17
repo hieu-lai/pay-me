@@ -84,6 +84,7 @@ export const applyZeptoWebhookDeliveryValidator = v.object({
 })
 
 export const zeptoWebhookRejectionValidator = v.object({
+  environment: v.optional(zeptoEnvironmentValidator),
   reason: v.union(v.literal('missing_headers'), v.literal('invalid_signature')),
   deliveryId: v.optional(v.string()),
   payloadHash: v.optional(v.string()),

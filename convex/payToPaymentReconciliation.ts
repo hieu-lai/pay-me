@@ -8,6 +8,10 @@ import {
   emitPayToPaymentOperationalAlert,
   warnIfPayToPaymentWorkOverdue,
 } from './lib/payToPaymentTelemetry'
+import {
+  failProductionPaymentRolloutClosed,
+  failProductionRolloutForProviderError,
+} from './lib/payToPaymentRollout'
 import { createEnvironmentZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import { getPaymentLifecycleByUid } from './lib/zepto/payment'
@@ -352,6 +356,11 @@ export const recordFailure = internalMutation({
       category: args.category,
       observedAt: args.observedAt,
     })
+    await failProductionRolloutForProviderError(ctx, {
+      payment,
+      category: args.category,
+      observedAt: args.observedAt,
+    })
     if (
       payment.creationState === 'creation_uncertain' &&
       payment.creationRecovery !== undefined
@@ -462,6 +471,12 @@ export const recordFailure = internalMutation({
         payToPaymentId: payment._id,
         observedAt: args.observedAt,
         consecutiveFailures,
+      })
+      await failProductionPaymentRolloutClosed(ctx, {
+        environment: payment.environment,
+        cause: 'reconciliation_outage',
+        observedAt: args.observedAt,
+        payToPaymentId: payment._id,
       })
     }
     return true

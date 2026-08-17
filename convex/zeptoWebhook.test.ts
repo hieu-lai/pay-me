@@ -558,6 +558,7 @@ describe('POST /zepto/webhooks', () => {
     expect(response.status).toBe(400)
     expect(applyDelivery).not.toHaveBeenCalled()
     expect(recordRejectedDelivery).toHaveBeenCalledWith({
+      environment: 'sandbox',
       reason: 'invalid_signature',
       deliveryId: 'delivery-invalid-auth',
       payloadHash: expect.any(String),

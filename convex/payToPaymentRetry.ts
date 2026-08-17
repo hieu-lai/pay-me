@@ -14,6 +14,10 @@ import {
   emitPayToPaymentErrorCriticalSignal,
   warnIfPayToPaymentWorkOverdue,
 } from './lib/payToPaymentTelemetry'
+import {
+  failProductionPaymentRolloutClosed,
+  failProductionRolloutForProviderError,
+} from './lib/payToPaymentRollout'
 import { createEnvironmentZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import { retryPayment } from './lib/zepto/payment'
@@ -258,6 +262,12 @@ export const claimWork = internalMutation({
           observedAt: args.nowMs,
           reason: 'retry_capacity',
         })
+        await failProductionPaymentRolloutClosed(ctx, {
+          environment: payment.environment,
+          cause: 'cap_breach',
+          observedAt: args.nowMs,
+          payToPaymentId: payment._id,
+        })
       }
       await ctx.db.patch('payToPaymentRetryWorkItems', work._id, {
         state: 'stopped',
@@ -370,9 +380,13 @@ export const markDispatchStarted = internalMutation({
         q.eq('environment', attempt.payment!.environment),
       )
       .unique()
+    const productionAuthorized = await productionPaymentDispatchAuthorized(
+      ctx,
+      attempt.payment,
+    )
     if (
       moneyMovingDenial(gate?.mode) !== undefined ||
-      !(await productionPaymentDispatchAuthorized(ctx, attempt.payment)) ||
+      !productionAuthorized ||
       attempt.operation?.productionActivationId !==
         attempt.payment.productionActivationId
     ) {
@@ -383,6 +397,20 @@ export const markDispatchStarted = internalMutation({
         state: 'stopped',
         availableAt: args.observedAt,
       })
+      if (
+        attempt.payment.environment === 'production' &&
+        gate?.mode === 'enabled_for_new_confirmations' &&
+        (!productionAuthorized ||
+          attempt.operation?.productionActivationId !==
+            attempt.payment.productionActivationId)
+      ) {
+        await failProductionPaymentRolloutClosed(ctx, {
+          environment: attempt.payment.environment,
+          cause: 'certification_mismatch',
+          observedAt: args.observedAt,
+          payToPaymentId: attempt.payment._id,
+        })
+      }
       return false
     }
     const callCapacity = await consumePaymentRetryEndpointCall(
@@ -396,6 +424,12 @@ export const markDispatchStarted = internalMutation({
         environment: attempt.payment.environment,
         observedAt: args.observedAt,
         reason: 'retry_endpoint_rate_limit',
+      })
+      await failProductionPaymentRolloutClosed(ctx, {
+        environment: attempt.payment.environment,
+        cause: 'cap_breach',
+        observedAt: args.observedAt,
+        payToPaymentId: attempt.payment._id,
       })
       await ctx.db.patch('payToPaymentOperations', attempt.operation!._id, {
         outcome: { classification: 'refused', observedAt: args.observedAt },
@@ -510,6 +544,11 @@ export const recordFailure = internalMutation({
         category: args.errorCategory,
         observedAt: args.observedAt,
       })
+      await failProductionRolloutForProviderError(ctx, {
+        payment: attempt.payment,
+        category: args.errorCategory,
+        observedAt: args.observedAt,
+      })
     }
     emitPayToPaymentAggregateMetric({
       kind: 'retry_attempt',
@@ -518,6 +557,12 @@ export const recordFailure = internalMutation({
       outcome: args.ambiguous ? 'ambiguous' : 'refused',
     })
     if (args.ambiguous) {
+      await failProductionPaymentRolloutClosed(ctx, {
+        environment: attempt.payment.environment,
+        cause: 'unresolved_retry_ambiguity',
+        observedAt: args.observedAt,
+        payToPaymentId: attempt.payment._id,
+      })
       await ctx.db.patch('payToPaymentRetryWorkItems', attempt.work!._id, {
         state: 'locked',
         leaseToken: undefined,

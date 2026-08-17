@@ -1,14 +1,26 @@
 import type { Infer } from 'convex/values'
 import { ConvexError, v } from 'convex/values'
 
+import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
-import { mutation, query } from './_generated/server'
 import {
+  action as convexAction,
+  internalMutation,
+  mutation,
+} from './_generated/server'
+import {
+  productionActivationArgsValidator,
+  recordProductionActivationForOperator,
   requestImmediatePayToPaymentReconciliation,
   requestPayToPaymentResume,
 } from './payToPayments'
 import { emitPayToPaymentCriticalSignal } from './lib/payToPaymentTelemetry'
+import {
+  failProductionRolloutClosed,
+  hasRequiredCleanRolloutEvidence,
+  ROLLOUT_CLEAN_PERIOD_MS,
+} from './lib/payToPaymentRollout'
 import {
   payToPaymentCreationStateValidator,
   payToPaymentEvidenceSourceValidator,
@@ -19,12 +31,17 @@ import {
   payToPaymentOperatorDecisionValidator,
   payToPaymentOperatorReasonValidator,
   payToPaymentOperatorResultCodeValidator,
+  payToPaymentRolloutReasonValidator,
+  payToPaymentRolloutResultCodeValidator,
   providerPayToPaymentStateValidator,
 } from './validators/payToPayments'
 import { zeptoEnvironmentValidator } from './validators/payToAgreements'
 
 const OVERDUE_WARNING_MS = 5 * 60_000
 const DIAGNOSTIC_HISTORY_LIMIT = 20
+const SMALL_ROLLOUT_MAX_PAYER_COUNT = 10
+const SMALL_ROLLOUT_MAX_DAILY_PAYMENT_COUNT = 25
+const SMALL_ROLLOUT_MAX_DAILY_PAYMENT_VALUE_CENTS = 1_000_000
 
 async function paymentOperatorActor(ctx: Pick<QueryCtx, 'auth' | 'db'>) {
   const identity = await ctx.auth.getUserIdentity()
@@ -54,35 +71,12 @@ async function paymentOperatorActor(ctx: Pick<QueryCtx, 'auth' | 'db'>) {
   }
 }
 
-async function requirePaymentOperator(
-  ctx: QueryCtx,
-  payToPaymentId?: Id<'payToPayments'>,
-  observedAt?: number,
+function operatorAuthorizationFailure(
+  authorization: 'not_authenticated' | 'insufficient_role' | 'payment_operator',
 ) {
-  const actor = await paymentOperatorActor(ctx)
-  if (actor.authentication === 'unauthenticated') {
-    emitPayToPaymentCriticalSignal('unauthorized_operation', {
-      payToPaymentId,
-      observedAt,
-      reason: 'unauthenticated_diagnostics',
-    })
-    throw new ConvexError({
-      code: 'UNAUTHENTICATED',
-      message: 'You must be signed in to call this function.',
-    })
-  }
-  if (actor.authorization !== 'payment_operator') {
-    emitPayToPaymentCriticalSignal('unauthorized_operation', {
-      payToPaymentId,
-      observedAt,
-      reason: 'insufficient_role_diagnostics',
-    })
-    throw new ConvexError({
-      code: 'FORBIDDEN',
-      message: 'The signed-in user is not a Payment operator.',
-    })
-  }
-  return actor
+  if (authorization === 'not_authenticated') return 'unauthenticated' as const
+  if (authorization === 'insufficient_role') return 'insufficient_role' as const
+  return null
 }
 
 const requestResultValidator = v.object({
@@ -117,6 +111,11 @@ const diagnosticResultValidator = v.object({
   ),
   certification: v.object({
     configured: v.boolean(),
+    admissionActivationId: v.union(v.id('payToPaymentActivations'), v.null()),
+    currentRolloutActivationId: v.union(
+      v.id('payToPaymentActivations'),
+      v.null(),
+    ),
     certifiedCommit: v.union(v.string(), v.null()),
     configurationFingerprint: v.union(v.string(), v.null()),
     apiVersion: v.literal('20260101'),
@@ -226,6 +225,8 @@ const diagnosticResultValidator = v.object({
   ),
 })
 
+type DiagnosticResult = Infer<typeof diagnosticResultValidator>
+
 type OperatorReason = Infer<typeof payToPaymentOperatorReasonValidator>
 type OperatorResult = Infer<typeof requestResultValidator>
 type OperatorPolicy = (
@@ -270,6 +271,11 @@ async function auditedOperatorRequest(
       payToPaymentId: args.payToPaymentId,
       observedAt: requestedAt,
       reason: result.code,
+    })
+    await failProductionRolloutClosed(ctx, {
+      cause: 'authorization_failure',
+      observedAt: requestedAt,
+      payToPaymentId: args.payToPaymentId,
     })
   }
   return result
@@ -325,14 +331,44 @@ function workSummary(
   }
 }
 
-export const diagnostics = query({
-  args: {
-    payToPaymentId: v.id('payToPayments'),
-    nowMs: v.number(),
-  },
-  returns: diagnosticResultValidator,
+const diagnosticArgsValidator = v.object({
+  payToPaymentId: v.id('payToPayments'),
+  nowMs: v.number(),
+})
+
+const diagnosticAuthorizationValidator = v.union(
+  v.literal('authorized'),
+  v.literal('unauthenticated'),
+  v.literal('insufficient_role'),
+)
+
+export const evaluateDiagnostics = internalMutation({
+  args: diagnosticArgsValidator.fields,
+  returns: v.union(
+    diagnosticResultValidator,
+    v.literal('unauthenticated'),
+    v.literal('insufficient_role'),
+  ),
   handler: async (ctx, args) => {
-    await requirePaymentOperator(ctx, args.payToPaymentId, args.nowMs)
+    const actor = await paymentOperatorActor(ctx)
+    const failure = operatorAuthorizationFailure(actor.authorization)
+    if (failure !== null) {
+      const observedAt = Date.now()
+      emitPayToPaymentCriticalSignal('unauthorized_operation', {
+        payToPaymentId: args.payToPaymentId,
+        observedAt,
+        reason:
+          failure === 'unauthenticated'
+            ? 'unauthenticated_diagnostics'
+            : 'insufficient_role_diagnostics',
+      })
+      await failProductionRolloutClosed(ctx, {
+        cause: 'authorization_failure',
+        observedAt,
+        payToPaymentId: args.payToPaymentId,
+      })
+      return failure
+    }
     const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
     if (!payment) {
       throw new ConvexError({
@@ -458,6 +494,29 @@ export const diagnostics = query({
     const overdueByMs =
       nextDueAt === undefined ? 0 : Math.max(0, args.nowMs - nextDueAt)
     const attention = payment.attention
+    const activeActivationId = gate?.activeActivationId
+    const currentActivation = activeActivationId
+      ? await ctx.db.get('payToPaymentActivations', activeActivationId)
+      : null
+    const admissionActivation = payment.productionActivationId
+      ? await ctx.db.get(
+          'payToPaymentActivations',
+          payment.productionActivationId,
+        )
+      : null
+    const activationAllowlistEntry = activeActivationId
+      ? await ctx.db
+          .query('payToPaymentActivationAllowlist')
+          .withIndex('by_activationId_and_payerUserId', (q) =>
+            q.eq('activationId', activeActivationId),
+          )
+          .first()
+      : null
+    const approvalReferenceCount = currentActivation
+      ? Object.values(currentActivation.approvalReferences).filter(
+          (reference) => reference.length > 0,
+        ).length
+      : 0
 
     return {
       gate:
@@ -482,14 +541,17 @@ export const diagnostics = query({
               reservedPaymentCount: gate.reservedPaymentCount ?? 0,
               reservedPaymentValueCents: gate.reservedPaymentValueCents ?? 0,
               rollout: {
-                cohortConfigured: false,
-                approvalReferenceCount: 0,
+                cohortConfigured: activationAllowlistEntry !== null,
+                approvalReferenceCount,
               },
             },
       certification: {
-        configured: false,
-        certifiedCommit: null,
-        configurationFingerprint: null,
+        configured: admissionActivation !== null,
+        admissionActivationId: admissionActivation?._id ?? null,
+        currentRolloutActivationId: currentActivation?._id ?? null,
+        certifiedCommit: admissionActivation?.certifiedCommit ?? null,
+        configurationFingerprint:
+          admissionActivation?.configurationFingerprint ?? null,
         apiVersion: payment.intent.apiVersion,
         environment: payment.environment,
       },
@@ -623,6 +685,33 @@ export const diagnostics = query({
   },
 })
 
+export const diagnostics = convexAction({
+  args: diagnosticArgsValidator.fields,
+  returns: diagnosticResultValidator,
+  handler: async (ctx, args): Promise<DiagnosticResult> => {
+    const result:
+      | DiagnosticResult
+      | Exclude<Infer<typeof diagnosticAuthorizationValidator>, 'authorized'> =
+      await ctx.runMutation(
+        internal.payToPaymentOperators.evaluateDiagnostics,
+        args,
+      )
+    if (result === 'unauthenticated') {
+      throw new ConvexError({
+        code: 'UNAUTHENTICATED',
+        message: 'You must be signed in to call this function.',
+      })
+    }
+    if (result === 'insufficient_role') {
+      throw new ConvexError({
+        code: 'FORBIDDEN',
+        message: 'The signed-in user is not a Payment operator.',
+      })
+    }
+    return result
+  },
+})
+
 export const requestReconciliation = mutation({
   args: {
     payToPaymentId: v.id('payToPayments'),
@@ -649,4 +738,253 @@ export const requestResume = mutation({
       action: 'request_resume',
       policy: requestPayToPaymentResume,
     }),
+})
+
+const rolloutRequestResultValidator = v.object({
+  decision: payToPaymentOperatorDecisionValidator,
+  code: payToPaymentRolloutResultCodeValidator,
+  activationId: v.optional(v.id('payToPaymentActivations')),
+  activationFingerprint: v.optional(v.string()),
+})
+
+export const startRolloutSoak = mutation({
+  args: { reason: payToPaymentRolloutReasonValidator },
+  returns: rolloutRequestResultValidator,
+  handler: async (ctx, args) => {
+    const requestedAt = Date.now()
+    const actor = await paymentOperatorActor(ctx)
+    const previousGate = await ctx.db
+      .query('payToPaymentRuntimeGates')
+      .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+      .unique()
+    const refusedCode = operatorAuthorizationFailure(actor.authorization)
+    const resultCode =
+      refusedCode ??
+      (args.reason === 'prepare_production_soak'
+        ? ('changed' as const)
+        : ('invalid_transition' as const))
+    await ctx.db.insert('payToPaymentRolloutActions', {
+      environment: 'production',
+      ...actor,
+      action: 'start_reconcile_only_soak',
+      reason: args.reason,
+      decision: resultCode === 'changed' ? 'authorized' : 'refused',
+      resultCode,
+      requestedAt,
+      ...(previousGate === null ? {} : { previousMode: previousGate.mode }),
+      nextMode: 'reconcile_only',
+    })
+    if (refusedCode !== null) {
+      emitPayToPaymentCriticalSignal('unauthorized_operation', {
+        environment: 'production',
+        observedAt: requestedAt,
+        reason: refusedCode,
+      })
+      await failProductionRolloutClosed(ctx, {
+        cause: 'authorization_failure',
+        observedAt: requestedAt,
+      })
+      return { decision: 'refused' as const, code: refusedCode }
+    }
+    if (resultCode === 'invalid_transition') {
+      return { decision: 'refused' as const, code: resultCode }
+    }
+    const patch = {
+      mode: 'reconcile_only' as const,
+      rolloutStage: 'reconcile_only_soak' as const,
+      stageChangedAt: requestedAt,
+      cleanSince: requestedAt,
+      lastSafetyCause: undefined,
+    }
+    if (previousGate) {
+      await ctx.db.patch('payToPaymentRuntimeGates', previousGate._id, patch)
+    } else {
+      await ctx.db.insert('payToPaymentRuntimeGates', {
+        environment: 'production',
+        ...patch,
+      })
+    }
+    return { decision: 'authorized' as const, code: 'changed' as const }
+  },
+})
+
+export const advanceProductionRollout = mutation({
+  args: productionActivationArgsValidator
+    .omit('nowMs')
+    .extend({ reason: payToPaymentRolloutReasonValidator }).fields,
+  returns: rolloutRequestResultValidator,
+  handler: async (ctx, args) => {
+    const requestedAt = Date.now()
+    const actor = await paymentOperatorActor(ctx)
+    const gate = await ctx.db
+      .query('payToPaymentRuntimeGates')
+      .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+      .unique()
+    const isExpansion =
+      gate?.rolloutStage === 'small_allowlist' ||
+      gate?.rolloutStage === 'expanded_allowlist'
+    const action = isExpansion
+      ? ('expand_allowlist' as const)
+      : ('activate_small_allowlist' as const)
+    const expectedReason = isExpansion
+      ? 'expand_production_allowlist'
+      : 'begin_limited_rollout'
+    const authenticationCode = operatorAuthorizationFailure(actor.authorization)
+    const hasCleanEvidence =
+      gate?.cleanSince === undefined
+        ? false
+        : await hasRequiredCleanRolloutEvidence(ctx, gate.cleanSince)
+    let transitionCode =
+      gate?.rolloutStage === undefined || gate.cleanSince === undefined
+        ? ('invalid_transition' as const)
+        : requestedAt - gate.cleanSince < ROLLOUT_CLEAN_PERIOD_MS
+          ? ('clean_period_incomplete' as const)
+          : !hasCleanEvidence
+            ? ('clean_period_incomplete' as const)
+            : args.reason !== expectedReason
+              ? ('invalid_transition' as const)
+              : null
+    const uniquePayerUserIds = new Set(args.allowlistedPayerUserIds)
+    if (
+      transitionCode === null &&
+      !isExpansion &&
+      (uniquePayerUserIds.size === 0 ||
+        uniquePayerUserIds.size > SMALL_ROLLOUT_MAX_PAYER_COUNT ||
+        args.capacityLimits.dailyPaymentCount >
+          SMALL_ROLLOUT_MAX_DAILY_PAYMENT_COUNT ||
+        args.capacityLimits.dailyPaymentValueCents >
+          SMALL_ROLLOUT_MAX_DAILY_PAYMENT_VALUE_CENTS)
+    ) {
+      transitionCode = 'invalid_transition'
+    }
+    if (transitionCode === null && !isExpansion) {
+      const cohortUsers = await Promise.all(
+        [...uniquePayerUserIds].map((payerUserId) =>
+          ctx.db.get('users', payerUserId),
+        ),
+      )
+      if (
+        cohortUsers.some(
+          (user) => user?.paymentRolloutCohort !== 'internal_test',
+        )
+      ) {
+        transitionCode = 'invalid_transition'
+      }
+    }
+    if (transitionCode === null && isExpansion) {
+      const activeActivationId = gate.activeActivationId
+      const previousActivation = activeActivationId
+        ? await ctx.db.get('payToPaymentActivations', activeActivationId)
+        : null
+      const previousAllowlist = activeActivationId
+        ? await ctx.db
+            .query('payToPaymentActivationAllowlist')
+            .withIndex('by_activationId_and_payerUserId', (q) =>
+              q.eq('activationId', activeActivationId),
+            )
+            .take(101)
+        : []
+      const nextPayers = new Set(args.allowlistedPayerUserIds)
+      if (
+        !previousActivation ||
+        previousAllowlist.length === 0 ||
+        nextPayers.size <= previousAllowlist.length ||
+        previousAllowlist.some((entry) => !nextPayers.has(entry.payerUserId)) ||
+        args.capacityLimits.dailyPaymentCount <
+          previousActivation.capacityLimits.dailyPaymentCount ||
+        args.capacityLimits.dailyPaymentValueCents <
+          previousActivation.capacityLimits.dailyPaymentValueCents
+      ) {
+        transitionCode = 'invalid_transition'
+      }
+    }
+    const refusedCode = authenticationCode ?? transitionCode
+    if (refusedCode !== null) {
+      await ctx.db.insert('payToPaymentRolloutActions', {
+        environment: 'production',
+        ...actor,
+        action,
+        reason: args.reason,
+        decision: 'refused',
+        resultCode: refusedCode,
+        requestedAt,
+        ...(gate === null ? {} : { previousMode: gate.mode }),
+        nextMode: gate?.mode ?? 'reconcile_only',
+      })
+      if (authenticationCode !== null) {
+        emitPayToPaymentCriticalSignal('unauthorized_operation', {
+          environment: 'production',
+          observedAt: requestedAt,
+          reason: authenticationCode,
+        })
+        await failProductionRolloutClosed(ctx, {
+          cause: 'authorization_failure',
+          observedAt: requestedAt,
+        })
+      }
+      return { decision: 'refused' as const, code: refusedCode }
+    }
+    let activation
+    try {
+      activation = await recordProductionActivationForOperator(ctx, {
+        nowMs: requestedAt,
+        allowlistedPayerUserIds: args.allowlistedPayerUserIds,
+        capacityLimits: args.capacityLimits,
+        certificationReference: args.certificationReference,
+        approvalReferences: args.approvalReferences,
+      })
+    } catch {
+      await ctx.db.insert('payToPaymentRolloutActions', {
+        environment: 'production',
+        ...actor,
+        action,
+        reason: args.reason,
+        decision: 'refused',
+        resultCode: 'prerequisites_missing',
+        requestedAt,
+        previousMode: gate!.mode,
+        nextMode: 'reconcile_only',
+      })
+      await failProductionRolloutClosed(ctx, {
+        cause: 'certification_mismatch',
+        observedAt: requestedAt,
+      })
+      return {
+        decision: 'refused' as const,
+        code: 'prerequisites_missing' as const,
+      }
+    }
+    const nextStage = isExpansion
+      ? ('expanded_allowlist' as const)
+      : ('small_allowlist' as const)
+    const updatedGate = await ctx.db
+      .query('payToPaymentRuntimeGates')
+      .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+      .unique()
+    if (!updatedGate) throw new Error('Production rollout gate was not created')
+    await ctx.db.patch('payToPaymentRuntimeGates', updatedGate._id, {
+      rolloutStage: nextStage,
+      stageChangedAt: requestedAt,
+      cleanSince: requestedAt,
+      lastSafetyCause: undefined,
+    })
+    await ctx.db.insert('payToPaymentRolloutActions', {
+      environment: 'production',
+      ...actor,
+      action,
+      reason: args.reason,
+      decision: 'authorized',
+      resultCode: 'changed',
+      requestedAt,
+      previousMode: gate!.mode,
+      nextMode: 'enabled_for_new_confirmations',
+      activationId: activation.activationId,
+    })
+    return {
+      decision: 'authorized' as const,
+      code: 'changed' as const,
+      activationId: activation.activationId,
+      activationFingerprint: activation.activationFingerprint,
+    }
+  },
 })

@@ -97,6 +97,7 @@ type ZeptoWebhookDependencies = {
     items: ZeptoWebhookItem[]
   }) => Promise<unknown>
   recordRejectedDelivery?: (args: {
+    environment?: ZeptoEnvironment
     reason: 'missing_headers' | 'invalid_signature'
     deliveryId?: string
     payloadHash?: string
@@ -256,6 +257,7 @@ export async function handleZeptoWebhook(
   if (deliveryId === null || !splitSignature) {
     try {
       await dependencies.recordRejectedDelivery?.({
+        environment: dependencies.environment,
         reason: 'missing_headers',
         ...(deliveryId === null ? {} : { deliveryId }),
         observedAt: dependencies.nowMs(),
@@ -283,6 +285,7 @@ export async function handleZeptoWebhook(
   } catch {
     try {
       await dependencies.recordRejectedDelivery?.({
+        environment: dependencies.environment,
         reason: 'invalid_signature',
         deliveryId,
         payloadHash: await sha256Base64Url(rawBody),

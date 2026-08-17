@@ -2,15 +2,22 @@
 
 import workpoolTest from '@convex-dev/workpool/test'
 import rateLimiterTest from '@convex-dev/rate-limiter/test'
+import type { UserIdentity } from 'convex/server'
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-import { internal } from './_generated/api'
+import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { consumePaymentRetryEndpointCall } from './lib/paymentRetryRateLimiter'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
+
+const rolloutOperatorIdentity = {
+  tokenIdentifier: 'https://clerk.example.test|payment_rollout_operator',
+  subject: 'payment_rollout_operator',
+  issuer: 'https://clerk.example.test',
+} satisfies UserIdentity
 
 const productionEnvironmentKeys = [
   'PAYME_RELEASE_COMMIT',
@@ -53,26 +60,66 @@ async function activateProduction(
     await ctx.db.patch('payToAgreements', setup.payToAgreementId, {
       environment: 'production',
     })
+    await ctx.db.insert('users', {
+      tokenIdentifier: rolloutOperatorIdentity.tokenIdentifier,
+      clerkUserId: rolloutOperatorIdentity.subject,
+      email: 'payment-rollout-operator@example.test',
+      displayName: 'Payment Rollout Operator',
+      searchText: 'Payment Rollout Operator',
+      roles: ['payment_operator'],
+    })
+    await ctx.db.insert('payToPaymentRuntimeGates', {
+      environment: 'production',
+      mode: 'reconcile_only',
+      rolloutStage: 'reconcile_only_soak',
+      stageChangedAt: (overrides.nowMs ?? 2_500) - 7 * 24 * 60 * 60_000,
+      cleanSince: (overrides.nowMs ?? 2_500) - 7 * 24 * 60 * 60_000,
+    })
+    for (let cleanDay = 1; cleanDay <= 7; cleanDay += 1) {
+      await ctx.db.insert('payToPaymentRolloutCleanObservations', {
+        environment: 'production',
+        cleanSince: (overrides.nowMs ?? 2_500) - 7 * 24 * 60 * 60_000,
+        cleanDay,
+        observedAt:
+          (overrides.nowMs ?? 2_500) - (7 - cleanDay) * 24 * 60 * 60_000,
+      })
+    }
   })
-  return await setup.t.mutation(
-    internal.payToPayments.recordProductionActivation,
-    {
-      nowMs: overrides.nowMs ?? 2_500,
-      allowlistedPayerUserIds: overrides.payerUserIds ?? [setup.payerUserId],
-      capacityLimits: {
-        dailyPaymentCount: overrides.dailyPaymentCountCap ?? 1,
-        dailyPaymentValueCents: overrides.dailyPaymentValueCapCents ?? 12_500,
-      },
-      certificationReference: 'certification://payment-release-1',
-      approvalReferences: {
-        engineering: 'approval://engineering/1',
-        operations: 'approval://operations/1',
-        security: 'approval://security/1',
-        legalCompliance: 'approval://legal/1',
-        zepto: 'approval://zepto/1',
-      },
-    },
-  )
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(overrides.nowMs ?? 2_500)
+  try {
+    const payerUserIds = overrides.payerUserIds ?? [setup.payerUserId]
+    await setup.t.run(async (ctx) => {
+      for (const payerUserId of payerUserIds) {
+        await ctx.db.patch('users', payerUserId, {
+          paymentRolloutCohort: 'internal_test',
+        })
+      }
+    })
+    const result = await setup.t
+      .withIdentity(rolloutOperatorIdentity)
+      .mutation(api.payToPaymentOperators.advanceProductionRollout, {
+        reason: 'begin_limited_rollout',
+        allowlistedPayerUserIds: payerUserIds,
+        capacityLimits: {
+          dailyPaymentCount: overrides.dailyPaymentCountCap ?? 1,
+          dailyPaymentValueCents: overrides.dailyPaymentValueCapCents ?? 12_500,
+        },
+        certificationReference: 'certification://payment-release-1',
+        approvalReferences: {
+          engineering: 'approval://engineering/1',
+          operations: 'approval://operations/1',
+          security: 'approval://security/1',
+          legalCompliance: 'approval://legal/1',
+          zepto: 'approval://zepto/1',
+        },
+      })
+    if (result.decision !== 'authorized') {
+      throw new Error('Expected authorized production activation')
+    }
+    return result
+  } finally {
+    clock.mockRestore()
+  }
 }
 
 async function setupAgreement() {
@@ -774,7 +821,18 @@ describe('PayTo Payment immutable intent', () => {
     })
 
     const outsideAllowlist = await setupAgreement()
-    await activateProduction(outsideAllowlist, { payerUserIds: [] })
+    const differentPayerUserId = await outsideAllowlist.t.run(async (ctx) =>
+      ctx.db.insert('users', {
+        tokenIdentifier: 'https://clerk.example.test|different_rollout_payer',
+        clerkUserId: 'different_rollout_payer',
+        email: 'different-rollout-payer@example.test',
+        displayName: 'Different Rollout Payer',
+        searchText: 'Different Rollout Payer',
+      }),
+    )
+    await activateProduction(outsideAllowlist, {
+      payerUserIds: [differentPayerUserId],
+    })
     await expect(
       outsideAllowlist.t.mutation(internal.payToPayments.ensure, {
         payToAgreementId: outsideAllowlist.payToAgreementId,
@@ -784,6 +842,116 @@ describe('PayTo Payment immutable intent', () => {
       kind: 'ineligible',
       reason: 'production_not_enabled',
     })
+  })
+
+  test('reports the active production cohort and redacted certification provenance in operator diagnostics', async () => {
+    const setup = await setupAgreement()
+    const activation = await activateProduction(setup)
+    const established = await setup.t.mutation(internal.payToPayments.ensure, {
+      payToAgreementId: setup.payToAgreementId,
+      observedAt: 3_000,
+    })
+    if (established.kind !== 'created') {
+      throw new Error('Expected production Payment')
+    }
+
+    await expect(
+      setup.t
+        .withIdentity(rolloutOperatorIdentity)
+        .action(api.payToPaymentOperators.diagnostics, {
+          payToPaymentId: established.payToPaymentId,
+          nowMs: 3_001,
+        }),
+    ).resolves.toMatchObject({
+      gate: {
+        rollout: { cohortConfigured: true, approvalReferenceCount: 5 },
+      },
+      certification: {
+        configured: true,
+        admissionActivationId: activation.activationId,
+        currentRolloutActivationId: activation.activationId,
+        certifiedCommit: 'a'.repeat(40),
+        configurationFingerprint: 'configuration-v1',
+        environment: 'production',
+      },
+    })
+
+    const secondPayerUserId = await setup.t.run(async (ctx) => {
+      const userId = await ctx.db.insert('users', {
+        tokenIdentifier: 'https://clerk.example.test|expanded_rollout_payer',
+        clerkUserId: 'expanded_rollout_payer',
+        email: 'expanded-rollout-payer@example.test',
+        displayName: 'Expanded Rollout Payer',
+        searchText: 'Expanded Rollout Payer',
+      })
+      for (let cleanDay = 1; cleanDay <= 7; cleanDay += 1) {
+        await ctx.db.insert('payToPaymentRolloutCleanObservations', {
+          environment: 'production',
+          cleanSince: 2_500,
+          cleanDay,
+          observedAt: 2_500 + cleanDay * 24 * 60 * 60_000,
+        })
+      }
+      return userId
+    })
+    const expansionAt = 2_500 + 7 * 24 * 60 * 60_000
+    process.env.PAYME_RELEASE_COMMIT = 'b'.repeat(40)
+    process.env.PAYTO_PAYMENT_CERTIFICATION_FINGERPRINT = 'certification-v2'
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(expansionAt)
+    const expansion = await setup.t
+      .withIdentity(rolloutOperatorIdentity)
+      .mutation(api.payToPaymentOperators.advanceProductionRollout, {
+        reason: 'expand_production_allowlist',
+        allowlistedPayerUserIds: [setup.payerUserId, secondPayerUserId],
+        capacityLimits: {
+          dailyPaymentCount: 2,
+          dailyPaymentValueCents: 25_000,
+        },
+        certificationReference: 'certification://payment-release-2',
+        approvalReferences: {
+          engineering: 'approval://engineering/2',
+          operations: 'approval://operations/2',
+          security: 'approval://security/2',
+          legalCompliance: 'approval://legal/2',
+          zepto: 'approval://zepto/2',
+        },
+      })
+    clock.mockRestore()
+    if (expansion.decision !== 'authorized') {
+      throw new Error('Expected authorized production expansion')
+    }
+
+    await expect(
+      setup.t
+        .withIdentity(rolloutOperatorIdentity)
+        .action(api.payToPaymentOperators.diagnostics, {
+          payToPaymentId: established.payToPaymentId,
+          nowMs: expansionAt,
+        }),
+    ).resolves.toMatchObject({
+      certification: {
+        admissionActivationId: activation.activationId,
+        currentRolloutActivationId: expansion.activationId,
+        certifiedCommit: 'a'.repeat(40),
+      },
+    })
+    const create = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: established.payToPaymentId,
+        leaseToken: 'post-expansion-create',
+        nowMs: expansionAt + 1,
+      },
+    )
+    if (!create) throw new Error('Expected post-expansion create work')
+    await expect(
+      setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+        payToPaymentId: established.payToPaymentId,
+        operationId: create.operationId,
+        leaseToken: 'post-expansion-create',
+        observedAt: expansionAt + 2,
+      }),
+    ).resolves.toBe(true)
   })
 
   test.each([
@@ -880,6 +1048,24 @@ describe('PayTo Payment immutable intent', () => {
     ).resolves.toMatchObject({
       reservedPaymentCount: 1,
       reservedPaymentValueCents: 12_500,
+    })
+    await expect(
+      setup.t.run(async (ctx) => ({
+        gate: await ctx.db
+          .query('payToPaymentRuntimeGates')
+          .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+          .unique(),
+        stop: await ctx.db
+          .query('payToPaymentRolloutActions')
+          .withIndex('by_environment_and_requestedAt', (q) =>
+            q.eq('environment', 'production'),
+          )
+          .order('desc')
+          .first(),
+      })),
+    ).resolves.toMatchObject({
+      gate: { mode: 'reconcile_only' },
+      stop: { safetyCause: 'cap_breach' },
     })
   })
 
@@ -1325,17 +1511,62 @@ describe('PayTo Payment create operation', () => {
       }),
     ).resolves.toBe(false)
     await expect(
-      setup.t.run(async (ctx) =>
-        ctx.db
+      setup.t.run(async (ctx) => ({
+        operation: await ctx.db
           .query('payToPaymentOperations')
           .withIndex('by_operationId', (q) =>
             q.eq('operationId', claimed.operationId),
           )
           .unique(),
-      ),
+        gate: await ctx.db
+          .query('payToPaymentRuntimeGates')
+          .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+          .unique(),
+        rolloutAction: await ctx.db
+          .query('payToPaymentRolloutActions')
+          .withIndex('by_environment_and_requestedAt', (q) =>
+            q.eq('environment', 'production'),
+          )
+          .order('desc')
+          .first(),
+      })),
     ).resolves.toMatchObject({
-      productionActivationId: activation.activationId,
-      outcome: { classification: 'refused', observedAt: 4_001 },
+      operation: {
+        productionActivationId: activation.activationId,
+        outcome: { classification: 'refused', observedAt: 4_001 },
+      },
+      gate: { mode: 'reconcile_only' },
+      rolloutAction: {
+        action: 'automatic_safety_stop',
+        safetyCause: 'certification_mismatch',
+        payToPaymentId: established.payToPaymentId,
+      },
+    })
+
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', established.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected production PayTo Payment')
+    await expect(
+      setup.t.mutation(internal.payToPayments.applyEvidence, {
+        payToPaymentId: payment._id,
+        evidence: {
+          source: 'webhook',
+          intentFingerprint: payment.intent.fingerprint,
+          providerState: 'pending',
+        },
+        observedAt: 4_002,
+      }),
+    ).resolves.toEqual({ kind: 'accepted' })
+    await expect(
+      setup.t.mutation(internal.payToPaymentReconciliation.claimWork, {
+        payToPaymentId: payment._id,
+        leaseToken: 'post-stop-reconciliation',
+        nowMs: 4_002,
+      }),
+    ).resolves.toMatchObject({
+      operationId: expect.any(String),
+      providerUid: payment.providerUid,
     })
   })
 

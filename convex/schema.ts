@@ -29,6 +29,11 @@ import {
   payToPaymentOperatorReasonValidator,
   payToPaymentOperatorResultCodeValidator,
   payToPaymentProductionCapacityReservationValidator,
+  payToPaymentRolloutActionValidator,
+  payToPaymentRolloutReasonValidator,
+  payToPaymentRolloutResultCodeValidator,
+  payToPaymentRolloutSafetyCauseValidator,
+  payToPaymentRolloutStageValidator,
   providerPayToPaymentStateValidator,
 } from './validators/payToPayments'
 import {
@@ -65,6 +70,7 @@ export default defineSchema({
     profileImageSource: v.optional(profileImageSourceValidator),
     defaultPaymentDestinationId: v.optional(v.id('paymentDestinations')),
     roles: v.optional(v.array(v.literal('payment_operator'))),
+    paymentRolloutCohort: v.optional(v.literal('internal_test')),
   })
     .index('by_tokenIdentifier', ['tokenIdentifier'])
     .index('by_clerkUserId', ['clerkUserId'])
@@ -357,6 +363,10 @@ export default defineSchema({
     ['observedAt'],
   ),
 
+  payToPaymentWebhookSafetyEvents: defineTable({
+    observedAt: v.number(),
+  }).index('by_observedAt', ['observedAt']),
+
   payToAgreementReconciliationWorkItems: defineTable({
     payToAgreementId: v.id('payToAgreements'),
     providerUid: v.string(),
@@ -416,7 +426,48 @@ export default defineSchema({
     budgetDate: v.optional(v.string()),
     reservedPaymentCount: v.optional(v.number()),
     reservedPaymentValueCents: v.optional(v.number()),
+    rolloutStage: v.optional(payToPaymentRolloutStageValidator),
+    stageChangedAt: v.optional(v.number()),
+    cleanSince: v.optional(v.number()),
+    lastSafetyCause: v.optional(payToPaymentRolloutSafetyCauseValidator),
   }).index('by_environment', ['environment']),
+
+  payToPaymentRolloutActions: defineTable({
+    environment: v.literal('production'),
+    actorUserId: v.optional(v.id('users')),
+    authentication: v.union(
+      v.literal('authenticated'),
+      v.literal('unauthenticated'),
+      v.literal('system'),
+    ),
+    authorization: v.union(
+      v.literal('payment_operator'),
+      v.literal('insufficient_role'),
+      v.literal('not_authenticated'),
+      v.literal('automatic_safety_policy'),
+    ),
+    action: payToPaymentRolloutActionValidator,
+    reason: v.optional(payToPaymentRolloutReasonValidator),
+    safetyCause: v.optional(payToPaymentRolloutSafetyCauseValidator),
+    payToPaymentId: v.optional(v.id('payToPayments')),
+    decision: payToPaymentOperatorDecisionValidator,
+    resultCode: payToPaymentRolloutResultCodeValidator,
+    requestedAt: v.number(),
+    previousMode: v.optional(payToPaymentGateModeValidator),
+    nextMode: payToPaymentGateModeValidator,
+    activationId: v.optional(v.id('payToPaymentActivations')),
+  }).index('by_environment_and_requestedAt', ['environment', 'requestedAt']),
+
+  payToPaymentRolloutCleanObservations: defineTable({
+    environment: v.literal('production'),
+    cleanSince: v.number(),
+    cleanDay: v.number(),
+    observedAt: v.number(),
+  }).index('by_environment_and_cleanSince_and_cleanDay', [
+    'environment',
+    'cleanSince',
+    'cleanDay',
+  ]),
 
   payToPaymentActivations: defineTable({
     environment: v.literal('production'),

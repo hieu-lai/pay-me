@@ -9,6 +9,10 @@ import { env, internalMutation } from './_generated/server'
 import { boundedEvidenceCode } from './lib/evidenceRedaction'
 import { paymentCreationPool } from './lib/paymentCreationPool'
 import { paymentAuditExpiresAt } from './lib/payToPaymentRetentionPolicy'
+import {
+  failProductionPaymentRolloutClosed,
+  failProductionRolloutForProviderError,
+} from './lib/payToPaymentRollout'
 import { projectPayerPayment } from './lib/payToPaymentProjection'
 import {
   emitPayToPaymentAggregateMetric,
@@ -189,6 +193,20 @@ async function productionActivationMatches(
 ) {
   const runtime = await currentProductionPrerequisites()
   if (!runtime) return false
+  return (
+    activation.certifiedCommit === runtime.certifiedCommit &&
+    activation.credentialFingerprint === runtime.credentialFingerprint &&
+    activation.configurationFingerprint === runtime.configurationFingerprint &&
+    activation.certificationFingerprint === runtime.certificationFingerprint &&
+    (await productionActivationIntegrityMatches(ctx, activation, payerUserId))
+  )
+}
+
+async function productionActivationIntegrityMatches(
+  ctx: Pick<MutationCtx, 'db'>,
+  activation: Doc<'payToPaymentActivations'>,
+  payerUserId: Id<'users'>,
+) {
   const allowlist = await ctx.db
     .query('payToPaymentActivationAllowlist')
     .withIndex('by_activationId_and_payerUserId', (q) =>
@@ -201,10 +219,6 @@ async function productionActivationMatches(
   void _id
   void _creationTime
   return (
-    activation.certifiedCommit === runtime.certifiedCommit &&
-    activation.credentialFingerprint === runtime.credentialFingerprint &&
-    activation.configurationFingerprint === runtime.configurationFingerprint &&
-    activation.certificationFingerprint === runtime.certificationFingerprint &&
     allowlistedPayerUserIds.includes(payerUserId) &&
     Number.isSafeInteger(activation.capacityLimits.dailyPaymentCount) &&
     activation.capacityLimits.dailyPaymentCount > 0 &&
@@ -215,7 +229,7 @@ async function productionActivationMatches(
   )
 }
 
-const productionActivationArgsValidator = v.object({
+export const productionActivationArgsValidator = v.object({
   nowMs: v.number(),
   allowlistedPayerUserIds: v.array(v.id('users')),
   capacityLimits: payToPaymentCapacityLimitsValidator,
@@ -223,114 +237,111 @@ const productionActivationArgsValidator = v.object({
   approvalReferences: payToPaymentApprovalReferencesValidator,
 })
 
-export const recordProductionActivation = internalMutation({
-  args: productionActivationArgsValidator.fields,
-  returns: v.object({
-    activationId: v.id('payToPaymentActivations'),
-    activationFingerprint: v.string(),
-  }),
-  handler: async (ctx, args) => {
-    const runtime = await currentProductionPrerequisites()
-    if (!runtime)
-      throw new Error('Production PayTo Payment prerequisites are missing')
-    if (
-      !Number.isSafeInteger(args.nowMs) ||
-      args.nowMs < 0 ||
-      !Number.isSafeInteger(args.capacityLimits.dailyPaymentCount) ||
-      args.capacityLimits.dailyPaymentCount <= 0 ||
-      !Number.isSafeInteger(args.capacityLimits.dailyPaymentValueCents) ||
-      args.capacityLimits.dailyPaymentValueCents <= 0
-    ) {
-      throw new Error('Production PayTo Payment activation values are invalid')
-    }
-    const latestActivation = await ctx.db
-      .query('payToPaymentActivations')
-      .withIndex('by_activatedAt')
-      .order('desc')
-      .first()
-    if (latestActivation && args.nowMs <= latestActivation.activatedAt) {
-      throw new Error(
-        'Production PayTo Payment activation cutoffs must advance',
-      )
-    }
-    const payerUserIds = [...new Set(args.allowlistedPayerUserIds)].sort()
-    if (payerUserIds.length > MAX_PRODUCTION_ALLOWLIST_SIZE) {
-      throw new Error('Production PayTo Payment allowlist is too large')
-    }
-    const approvalReferences = {
-      engineering: boundedActivationReference(
-        args.approvalReferences.engineering,
-        'Engineering approval',
-      ),
-      operations: boundedActivationReference(
-        args.approvalReferences.operations,
-        'Operations approval',
-      ),
-      security: boundedActivationReference(
-        args.approvalReferences.security,
-        'Security approval',
-      ),
-      legalCompliance: boundedActivationReference(
-        args.approvalReferences.legalCompliance,
-        'Legal/compliance approval',
-      ),
-      zepto: boundedActivationReference(
-        args.approvalReferences.zepto,
-        'Zepto approval',
-      ),
-    }
-    const record: ProductionActivationRecord = {
-      environment: 'production',
-      activatedAt: args.nowMs,
-      certifiedCommit: runtime.certifiedCommit,
-      apiVersion: '20260101',
-      credentialFingerprint: runtime.credentialFingerprint,
-      configurationFingerprint: runtime.configurationFingerprint,
-      certificationFingerprint: runtime.certificationFingerprint,
-      certificationReference: boundedActivationReference(
-        args.certificationReference,
-        'Certification',
-      ),
-      cohort: { kind: 'payer_allowlist' },
-      capacityLimits: args.capacityLimits,
-      approvalReferences,
-    }
-    const activationFingerprint = await productionActivationFingerprint(
-      record,
-      payerUserIds,
-    )
-    const activationId = await ctx.db.insert('payToPaymentActivations', {
-      ...record,
-      activationFingerprint,
+export type ProductionActivationArgs = Infer<
+  typeof productionActivationArgsValidator
+>
+
+export async function recordProductionActivationForOperator(
+  ctx: MutationCtx,
+  args: ProductionActivationArgs,
+) {
+  const runtime = await currentProductionPrerequisites()
+  if (!runtime)
+    throw new Error('Production PayTo Payment prerequisites are missing')
+  if (
+    !Number.isSafeInteger(args.nowMs) ||
+    args.nowMs < 0 ||
+    !Number.isSafeInteger(args.capacityLimits.dailyPaymentCount) ||
+    args.capacityLimits.dailyPaymentCount <= 0 ||
+    !Number.isSafeInteger(args.capacityLimits.dailyPaymentValueCents) ||
+    args.capacityLimits.dailyPaymentValueCents <= 0
+  ) {
+    throw new Error('Production PayTo Payment activation values are invalid')
+  }
+  const latestActivation = await ctx.db
+    .query('payToPaymentActivations')
+    .withIndex('by_activatedAt')
+    .order('desc')
+    .first()
+  if (latestActivation && args.nowMs <= latestActivation.activatedAt) {
+    throw new Error('Production PayTo Payment activation cutoffs must advance')
+  }
+  const payerUserIds = [...new Set(args.allowlistedPayerUserIds)].sort()
+  if (payerUserIds.length > MAX_PRODUCTION_ALLOWLIST_SIZE) {
+    throw new Error('Production PayTo Payment allowlist is too large')
+  }
+  const approvalReferences = {
+    engineering: boundedActivationReference(
+      args.approvalReferences.engineering,
+      'Engineering approval',
+    ),
+    operations: boundedActivationReference(
+      args.approvalReferences.operations,
+      'Operations approval',
+    ),
+    security: boundedActivationReference(
+      args.approvalReferences.security,
+      'Security approval',
+    ),
+    legalCompliance: boundedActivationReference(
+      args.approvalReferences.legalCompliance,
+      'Legal/compliance approval',
+    ),
+    zepto: boundedActivationReference(
+      args.approvalReferences.zepto,
+      'Zepto approval',
+    ),
+  }
+  const record: ProductionActivationRecord = {
+    environment: 'production',
+    activatedAt: args.nowMs,
+    certifiedCommit: runtime.certifiedCommit,
+    apiVersion: '20260101',
+    credentialFingerprint: runtime.credentialFingerprint,
+    configurationFingerprint: runtime.configurationFingerprint,
+    certificationFingerprint: runtime.certificationFingerprint,
+    certificationReference: boundedActivationReference(
+      args.certificationReference,
+      'Certification',
+    ),
+    cohort: { kind: 'payer_allowlist' },
+    capacityLimits: args.capacityLimits,
+    approvalReferences,
+  }
+  const activationFingerprint = await productionActivationFingerprint(
+    record,
+    payerUserIds,
+  )
+  const activationId = await ctx.db.insert('payToPaymentActivations', {
+    ...record,
+    activationFingerprint,
+  })
+  for (const payerUserId of payerUserIds) {
+    await ctx.db.insert('payToPaymentActivationAllowlist', {
+      activationId,
+      payerUserId,
     })
-    for (const payerUserId of payerUserIds) {
-      await ctx.db.insert('payToPaymentActivationAllowlist', {
-        activationId,
-        payerUserId,
-      })
-    }
-    const gate = await ctx.db
-      .query('payToPaymentRuntimeGates')
-      .withIndex('by_environment', (q) => q.eq('environment', 'production'))
-      .unique()
-    const gatePatch = {
-      mode: 'enabled_for_new_confirmations' as const,
-      activeActivationId: activationId,
-      activatedAt: args.nowMs,
-      dailyPaymentCountCap: args.capacityLimits.dailyPaymentCount,
-      dailyPaymentValueCapCents: args.capacityLimits.dailyPaymentValueCents,
-    }
-    if (gate)
-      await ctx.db.patch('payToPaymentRuntimeGates', gate._id, gatePatch)
-    else {
-      await ctx.db.insert('payToPaymentRuntimeGates', {
-        environment: 'production',
-        ...gatePatch,
-      })
-    }
-    return { activationId, activationFingerprint }
-  },
-})
+  }
+  const gate = await ctx.db
+    .query('payToPaymentRuntimeGates')
+    .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+    .unique()
+  const gatePatch = {
+    mode: 'enabled_for_new_confirmations' as const,
+    activeActivationId: activationId,
+    activatedAt: args.nowMs,
+    dailyPaymentCountCap: args.capacityLimits.dailyPaymentCount,
+    dailyPaymentValueCapCents: args.capacityLimits.dailyPaymentValueCents,
+  }
+  if (gate) await ctx.db.patch('payToPaymentRuntimeGates', gate._id, gatePatch)
+  else {
+    await ctx.db.insert('payToPaymentRuntimeGates', {
+      environment: 'production',
+      ...gatePatch,
+    })
+  }
+  return { activationId, activationFingerprint }
+}
 
 async function reserveProductionActivationCapacity(
   ctx: MutationCtx,
@@ -352,6 +363,11 @@ async function reserveProductionActivationCapacity(
     reservedPaymentCount > activation.capacityLimits.dailyPaymentCount ||
     reservedPaymentValueCents > activation.capacityLimits.dailyPaymentValueCents
   ) {
+    await failProductionPaymentRolloutClosed(ctx, {
+      environment: 'production',
+      cause: 'cap_breach',
+      observedAt,
+    })
     return null
   }
   if (budget) {
@@ -397,6 +413,11 @@ async function productionEstablishmentAdmission(
     gate.dailyPaymentValueCapCents !==
       activation.capacityLimits.dailyPaymentValueCents
   ) {
+    await failProductionPaymentRolloutClosed(ctx, {
+      environment: 'production',
+      cause: 'certification_mismatch',
+      observedAt,
+    })
     return { kind: 'denied' as const }
   }
   if (
@@ -437,51 +458,61 @@ export async function productionPaymentDispatchAuthorized(
     .unique()
   if (
     gate?.mode !== 'enabled_for_new_confirmations' ||
-    gate.activeActivationId !== payment.productionActivationId
+    !gate.activeActivationId
   ) {
     return false
   }
-  const activationId = payment.productionActivationId
+  const admissionActivationId = payment.productionActivationId
+  const currentActivationId = gate.activeActivationId
   const reservation = payment.productionCapacityReservation
-  const [activation, agreement, budget] = await Promise.all([
-    ctx.db.get('payToPaymentActivations', activationId),
-    ctx.db.get('payToAgreements', payment.payToAgreementId),
-    ctx.db
-      .query('payToPaymentActivationBudgets')
-      .withIndex('by_environment_and_budgetDate', (q) =>
-        q
-          .eq('environment', 'production')
-          .eq('budgetDate', reservation.budgetDate),
-      )
-      .unique(),
-  ])
+  const [admissionActivation, currentActivation, agreement, budget] =
+    await Promise.all([
+      ctx.db.get('payToPaymentActivations', admissionActivationId),
+      ctx.db.get('payToPaymentActivations', currentActivationId),
+      ctx.db.get('payToAgreements', payment.payToAgreementId),
+      ctx.db
+        .query('payToPaymentActivationBudgets')
+        .withIndex('by_environment_and_budgetDate', (q) =>
+          q
+            .eq('environment', 'production')
+            .eq('budgetDate', reservation.budgetDate),
+        )
+        .unique(),
+    ])
   return Boolean(
-    activation &&
+    admissionActivation &&
+    currentActivation &&
     agreement &&
     agreement.environment === payment.environment &&
     agreement.payerUserId === payment.payerUserId &&
     agreement.moneyRequestId === payment.moneyRequestId &&
     agreement.activationProvenancePolicy === 'track_first_confirmation' &&
     agreement.firstConfirmedActiveAt !== undefined &&
-    agreement.firstConfirmedActiveAt >= activation.activatedAt &&
+    agreement.firstConfirmedActiveAt >= admissionActivation.activatedAt &&
     agreement.lifecycleState === 'active' &&
     agreement.lifecycleConfidence === 'confirmed' &&
     reservation.paymentValueCents === payment.intent.amount.cents &&
-    (await productionActivationMatches(
+    (await productionActivationIntegrityMatches(
       ctx,
-      activation,
+      admissionActivation,
       agreement.payerUserId,
     )) &&
-    gate.dailyPaymentCountCap === activation.capacityLimits.dailyPaymentCount &&
+    (await productionActivationMatches(
+      ctx,
+      currentActivation,
+      agreement.payerUserId,
+    )) &&
+    gate.dailyPaymentCountCap ===
+      currentActivation.capacityLimits.dailyPaymentCount &&
     gate.dailyPaymentValueCapCents ===
-      activation.capacityLimits.dailyPaymentValueCents &&
+      currentActivation.capacityLimits.dailyPaymentValueCents &&
     budget &&
     budget.reservedPaymentCount >= reservation.paymentCount &&
     budget.reservedPaymentValueCents >= reservation.paymentValueCents &&
     budget.reservedPaymentCount <=
-      activation.capacityLimits.dailyPaymentCount &&
+      currentActivation.capacityLimits.dailyPaymentCount &&
     budget.reservedPaymentValueCents <=
-      activation.capacityLimits.dailyPaymentValueCents,
+      currentActivation.capacityLimits.dailyPaymentValueCents,
   )
 }
 
@@ -652,6 +683,12 @@ async function recordIntentMismatch(
       environment: payment.environment,
       observedAt,
       reason: 'immutable_intent_mismatch',
+    })
+    await failProductionPaymentRolloutClosed(ctx, {
+      environment: payment.environment,
+      cause: 'certification_mismatch',
+      observedAt,
+      payToPaymentId: payment._id,
     })
   }
 }
@@ -934,6 +971,12 @@ async function scheduleRetryAfterConfirmedFailure(
         observedAt,
         reason: 'retry_acknowledgement_uncertain',
       })
+      await failProductionPaymentRolloutClosed(ctx, {
+        environment: payment.environment,
+        cause: 'unresolved_retry_ambiguity',
+        observedAt,
+        payToPaymentId: payment._id,
+      })
       return
     }
   }
@@ -1043,6 +1086,12 @@ export async function requireCreationRecoveryAttention(
       environment: payment.environment,
       observedAt,
       reason: 'creation_recovery_exhausted',
+    })
+    await failProductionPaymentRolloutClosed(ctx, {
+      environment: payment.environment,
+      cause: 'unresolved_creation_ambiguity',
+      observedAt,
+      payToPaymentId: payment._id,
     })
   }
 }
@@ -1487,9 +1536,13 @@ export const markCreateDispatchStarted = internalMutation({
         q.eq('environment', payment.environment),
       )
       .unique()
+    const productionAuthorized = await productionPaymentDispatchAuthorized(
+      ctx,
+      payment,
+    )
     if (
       moneyMovingDenial(gate?.mode) !== undefined ||
-      !(await productionPaymentDispatchAuthorized(ctx, payment)) ||
+      !productionAuthorized ||
       operation.productionActivationId !== payment.productionActivationId
     ) {
       await ctx.db.patch('payToPaymentOperations', operation._id, {
@@ -1500,6 +1553,19 @@ export const markCreateDispatchStarted = internalMutation({
         leaseToken: undefined,
         leaseExpiresAt: undefined,
       })
+      if (
+        payment.environment === 'production' &&
+        gate?.mode === 'enabled_for_new_confirmations' &&
+        (!productionAuthorized ||
+          operation.productionActivationId !== payment.productionActivationId)
+      ) {
+        await failProductionPaymentRolloutClosed(ctx, {
+          environment: payment.environment,
+          cause: 'certification_mismatch',
+          observedAt: args.observedAt,
+          payToPaymentId: payment._id,
+        })
+      }
       return false
     }
     await ctx.db.patch('payToPaymentOperations', operation._id, {
@@ -1703,6 +1769,11 @@ export const recordCreateFailure = internalMutation({
       category: args.errorCategory,
       observedAt: args.observedAt,
     })
+    await failProductionRolloutForProviderError(ctx, {
+      payment,
+      category: args.errorCategory,
+      observedAt: args.observedAt,
+    })
     if (
       !isCurrentDispatchedCreateAttempt(
         attempt,
@@ -1769,6 +1840,11 @@ export const recordCreatePreDispatchFailure = internalMutation({
       payToPaymentId: attempt.payment._id,
       payToAgreementId: attempt.payment.payToAgreementId,
       environment: attempt.payment.environment,
+      category: args.errorCategory,
+      observedAt: args.observedAt,
+    })
+    await failProductionRolloutForProviderError(ctx, {
+      payment: attempt.payment,
       category: args.errorCategory,
       observedAt: args.observedAt,
     })
@@ -2269,6 +2345,12 @@ export const applyEvidence = internalMutation({
           environment: payment.environment,
           observedAt: args.observedAt,
         })
+        await failProductionPaymentRolloutClosed(ctx, {
+          environment: payment.environment,
+          cause: 'unknown_provider_state',
+          observedAt: args.observedAt,
+          payToPaymentId: payment._id,
+        })
       }
     } else {
       const newlyContradictory =
@@ -2299,6 +2381,12 @@ export const applyEvidence = internalMutation({
           payToAgreementId: payment.payToAgreementId,
           environment: payment.environment,
           observedAt: args.observedAt,
+        })
+        await failProductionPaymentRolloutClosed(ctx, {
+          environment: payment.environment,
+          cause: 'settlement_contradiction',
+          observedAt: args.observedAt,
+          payToPaymentId: payment._id,
         })
       }
     }

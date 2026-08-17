@@ -9,9 +9,12 @@ import {
   paymentAuditCutoff,
   paymentAuditExpiresAt,
 } from './lib/payToPaymentRetentionPolicy'
+import { failProductionRolloutClosed } from './lib/payToPaymentRollout'
 import { zeptoWebhookRejectionValidator } from './validators/zeptoWebhook'
 
 const MAX_BATCH_SIZE = 100
+const MATERIAL_WEBHOOK_REJECTION_THRESHOLD = 5
+const WEBHOOK_REJECTION_WINDOW_MS = 5 * 60_000
 
 async function cleanupAuditEvidence(
   ctx: MutationCtx,
@@ -302,6 +305,29 @@ export const recordRejectedDelivery = internalMutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     await ctx.db.insert('zeptoWebhookRejections', args)
+    if (args.environment === 'production') {
+      const cutoff = args.observedAt - WEBHOOK_REJECTION_WINDOW_MS
+      await ctx.db.insert('payToPaymentWebhookSafetyEvents', {
+        observedAt: args.observedAt,
+      })
+      const expiredSafetyEvents = await ctx.db
+        .query('payToPaymentWebhookSafetyEvents')
+        .withIndex('by_observedAt', (q) => q.lt('observedAt', cutoff))
+        .take(MAX_BATCH_SIZE)
+      for (const event of expiredSafetyEvents) {
+        await ctx.db.delete('payToPaymentWebhookSafetyEvents', event._id)
+      }
+      const recentRejections = await ctx.db
+        .query('payToPaymentWebhookSafetyEvents')
+        .withIndex('by_observedAt', (q) => q.gte('observedAt', cutoff))
+        .take(MATERIAL_WEBHOOK_REJECTION_THRESHOLD)
+      if (recentRejections.length >= MATERIAL_WEBHOOK_REJECTION_THRESHOLD) {
+        await failProductionRolloutClosed(ctx, {
+          cause: 'webhook_verification_failure',
+          observedAt: args.observedAt,
+        })
+      }
+    }
     return null
   },
 })
