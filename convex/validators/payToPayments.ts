@@ -11,6 +11,29 @@ export const payToPaymentGateModeValidator = literals(
 )
 export type PayToPaymentGateMode = Infer<typeof payToPaymentGateModeValidator>
 
+export const payToPaymentActivationCohortValidator = v.object({
+  kind: v.literal('payer_allowlist'),
+})
+
+export const payToPaymentCapacityLimitsValidator = v.object({
+  dailyPaymentCount: v.number(),
+  dailyPaymentValueCents: v.number(),
+})
+
+export const payToPaymentApprovalReferencesValidator = v.object({
+  engineering: v.string(),
+  operations: v.string(),
+  security: v.string(),
+  legalCompliance: v.string(),
+  zepto: v.string(),
+})
+
+export const payToPaymentProductionCapacityReservationValidator = v.object({
+  budgetDate: v.string(),
+  paymentCount: v.literal(1),
+  paymentValueCents: v.number(),
+})
+
 export const payToPaymentCreationStateValidator = literals(
   'create_pending',
   'creation_uncertain',
@@ -153,6 +176,7 @@ export const payToPaymentOperationValidator = v.object({
   operationKind: payToPaymentOperationKindValidator,
   providerUid: v.optional(v.string()),
   apiVersion: v.optional(v.literal('20260101')),
+  productionActivationId: v.optional(v.id('payToPaymentActivations')),
   dispatchCertainty: v.optional(payToPaymentDispatchCertaintyValidator),
   intentFingerprint: v.string(),
   requestFingerprint: v.optional(v.string()),

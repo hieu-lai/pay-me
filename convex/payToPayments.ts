@@ -5,7 +5,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { internalMutation } from './_generated/server'
+import { env, internalMutation } from './_generated/server'
 import { boundedEvidenceCode } from './lib/evidenceRedaction'
 import { paymentCreationPool } from './lib/paymentCreationPool'
 import { paymentAuditExpiresAt } from './lib/payToPaymentRetentionPolicy'
@@ -22,6 +22,8 @@ import type {
   ProviderPayToPaymentState,
 } from './validators/payToPayments'
 import {
+  payToPaymentApprovalReferencesValidator,
+  payToPaymentCapacityLimitsValidator,
   payToPaymentCreateErrorCategoryValidator,
   payToPaymentEvidenceValidator,
   payToPaymentIntentValidator,
@@ -60,6 +62,7 @@ const IMMEDIATE_RECONCILIATION_DELAY_MS = 1_000
 export const CREATE_RECOVERY_WINDOW_MS = 15 * 60_000
 const MAX_CREATE_POST_ATTEMPTS = 3
 const MAX_CREATE_RECOVERY_CYCLES = 2
+const MAX_PRODUCTION_ALLOWLIST_SIZE = 100
 type PaymentOperationKind = Infer<typeof payToPaymentOperationKindValidator>
 
 const intentReferenceResultValidator = v.union(
@@ -93,15 +96,11 @@ const authorizeOperationResultValidator = v.union(
 
 type PaymentIntent = Infer<typeof payToPaymentIntentValidator>
 
-export function moneyMovingDenial(
-  mode: PayToPaymentGateMode | undefined,
-  environment: Doc<'payToAgreements'>['environment'],
-) {
+export function moneyMovingDenial(mode: PayToPaymentGateMode | undefined) {
   if (mode === undefined || mode === 'disabled') {
     return 'gate_disabled' as const
   }
   if (mode === 'reconcile_only') return 'gate_reconcile_only' as const
-  if (environment !== 'sandbox') return 'production_not_enabled' as const
 }
 
 function bytesToBase64Url(bytes: Uint8Array) {
@@ -109,6 +108,381 @@ function bytesToBase64Url(bytes: Uint8Array) {
     .replaceAll('+', '-')
     .replaceAll('/', '_')
     .replace(/=+$/, '')
+}
+
+async function sha256Fingerprint(value: string) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  )
+  return bytesToBase64Url(new Uint8Array(digest))
+}
+
+function boundedActivationReference(value: string, field: string) {
+  const normalized = value.trim()
+  if (normalized.length === 0 || normalized.length > 200) {
+    throw new Error(`${field} must be a bounded non-empty reference`)
+  }
+  return normalized
+}
+
+async function currentProductionPrerequisites() {
+  const certifiedCommit = env.PAYME_RELEASE_COMMIT
+  const credential = env.ZEPTO_PERSONAL_ACCESS_TOKEN
+  const configurationFingerprint = env.PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT
+  const certificationFingerprint = env.PAYTO_PAYMENT_CERTIFICATION_FINGERPRINT
+  if (
+    env.ZEPTO_ENVIRONMENT !== 'production' ||
+    !certifiedCommit ||
+    !/^[0-9a-f]{40}$/.test(certifiedCommit) ||
+    !credential ||
+    !configurationFingerprint ||
+    !certificationFingerprint
+  ) {
+    return null
+  }
+  return {
+    certifiedCommit,
+    credentialFingerprint: await sha256Fingerprint(credential),
+    configurationFingerprint,
+    certificationFingerprint,
+  }
+}
+
+type ProductionActivationRecord = Omit<
+  Doc<'payToPaymentActivations'>,
+  '_id' | '_creationTime' | 'activationFingerprint'
+>
+
+async function productionActivationFingerprint(
+  activation: ProductionActivationRecord,
+  allowlistedPayerUserIds: Id<'users'>[],
+) {
+  return await sha256Fingerprint(
+    JSON.stringify([
+      1,
+      activation.environment,
+      activation.activatedAt,
+      activation.certifiedCommit,
+      activation.apiVersion,
+      activation.credentialFingerprint,
+      activation.configurationFingerprint,
+      activation.certificationFingerprint,
+      activation.certificationReference,
+      activation.cohort.kind,
+      [...allowlistedPayerUserIds].sort(),
+      activation.capacityLimits.dailyPaymentCount,
+      activation.capacityLimits.dailyPaymentValueCents,
+      activation.approvalReferences.engineering,
+      activation.approvalReferences.operations,
+      activation.approvalReferences.security,
+      activation.approvalReferences.legalCompliance,
+      activation.approvalReferences.zepto,
+    ]),
+  )
+}
+
+async function productionActivationMatches(
+  ctx: Pick<MutationCtx, 'db'>,
+  activation: Doc<'payToPaymentActivations'>,
+  payerUserId: Id<'users'>,
+) {
+  const runtime = await currentProductionPrerequisites()
+  if (!runtime) return false
+  const allowlist = await ctx.db
+    .query('payToPaymentActivationAllowlist')
+    .withIndex('by_activationId_and_payerUserId', (q) =>
+      q.eq('activationId', activation._id),
+    )
+    .take(MAX_PRODUCTION_ALLOWLIST_SIZE + 1)
+  if (allowlist.length > MAX_PRODUCTION_ALLOWLIST_SIZE) return false
+  const allowlistedPayerUserIds = allowlist.map((entry) => entry.payerUserId)
+  const { _id, _creationTime, activationFingerprint, ...record } = activation
+  void _id
+  void _creationTime
+  return (
+    activation.certifiedCommit === runtime.certifiedCommit &&
+    activation.credentialFingerprint === runtime.credentialFingerprint &&
+    activation.configurationFingerprint === runtime.configurationFingerprint &&
+    activation.certificationFingerprint === runtime.certificationFingerprint &&
+    allowlistedPayerUserIds.includes(payerUserId) &&
+    Number.isSafeInteger(activation.capacityLimits.dailyPaymentCount) &&
+    activation.capacityLimits.dailyPaymentCount > 0 &&
+    Number.isSafeInteger(activation.capacityLimits.dailyPaymentValueCents) &&
+    activation.capacityLimits.dailyPaymentValueCents > 0 &&
+    (await productionActivationFingerprint(record, allowlistedPayerUserIds)) ===
+      activationFingerprint
+  )
+}
+
+const productionActivationArgsValidator = v.object({
+  nowMs: v.number(),
+  allowlistedPayerUserIds: v.array(v.id('users')),
+  capacityLimits: payToPaymentCapacityLimitsValidator,
+  certificationReference: v.string(),
+  approvalReferences: payToPaymentApprovalReferencesValidator,
+})
+
+export const recordProductionActivation = internalMutation({
+  args: productionActivationArgsValidator.fields,
+  returns: v.object({
+    activationId: v.id('payToPaymentActivations'),
+    activationFingerprint: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const runtime = await currentProductionPrerequisites()
+    if (!runtime)
+      throw new Error('Production PayTo Payment prerequisites are missing')
+    if (
+      !Number.isSafeInteger(args.nowMs) ||
+      args.nowMs < 0 ||
+      !Number.isSafeInteger(args.capacityLimits.dailyPaymentCount) ||
+      args.capacityLimits.dailyPaymentCount <= 0 ||
+      !Number.isSafeInteger(args.capacityLimits.dailyPaymentValueCents) ||
+      args.capacityLimits.dailyPaymentValueCents <= 0
+    ) {
+      throw new Error('Production PayTo Payment activation values are invalid')
+    }
+    const latestActivation = await ctx.db
+      .query('payToPaymentActivations')
+      .withIndex('by_activatedAt')
+      .order('desc')
+      .first()
+    if (latestActivation && args.nowMs <= latestActivation.activatedAt) {
+      throw new Error(
+        'Production PayTo Payment activation cutoffs must advance',
+      )
+    }
+    const payerUserIds = [...new Set(args.allowlistedPayerUserIds)].sort()
+    if (payerUserIds.length > MAX_PRODUCTION_ALLOWLIST_SIZE) {
+      throw new Error('Production PayTo Payment allowlist is too large')
+    }
+    const approvalReferences = {
+      engineering: boundedActivationReference(
+        args.approvalReferences.engineering,
+        'Engineering approval',
+      ),
+      operations: boundedActivationReference(
+        args.approvalReferences.operations,
+        'Operations approval',
+      ),
+      security: boundedActivationReference(
+        args.approvalReferences.security,
+        'Security approval',
+      ),
+      legalCompliance: boundedActivationReference(
+        args.approvalReferences.legalCompliance,
+        'Legal/compliance approval',
+      ),
+      zepto: boundedActivationReference(
+        args.approvalReferences.zepto,
+        'Zepto approval',
+      ),
+    }
+    const record: ProductionActivationRecord = {
+      environment: 'production',
+      activatedAt: args.nowMs,
+      certifiedCommit: runtime.certifiedCommit,
+      apiVersion: '20260101',
+      credentialFingerprint: runtime.credentialFingerprint,
+      configurationFingerprint: runtime.configurationFingerprint,
+      certificationFingerprint: runtime.certificationFingerprint,
+      certificationReference: boundedActivationReference(
+        args.certificationReference,
+        'Certification',
+      ),
+      cohort: { kind: 'payer_allowlist' },
+      capacityLimits: args.capacityLimits,
+      approvalReferences,
+    }
+    const activationFingerprint = await productionActivationFingerprint(
+      record,
+      payerUserIds,
+    )
+    const activationId = await ctx.db.insert('payToPaymentActivations', {
+      ...record,
+      activationFingerprint,
+    })
+    for (const payerUserId of payerUserIds) {
+      await ctx.db.insert('payToPaymentActivationAllowlist', {
+        activationId,
+        payerUserId,
+      })
+    }
+    const gate = await ctx.db
+      .query('payToPaymentRuntimeGates')
+      .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+      .unique()
+    const gatePatch = {
+      mode: 'enabled_for_new_confirmations' as const,
+      activeActivationId: activationId,
+      activatedAt: args.nowMs,
+      dailyPaymentCountCap: args.capacityLimits.dailyPaymentCount,
+      dailyPaymentValueCapCents: args.capacityLimits.dailyPaymentValueCents,
+    }
+    if (gate)
+      await ctx.db.patch('payToPaymentRuntimeGates', gate._id, gatePatch)
+    else {
+      await ctx.db.insert('payToPaymentRuntimeGates', {
+        environment: 'production',
+        ...gatePatch,
+      })
+    }
+    return { activationId, activationFingerprint }
+  },
+})
+
+async function reserveProductionActivationCapacity(
+  ctx: MutationCtx,
+  activation: Doc<'payToPaymentActivations'>,
+  amountCents: number,
+  observedAt: number,
+) {
+  const budgetDate = utcBudgetDate(observedAt)
+  const budget = await ctx.db
+    .query('payToPaymentActivationBudgets')
+    .withIndex('by_environment_and_budgetDate', (q) =>
+      q.eq('environment', 'production').eq('budgetDate', budgetDate),
+    )
+    .unique()
+  const reservedPaymentCount = (budget?.reservedPaymentCount ?? 0) + 1
+  const reservedPaymentValueCents =
+    (budget?.reservedPaymentValueCents ?? 0) + amountCents
+  if (
+    reservedPaymentCount > activation.capacityLimits.dailyPaymentCount ||
+    reservedPaymentValueCents > activation.capacityLimits.dailyPaymentValueCents
+  ) {
+    return null
+  }
+  if (budget) {
+    await ctx.db.patch('payToPaymentActivationBudgets', budget._id, {
+      reservedPaymentCount,
+      reservedPaymentValueCents,
+    })
+  } else {
+    await ctx.db.insert('payToPaymentActivationBudgets', {
+      environment: 'production',
+      budgetDate,
+      reservedPaymentCount,
+      reservedPaymentValueCents,
+    })
+  }
+  return {
+    budgetDate,
+    paymentCount: 1 as const,
+    paymentValueCents: amountCents,
+  }
+}
+
+async function productionEstablishmentAdmission(
+  ctx: MutationCtx,
+  gate: Doc<'payToPaymentRuntimeGates'>,
+  agreement: Doc<'payToAgreements'>,
+  amountCents: number,
+  observedAt: number,
+) {
+  if (!gate.activeActivationId) return { kind: 'denied' as const }
+  const activation = await ctx.db.get(
+    'payToPaymentActivations',
+    gate.activeActivationId,
+  )
+  if (
+    !activation ||
+    !(await productionActivationMatches(
+      ctx,
+      activation,
+      agreement.payerUserId,
+    )) ||
+    gate.dailyPaymentCountCap !== activation.capacityLimits.dailyPaymentCount ||
+    gate.dailyPaymentValueCapCents !==
+      activation.capacityLimits.dailyPaymentValueCents
+  ) {
+    return { kind: 'denied' as const }
+  }
+  if (
+    agreement.firstConfirmedActiveAt === undefined ||
+    agreement.firstConfirmedActiveAt < activation.activatedAt
+  ) {
+    return { kind: 'before_cutoff' as const }
+  }
+  const reservation = await reserveProductionActivationCapacity(
+    ctx,
+    activation,
+    amountCents,
+    observedAt,
+  )
+  if (!reservation) return { kind: 'denied' as const }
+  return { kind: 'admitted' as const, activation, reservation }
+}
+
+export async function productionPaymentDispatchAuthorized(
+  ctx: MutationCtx,
+  payment: Doc<'payToPayments'>,
+) {
+  if (payment.environment !== 'production') {
+    return (
+      payment.productionActivationId === undefined &&
+      payment.productionCapacityReservation === undefined
+    )
+  }
+  if (
+    !payment.productionActivationId ||
+    !payment.productionCapacityReservation
+  ) {
+    return false
+  }
+  const gate = await ctx.db
+    .query('payToPaymentRuntimeGates')
+    .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+    .unique()
+  if (
+    gate?.mode !== 'enabled_for_new_confirmations' ||
+    gate.activeActivationId !== payment.productionActivationId
+  ) {
+    return false
+  }
+  const activationId = payment.productionActivationId
+  const reservation = payment.productionCapacityReservation
+  const [activation, agreement, budget] = await Promise.all([
+    ctx.db.get('payToPaymentActivations', activationId),
+    ctx.db.get('payToAgreements', payment.payToAgreementId),
+    ctx.db
+      .query('payToPaymentActivationBudgets')
+      .withIndex('by_environment_and_budgetDate', (q) =>
+        q
+          .eq('environment', 'production')
+          .eq('budgetDate', reservation.budgetDate),
+      )
+      .unique(),
+  ])
+  return Boolean(
+    activation &&
+    agreement &&
+    agreement.environment === payment.environment &&
+    agreement.payerUserId === payment.payerUserId &&
+    agreement.moneyRequestId === payment.moneyRequestId &&
+    agreement.activationProvenancePolicy === 'track_first_confirmation' &&
+    agreement.firstConfirmedActiveAt !== undefined &&
+    agreement.firstConfirmedActiveAt >= activation.activatedAt &&
+    agreement.lifecycleState === 'active' &&
+    agreement.lifecycleConfidence === 'confirmed' &&
+    reservation.paymentValueCents === payment.intent.amount.cents &&
+    (await productionActivationMatches(
+      ctx,
+      activation,
+      agreement.payerUserId,
+    )) &&
+    gate.dailyPaymentCountCap === activation.capacityLimits.dailyPaymentCount &&
+    gate.dailyPaymentValueCapCents ===
+      activation.capacityLimits.dailyPaymentValueCents &&
+    budget &&
+    budget.reservedPaymentCount >= reservation.paymentCount &&
+    budget.reservedPaymentValueCents >= reservation.paymentValueCents &&
+    budget.reservedPaymentCount <=
+      activation.capacityLimits.dailyPaymentCount &&
+    budget.reservedPaymentValueCents <=
+      activation.capacityLimits.dailyPaymentValueCents,
+  )
 }
 
 function routingSnapshotSource(
@@ -353,21 +727,45 @@ export async function ensurePayToPayment(
       q.eq('environment', agreement.environment),
     )
     .unique()
-  const denial = moneyMovingDenial(gate?.mode, agreement.environment)
+  const denial = moneyMovingDenial(gate?.mode)
   if (denial !== undefined) {
     return {
       kind: 'ineligible' as const,
       reason: denial,
     }
   }
-  const activatedAt = gate?.activatedAt
-  if (
-    activatedAt === undefined ||
-    agreement.firstConfirmedActiveAt < activatedAt
-  ) {
-    return {
-      kind: 'ineligible' as const,
-      reason: 'agreement_not_eligible' as const,
+  if (!gate) {
+    return { kind: 'ineligible' as const, reason: 'gate_disabled' as const }
+  }
+  let productionAdmission:
+    Awaited<ReturnType<typeof productionEstablishmentAdmission>> | undefined
+  if (agreement.environment === 'production') {
+    productionAdmission = await productionEstablishmentAdmission(
+      ctx,
+      gate,
+      agreement,
+      intent.amount.cents,
+      args.observedAt,
+    )
+    if (productionAdmission.kind !== 'admitted') {
+      return {
+        kind: 'ineligible' as const,
+        reason:
+          productionAdmission.kind === 'before_cutoff'
+            ? ('agreement_not_eligible' as const)
+            : ('production_not_enabled' as const),
+      }
+    }
+  } else {
+    const activatedAt = gate.activatedAt
+    if (
+      activatedAt === undefined ||
+      agreement.firstConfirmedActiveAt < activatedAt
+    ) {
+      return {
+        kind: 'ineligible' as const,
+        reason: 'agreement_not_eligible' as const,
+      }
     }
   }
 
@@ -385,6 +783,12 @@ export async function ensurePayToPayment(
     intent,
     creationState: 'create_pending',
     establishedAt: agreement.firstConfirmedActiveAt,
+    ...(productionAdmission?.kind === 'admitted'
+      ? {
+          productionActivationId: productionAdmission.activation._id,
+          productionCapacityReservation: productionAdmission.reservation,
+        }
+      : {}),
     auditExpiresAt: paymentAuditExpiresAt(args.observedAt),
   })
   const workItemId = await ctx.db.insert('payToPaymentWorkItems', {
@@ -916,10 +1320,16 @@ export const claimCreateWork = internalMutation({
         q.eq('environment', payment.environment),
       )
       .unique()
-    if (moneyMovingDenial(gate?.mode, payment.environment) !== undefined) {
+    if (moneyMovingDenial(gate?.mode) !== undefined) {
       return null
     }
     if (!gate) return null
+    if (
+      payment.environment === 'production' &&
+      !(await productionPaymentDispatchAuthorized(ctx, payment))
+    ) {
+      return null
+    }
 
     const recovery = creationRecoveryFor(payment, args.nowMs)
     if (
@@ -936,31 +1346,47 @@ export const claimCreateWork = internalMutation({
       return null
     }
 
-    const budgetDate = utcBudgetDate(args.nowMs)
-    const existingCount =
-      gate.budgetDate === budgetDate ? (gate.reservedPaymentCount ?? 0) : 0
-    const existingValue =
-      gate.budgetDate === budgetDate ? (gate.reservedPaymentValueCents ?? 0) : 0
-    const reservesPaymentCapacity = recovery.postAttempts === 0
-    const reservedPaymentCount =
-      existingCount + (reservesPaymentCapacity ? 1 : 0)
-    const reservedPaymentValueCents =
-      existingValue +
-      (reservesPaymentCapacity ? payment.intent.amount.cents : 0)
-    if (
-      (gate.dailyPaymentCountCap !== undefined &&
-        reservedPaymentCount > gate.dailyPaymentCountCap) ||
-      (gate.dailyPaymentValueCapCents !== undefined &&
-        reservedPaymentValueCents > gate.dailyPaymentValueCapCents)
-    ) {
-      emitPayToPaymentCriticalSignal('cap_breach', {
-        payToPaymentId: payment._id,
-        payToAgreementId: payment.payToAgreementId,
-        environment: payment.environment,
-        observedAt: args.nowMs,
-        reason: 'daily_payment_capacity',
-      })
-      return null
+    let sandboxReservation:
+      | {
+          budgetDate: string
+          reservedPaymentCount: number
+          reservedPaymentValueCents: number
+        }
+      | undefined
+    if (payment.environment === 'sandbox') {
+      const budgetDate = utcBudgetDate(args.nowMs)
+      const existingCount =
+        gate.budgetDate === budgetDate ? (gate.reservedPaymentCount ?? 0) : 0
+      const existingValue =
+        gate.budgetDate === budgetDate
+          ? (gate.reservedPaymentValueCents ?? 0)
+          : 0
+      const reservesPaymentCapacity = recovery.postAttempts === 0
+      const reservedPaymentCount =
+        existingCount + (reservesPaymentCapacity ? 1 : 0)
+      const reservedPaymentValueCents =
+        existingValue +
+        (reservesPaymentCapacity ? payment.intent.amount.cents : 0)
+      if (
+        (gate.dailyPaymentCountCap !== undefined &&
+          reservedPaymentCount > gate.dailyPaymentCountCap) ||
+        (gate.dailyPaymentValueCapCents !== undefined &&
+          reservedPaymentValueCents > gate.dailyPaymentValueCapCents)
+      ) {
+        emitPayToPaymentCriticalSignal('cap_breach', {
+          payToPaymentId: payment._id,
+          payToAgreementId: payment.payToAgreementId,
+          environment: payment.environment,
+          observedAt: args.nowMs,
+          reason: 'daily_payment_capacity',
+        })
+        return null
+      }
+      sandboxReservation = {
+        budgetDate,
+        reservedPaymentCount,
+        reservedPaymentValueCents,
+      }
     }
 
     const operationId = await allocatePayToPaymentOperationId(ctx, args.nowMs)
@@ -972,17 +1398,20 @@ export const claimCreateWork = internalMutation({
     }
     const requestFingerprint = await fingerprintCreateRequest(request)
     const leaseExpiresAt = args.nowMs + CREATE_LEASE_DURATION_MS
-    await ctx.db.patch('payToPaymentRuntimeGates', gate._id, {
-      budgetDate,
-      reservedPaymentCount,
-      reservedPaymentValueCents,
-    })
+    if (sandboxReservation) {
+      await ctx.db.patch(
+        'payToPaymentRuntimeGates',
+        gate._id,
+        sandboxReservation,
+      )
+    }
     await ctx.db.insert('payToPaymentOperations', {
       payToPaymentId: payment._id,
       operationId,
       operationKind: 'create',
       providerUid: payment.providerUid,
       apiVersion: payment.intent.apiVersion,
+      productionActivationId: payment.productionActivationId,
       dispatchCertainty: 'not_dispatched',
       intentFingerprint: payment.intent.fingerprint,
       requestFingerprint,
@@ -1058,7 +1487,11 @@ export const markCreateDispatchStarted = internalMutation({
         q.eq('environment', payment.environment),
       )
       .unique()
-    if (moneyMovingDenial(gate?.mode, payment.environment) !== undefined) {
+    if (
+      moneyMovingDenial(gate?.mode) !== undefined ||
+      !(await productionPaymentDispatchAuthorized(ctx, payment)) ||
+      operation.productionActivationId !== payment.productionActivationId
+    ) {
       await ctx.db.patch('payToPaymentOperations', operation._id, {
         outcome: { classification: 'refused', observedAt: args.observedAt },
       })
@@ -1409,7 +1842,7 @@ export const authorizeOperation = internalMutation({
           q.eq('environment', current.environment),
         )
         .unique()
-      const denial = moneyMovingDenial(gate?.mode, current.environment)
+      const denial = moneyMovingDenial(gate?.mode)
       if (denial !== undefined) {
         return { kind: 'denied' as const, reason: denial }
       }

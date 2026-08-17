@@ -21,6 +21,7 @@ import {
   allocatePayToPaymentOperationId,
   makePayToPaymentReconciliationDue,
   moneyMovingDenial,
+  productionPaymentDispatchAuthorized,
 } from './payToPayments'
 import type { PayToPaymentCreateErrorCategory } from './validators/payToPayments'
 import {
@@ -188,7 +189,10 @@ export const claimWork = internalMutation({
         q.eq('environment', payment.environment),
       )
       .unique()
-    if (moneyMovingDenial(gate?.mode, payment.environment) !== undefined) {
+    if (moneyMovingDenial(gate?.mode) !== undefined) {
+      return null
+    }
+    if (!(await productionPaymentDispatchAuthorized(ctx, payment))) {
       return null
     }
     if (work.freshGetRequestedAt === undefined) {
@@ -269,6 +273,7 @@ export const claimWork = internalMutation({
       operationKind: 'retry',
       providerUid: payment.providerUid,
       apiVersion: payment.intent.apiVersion,
+      productionActivationId: payment.productionActivationId,
       dispatchCertainty: 'not_dispatched',
       intentFingerprint: payment.intent.fingerprint,
       authorizedAt: args.nowMs,
@@ -366,7 +371,10 @@ export const markDispatchStarted = internalMutation({
       )
       .unique()
     if (
-      moneyMovingDenial(gate?.mode, attempt.payment.environment) !== undefined
+      moneyMovingDenial(gate?.mode) !== undefined ||
+      !(await productionPaymentDispatchAuthorized(ctx, attempt.payment)) ||
+      attempt.operation?.productionActivationId !==
+        attempt.payment.productionActivationId
     ) {
       await ctx.db.patch('payToPaymentOperations', attempt.operation!._id, {
         outcome: { classification: 'refused', observedAt: args.observedAt },

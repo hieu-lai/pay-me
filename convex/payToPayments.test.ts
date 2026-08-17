@@ -3,7 +3,7 @@
 import workpoolTest from '@convex-dev/workpool/test'
 import rateLimiterTest from '@convex-dev/rate-limiter/test'
 import { convexTest } from 'convex-test'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
@@ -11,6 +11,69 @@ import { consumePaymentRetryEndpointCall } from './lib/paymentRetryRateLimiter'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
+
+const productionEnvironmentKeys = [
+  'PAYME_RELEASE_COMMIT',
+  'PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT',
+  'PAYTO_PAYMENT_CERTIFICATION_FINGERPRINT',
+  'ZEPTO_PERSONAL_ACCESS_TOKEN',
+] as const
+const originalProductionEnvironment = Object.fromEntries(
+  productionEnvironmentKeys.map((key) => [key, process.env[key]]),
+)
+
+afterEach(() => {
+  for (const key of productionEnvironmentKeys) {
+    const original = originalProductionEnvironment[key]
+    if (original === undefined) delete process.env[key]
+    else process.env[key] = original
+  }
+  process.env.ZEPTO_ENVIRONMENT = 'sandbox'
+})
+
+function configureProductionRuntime() {
+  process.env.PAYME_RELEASE_COMMIT = 'a'.repeat(40)
+  process.env.PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT = 'configuration-v1'
+  process.env.PAYTO_PAYMENT_CERTIFICATION_FINGERPRINT = 'certification-v1'
+  process.env.ZEPTO_ENVIRONMENT = 'production'
+  process.env.ZEPTO_PERSONAL_ACCESS_TOKEN = 'production-payment-token'
+}
+
+async function activateProduction(
+  setup: Awaited<ReturnType<typeof setupAgreement>>,
+  overrides: {
+    dailyPaymentCountCap?: number
+    dailyPaymentValueCapCents?: number
+    nowMs?: number
+    payerUserIds?: Id<'users'>[]
+  } = {},
+) {
+  configureProductionRuntime()
+  await setup.t.run(async (ctx) => {
+    await ctx.db.patch('payToAgreements', setup.payToAgreementId, {
+      environment: 'production',
+    })
+  })
+  return await setup.t.mutation(
+    internal.payToPayments.recordProductionActivation,
+    {
+      nowMs: overrides.nowMs ?? 2_500,
+      allowlistedPayerUserIds: overrides.payerUserIds ?? [setup.payerUserId],
+      capacityLimits: {
+        dailyPaymentCount: overrides.dailyPaymentCountCap ?? 1,
+        dailyPaymentValueCents: overrides.dailyPaymentValueCapCents ?? 12_500,
+      },
+      certificationReference: 'certification://payment-release-1',
+      approvalReferences: {
+        engineering: 'approval://engineering/1',
+        operations: 'approval://operations/1',
+        security: 'approval://security/1',
+        legalCompliance: 'approval://legal/1',
+        zepto: 'approval://zepto/1',
+      },
+    },
+  )
+}
 
 async function setupAgreement() {
   const t = convexTest(schema, modules)
@@ -615,6 +678,245 @@ describe('PayTo Payment immutable intent', () => {
     })
   })
 
+  test('records a fully pinned production activation and admits only its allowlisted post-cutoff confirmation', async () => {
+    const setup = await setupAgreement()
+    const recorded = await activateProduction(setup)
+
+    await expect(
+      setup.t.run(async (ctx) => ({
+        activation: await ctx.db.get(
+          'payToPaymentActivations',
+          recorded.activationId,
+        ),
+        gate: await ctx.db
+          .query('payToPaymentRuntimeGates')
+          .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+          .unique(),
+        allowlist: await ctx.db
+          .query('payToPaymentActivationAllowlist')
+          .withIndex('by_activationId_and_payerUserId', (q) =>
+            q.eq('activationId', recorded.activationId),
+          )
+          .take(2),
+      })),
+    ).resolves.toMatchObject({
+      activation: {
+        environment: 'production',
+        activatedAt: 2_500,
+        certifiedCommit: 'a'.repeat(40),
+        apiVersion: '20260101',
+        credentialFingerprint: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+        configurationFingerprint: 'configuration-v1',
+        certificationFingerprint: 'certification-v1',
+        certificationReference: 'certification://payment-release-1',
+        cohort: {
+          kind: 'payer_allowlist',
+        },
+        capacityLimits: {
+          dailyPaymentCount: 1,
+          dailyPaymentValueCents: 12_500,
+        },
+        approvalReferences: {
+          engineering: 'approval://engineering/1',
+          operations: 'approval://operations/1',
+          security: 'approval://security/1',
+          legalCompliance: 'approval://legal/1',
+          zepto: 'approval://zepto/1',
+        },
+        activationFingerprint: recorded.activationFingerprint,
+      },
+      gate: {
+        mode: 'enabled_for_new_confirmations',
+        activeActivationId: recorded.activationId,
+      },
+      allowlist: [{ payerUserId: setup.payerUserId }],
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.ensure, {
+        payToAgreementId: setup.payToAgreementId,
+        observedAt: 3_000,
+      }),
+    ).resolves.toMatchObject({ kind: 'created' })
+    await expect(
+      paymentState(setup.t, setup.payToAgreementId),
+    ).resolves.toMatchObject({
+      payments: [
+        {
+          productionActivationId: recorded.activationId,
+          productionCapacityReservation: {
+            budgetDate: '1970-01-01',
+            paymentCount: 1,
+            paymentValueCents: 12_500,
+          },
+        },
+      ],
+    })
+  })
+
+  test('permanently refuses production confirmations outside the activation cutoff or allowlist', async () => {
+    const beforeCutoff = await setupAgreement()
+    await beforeCutoff.t.run(async (ctx) => {
+      await ctx.db.patch('payToAgreements', beforeCutoff.payToAgreementId, {
+        firstConfirmedActiveAt: 2_499,
+      })
+    })
+    await activateProduction(beforeCutoff)
+
+    await expect(
+      beforeCutoff.t.mutation(internal.payToPayments.ensure, {
+        payToAgreementId: beforeCutoff.payToAgreementId,
+        observedAt: 3_000,
+      }),
+    ).resolves.toEqual({
+      kind: 'ineligible',
+      reason: 'agreement_not_eligible',
+    })
+
+    const outsideAllowlist = await setupAgreement()
+    await activateProduction(outsideAllowlist, { payerUserIds: [] })
+    await expect(
+      outsideAllowlist.t.mutation(internal.payToPayments.ensure, {
+        payToAgreementId: outsideAllowlist.payToAgreementId,
+        observedAt: 3_000,
+      }),
+    ).resolves.toEqual({
+      kind: 'ineligible',
+      reason: 'production_not_enabled',
+    })
+  })
+
+  test.each([
+    [
+      'commit',
+      (): void => {
+        process.env.PAYME_RELEASE_COMMIT = 'b'.repeat(40)
+      },
+    ],
+    [
+      'credential',
+      (): void => {
+        process.env.ZEPTO_PERSONAL_ACCESS_TOKEN = 'rotated-token'
+      },
+    ],
+    [
+      'configuration',
+      (): void => {
+        process.env.PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT = 'configuration-v2'
+      },
+    ],
+    [
+      'certification',
+      (): void => {
+        process.env.PAYTO_PAYMENT_CERTIFICATION_FINGERPRINT = 'certification-v2'
+      },
+    ],
+  ] as const)(
+    'fails closed before production establishment on %s mismatch',
+    async (_kind, mismatch) => {
+      const setup = await setupAgreement()
+      await activateProduction(setup)
+      mismatch()
+
+      await expect(
+        setup.t.mutation(internal.payToPayments.ensure, {
+          payToAgreementId: setup.payToAgreementId,
+          observedAt: 3_000,
+        }),
+      ).resolves.toEqual({
+        kind: 'ineligible',
+        reason: 'production_not_enabled',
+      })
+      await expect(
+        paymentState(setup.t, setup.payToAgreementId),
+      ).resolves.toMatchObject({ payments: [] })
+    },
+  )
+
+  test('reserves production count and value exposure transactionally under concurrent establishment', async () => {
+    const setup = await setupAgreement()
+    const secondAgreementId = await addSecondAgreement(setup)
+    const secondPayerUserId = await setup.t.run(async (ctx) => {
+      const secondAgreement = await ctx.db.get(
+        'payToAgreements',
+        secondAgreementId,
+      )
+      if (!secondAgreement) throw new Error('Expected second Agreement')
+      await ctx.db.patch('payToAgreements', secondAgreementId, {
+        environment: 'production',
+      })
+      return secondAgreement.payerUserId
+    })
+    await activateProduction(setup, {
+      payerUserIds: [setup.payerUserId, secondPayerUserId],
+      dailyPaymentCountCap: 1,
+      dailyPaymentValueCapCents: 12_500,
+    })
+
+    const results = await Promise.all(
+      [setup.payToAgreementId, secondAgreementId].map((payToAgreementId) =>
+        setup.t.mutation(internal.payToPayments.ensure, {
+          payToAgreementId,
+          observedAt: 3_000,
+        }),
+      ),
+    )
+
+    expect(results.filter((result) => result.kind === 'created')).toHaveLength(
+      1,
+    )
+    expect(results.filter((result) => result.kind === 'ineligible')).toEqual([
+      { kind: 'ineligible', reason: 'production_not_enabled' },
+    ])
+    await expect(
+      setup.t.run(async (ctx) =>
+        ctx.db
+          .query('payToPaymentActivationBudgets')
+          .withIndex('by_environment_and_budgetDate', (q) =>
+            q.eq('environment', 'production').eq('budgetDate', '1970-01-01'),
+          )
+          .unique(),
+      ),
+    ).resolves.toMatchObject({
+      reservedPaymentCount: 1,
+      reservedPaymentValueCents: 12_500,
+    })
+  })
+
+  test('enforces the production total-value cap independently under concurrent establishment', async () => {
+    const setup = await setupAgreement()
+    const secondAgreementId = await addSecondAgreement(setup)
+    const secondPayerUserId = await setup.t.run(async (ctx) => {
+      const agreement = await ctx.db.get('payToAgreements', secondAgreementId)
+      if (!agreement) throw new Error('Expected second Agreement')
+      await ctx.db.patch('payToAgreements', secondAgreementId, {
+        environment: 'production',
+      })
+      return agreement.payerUserId
+    })
+    await activateProduction(setup, {
+      payerUserIds: [setup.payerUserId, secondPayerUserId],
+      dailyPaymentCountCap: 2,
+      dailyPaymentValueCapCents: 12_500,
+    })
+
+    const results = await Promise.all(
+      [setup.payToAgreementId, secondAgreementId].map((payToAgreementId) =>
+        setup.t.mutation(internal.payToPayments.ensure, {
+          payToAgreementId,
+          observedAt: 3_000,
+        }),
+      ),
+    )
+
+    expect(results.filter((result) => result.kind === 'created')).toHaveLength(
+      1,
+    )
+    expect(
+      results.filter((result) => result.kind === 'ineligible'),
+    ).toHaveLength(1)
+  })
+
   test('all PayTo Payment boundaries refuse caller-supplied lifecycle, projection, attention, and UID fields', async () => {
     const { t, payToAgreementId } = await setupAgreement()
 
@@ -991,6 +1293,191 @@ describe('PayTo Payment create operation', () => {
         .take(1),
     )
     expect(operation).not.toHaveProperty('dispatchStartedAt')
+  })
+
+  test('revalidates every pinned production prerequisite immediately before dispatch', async () => {
+    const setup = await setupAgreement()
+    const activation = await activateProduction(setup)
+    const established = await setup.t.mutation(internal.payToPayments.ensure, {
+      payToAgreementId: setup.payToAgreementId,
+      observedAt: 3_000,
+    })
+    if (established.kind !== 'created') {
+      throw new Error('Expected production PayTo Payment establishment')
+    }
+    const claimed = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: established.payToPaymentId,
+        leaseToken: 'production-create-worker',
+        nowMs: 4_000,
+      },
+    )
+    if (!claimed) throw new Error('Expected production create authorization')
+    process.env.PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT = 'configuration-v2'
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+        payToPaymentId: established.payToPaymentId,
+        operationId: claimed.operationId,
+        leaseToken: 'production-create-worker',
+        observedAt: 4_001,
+      }),
+    ).resolves.toBe(false)
+    await expect(
+      setup.t.run(async (ctx) =>
+        ctx.db
+          .query('payToPaymentOperations')
+          .withIndex('by_operationId', (q) =>
+            q.eq('operationId', claimed.operationId),
+          )
+          .unique(),
+      ),
+    ).resolves.toMatchObject({
+      productionActivationId: activation.activationId,
+      outcome: { classification: 'refused', observedAt: 4_001 },
+    })
+  })
+
+  test('fails closed before production dispatch when rollout caps drift from the activation', async () => {
+    const setup = await setupAgreement()
+    await activateProduction(setup)
+    const established = await setup.t.mutation(internal.payToPayments.ensure, {
+      payToAgreementId: setup.payToAgreementId,
+      observedAt: 3_000,
+    })
+    if (established.kind !== 'created') {
+      throw new Error('Expected production PayTo Payment establishment')
+    }
+    const claimed = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: established.payToPaymentId,
+        leaseToken: 'production-cap-worker',
+        nowMs: 4_000,
+      },
+    )
+    if (!claimed) throw new Error('Expected production create authorization')
+    await setup.t.run(async (ctx) => {
+      const gate = await ctx.db
+        .query('payToPaymentRuntimeGates')
+        .withIndex('by_environment', (q) => q.eq('environment', 'production'))
+        .unique()
+      if (!gate) throw new Error('Expected production gate')
+      await ctx.db.patch('payToPaymentRuntimeGates', gate._id, {
+        dailyPaymentCountCap: 2,
+      })
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+        payToPaymentId: established.payToPaymentId,
+        operationId: claimed.operationId,
+        leaseToken: 'production-cap-worker',
+        observedAt: 4_001,
+      }),
+    ).resolves.toBe(false)
+  })
+
+  test('keeps an admitted production create eligible across a UTC date boundary', async () => {
+    const setup = await setupAgreement()
+    const firstConfirmedActiveAt = 86_399_000
+    await setup.t.run(async (ctx) => {
+      await ctx.db.patch('payToAgreements', setup.payToAgreementId, {
+        firstConfirmedActiveAt,
+        lifecycleObservedAt: firstConfirmedActiveAt,
+      })
+    })
+    await activateProduction(setup, { nowMs: 86_398_000 })
+    const established = await setup.t.mutation(internal.payToPayments.ensure, {
+      payToAgreementId: setup.payToAgreementId,
+      observedAt: firstConfirmedActiveAt,
+    })
+    if (established.kind !== 'created') {
+      throw new Error('Expected production PayTo Payment establishment')
+    }
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.claimCreateWork, {
+        payToPaymentId: established.payToPaymentId,
+        leaseToken: 'cross-day-worker',
+        nowMs: 86_400_001,
+      }),
+    ).resolves.toMatchObject({ kind: 'create' })
+  })
+
+  test('refuses production dispatch when the reserved value no longer matches immutable intent', async () => {
+    const setup = await setupAgreement()
+    await activateProduction(setup)
+    const established = await setup.t.mutation(internal.payToPayments.ensure, {
+      payToAgreementId: setup.payToAgreementId,
+      observedAt: 3_000,
+    })
+    if (established.kind !== 'created') {
+      throw new Error('Expected production PayTo Payment establishment')
+    }
+    const claimed = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: established.payToPaymentId,
+        leaseToken: 'reservation-mismatch-worker',
+        nowMs: 4_000,
+      },
+    )
+    if (!claimed) throw new Error('Expected production create authorization')
+    await setup.t.run(async (ctx) => {
+      await ctx.db.patch('payToPayments', established.payToPaymentId, {
+        productionCapacityReservation: {
+          budgetDate: '1970-01-01',
+          paymentCount: 1,
+          paymentValueCents: 1,
+        },
+      })
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+        payToPaymentId: established.payToPaymentId,
+        operationId: claimed.operationId,
+        leaseToken: 'reservation-mismatch-worker',
+        observedAt: 4_001,
+      }),
+    ).resolves.toBe(false)
+  })
+
+  test('refuses production dispatch when Agreement environment drifts from the Payment', async () => {
+    const setup = await setupAgreement()
+    await activateProduction(setup)
+    const established = await setup.t.mutation(internal.payToPayments.ensure, {
+      payToAgreementId: setup.payToAgreementId,
+      observedAt: 3_000,
+    })
+    if (established.kind !== 'created') {
+      throw new Error('Expected production PayTo Payment establishment')
+    }
+    const claimed = await setup.t.mutation(
+      internal.payToPayments.claimCreateWork,
+      {
+        payToPaymentId: established.payToPaymentId,
+        leaseToken: 'environment-mismatch-worker',
+        nowMs: 4_000,
+      },
+    )
+    if (!claimed) throw new Error('Expected production create authorization')
+    await setup.t.run(async (ctx) => {
+      await ctx.db.patch('payToAgreements', setup.payToAgreementId, {
+        environment: 'sandbox',
+      })
+    })
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.markCreateDispatchStarted, {
+        payToPaymentId: established.payToPaymentId,
+        operationId: claimed.operationId,
+        leaseToken: 'environment-mismatch-worker',
+        observedAt: 4_001,
+      }),
+    ).resolves.toBe(false)
   })
 
   test('keeps a pre-dispatch crash auditable without implying a POST', async () => {

@@ -43,6 +43,8 @@ type Env = {
   readonly PAYMENT_DESTINATION_ENCRYPTION_KEYS: string;
   readonly PAYMENT_DESTINATION_FINGERPRINT_KEY: string;
   readonly PAYME_RELEASE_COMMIT: string | undefined;
+  readonly PAYTO_PAYMENT_CERTIFICATION_FINGERPRINT: string | undefined;
+  readonly PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT: string | undefined;
   readonly PROFILE_IMAGE_CDN_ORIGIN: string;
   readonly PROFILE_IMAGE_DELIVERY_MODE: "development" | "public_custom_domain";
   readonly R2_ACCESS_KEY_ID: string;

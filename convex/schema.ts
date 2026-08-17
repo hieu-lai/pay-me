@@ -15,7 +15,10 @@ import {
   payerPaymentStatusValidator,
 } from './validators/payToPaymentProjections'
 import {
+  payToPaymentActivationCohortValidator,
+  payToPaymentApprovalReferencesValidator,
   payToPaymentAttentionValidator,
+  payToPaymentCapacityLimitsValidator,
   payToPaymentCreationStateValidator,
   payToPaymentEvidenceValidator,
   payToPaymentGateModeValidator,
@@ -25,6 +28,7 @@ import {
   payToPaymentOperatorDecisionValidator,
   payToPaymentOperatorReasonValidator,
   payToPaymentOperatorResultCodeValidator,
+  payToPaymentProductionCapacityReservationValidator,
   providerPayToPaymentStateValidator,
 } from './validators/payToPayments'
 import {
@@ -405,6 +409,7 @@ export default defineSchema({
   payToPaymentRuntimeGates: defineTable({
     environment: zeptoEnvironmentValidator,
     mode: payToPaymentGateModeValidator,
+    activeActivationId: v.optional(v.id('payToPaymentActivations')),
     activatedAt: v.optional(v.number()),
     dailyPaymentCountCap: v.optional(v.number()),
     dailyPaymentValueCapCents: v.optional(v.number()),
@@ -412,6 +417,33 @@ export default defineSchema({
     reservedPaymentCount: v.optional(v.number()),
     reservedPaymentValueCents: v.optional(v.number()),
   }).index('by_environment', ['environment']),
+
+  payToPaymentActivations: defineTable({
+    environment: v.literal('production'),
+    activatedAt: v.number(),
+    certifiedCommit: v.string(),
+    apiVersion: v.literal('20260101'),
+    credentialFingerprint: v.string(),
+    configurationFingerprint: v.string(),
+    certificationFingerprint: v.string(),
+    certificationReference: v.string(),
+    cohort: payToPaymentActivationCohortValidator,
+    capacityLimits: payToPaymentCapacityLimitsValidator,
+    approvalReferences: payToPaymentApprovalReferencesValidator,
+    activationFingerprint: v.string(),
+  }).index('by_activatedAt', ['activatedAt']),
+
+  payToPaymentActivationAllowlist: defineTable({
+    activationId: v.id('payToPaymentActivations'),
+    payerUserId: v.id('users'),
+  }).index('by_activationId_and_payerUserId', ['activationId', 'payerUserId']),
+
+  payToPaymentActivationBudgets: defineTable({
+    environment: v.literal('production'),
+    budgetDate: v.string(),
+    reservedPaymentCount: v.number(),
+    reservedPaymentValueCents: v.number(),
+  }).index('by_environment_and_budgetDate', ['environment', 'budgetDate']),
 
   payToPayments: defineTable({
     payToAgreementId: v.id('payToAgreements'),
@@ -422,6 +454,10 @@ export default defineSchema({
     intent: payToPaymentIntentValidator,
     creationState: payToPaymentCreationStateValidator,
     establishedAt: v.number(),
+    productionActivationId: v.optional(v.id('payToPaymentActivations')),
+    productionCapacityReservation: v.optional(
+      payToPaymentProductionCapacityReservationValidator,
+    ),
     auditExpiresAt: v.optional(v.number()),
     creationRecovery: v.optional(
       v.object({

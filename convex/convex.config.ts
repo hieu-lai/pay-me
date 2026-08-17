@@ -25,6 +25,8 @@ const app = defineApp({
       v.literal('public_custom_domain'),
     ),
     PAYME_RELEASE_COMMIT: v.optional(v.string()),
+    PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT: v.optional(v.string()),
+    PAYTO_PAYMENT_CERTIFICATION_FINGERPRINT: v.optional(v.string()),
     ZEPTO_PAYID_CAPABILITY: v.optional(v.string()),
     ZEPTO_ENVIRONMENT: v.optional(
       v.union(v.literal('sandbox'), v.literal('production')),
