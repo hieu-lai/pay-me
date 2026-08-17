@@ -424,6 +424,7 @@ export default defineSchema({
       }),
     ),
     lastReconciledAt: v.optional(v.number()),
+    agedUnresolvedMonitoringCompletedAt: v.optional(v.number()),
     attention: v.optional(payToPaymentAttentionValidator),
     reconciliationAlert: v.optional(
       v.object({
@@ -435,6 +436,10 @@ export default defineSchema({
     .index('by_payToAgreementId', ['payToAgreementId'])
     .index('by_moneyRequestId', ['moneyRequestId'])
     .index('by_payerUserId', ['payerUserId'])
+    .index('by_agedUnresolvedMonitoringCompletedAt_and_establishedAt', [
+      'agedUnresolvedMonitoringCompletedAt',
+      'establishedAt',
+    ])
     .index('by_environment_and_providerUid', ['environment', 'providerUid']),
 
   payToPaymentOperations: defineTable(payToPaymentOperationValidator)

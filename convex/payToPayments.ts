@@ -8,6 +8,12 @@ import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
 import { paymentCreationPool } from './lib/paymentCreationPool'
 import { projectPayerPayment } from './lib/payToPaymentProjection'
+import {
+  emitPayToPaymentAggregateMetric,
+  emitPayToPaymentCriticalSignal,
+  emitPayToPaymentErrorCriticalSignal,
+  warnIfPayToPaymentWorkOverdue,
+} from './lib/payToPaymentTelemetry'
 import { decidePaymentReconciliationSuccess } from './payToPaymentReconciliationState'
 import type {
   PayToPaymentGateMode,
@@ -264,10 +270,15 @@ async function recordIntentMismatch(
     paymentVerificationPending: agreement.paymentVerificationPending,
     paymentAttentionRequired: true,
   })
-  console.error('PayTo Payment immutable intent mismatch', {
-    payToAgreementId: agreement._id,
-    payToPaymentId: payment._id,
-  })
+  if (payment.attention?.kind !== 'intent_fingerprint_mismatch') {
+    emitPayToPaymentCriticalSignal('configuration_mismatch', {
+      payToAgreementId: agreement._id,
+      payToPaymentId: payment._id,
+      environment: payment.environment,
+      observedAt,
+      reason: 'immutable_intent_mismatch',
+    })
+  }
 }
 
 export async function ensurePayToPayment(
@@ -374,6 +385,11 @@ export async function ensurePayToPayment(
     { retry: false },
   )
   await ctx.db.patch('payToPaymentWorkItems', workItemId, { workId })
+  await ctx.scheduler.runAt(
+    agreement.firstConfirmedActiveAt + 24 * 60 * 60_000,
+    internal.payToPaymentMonitoring.checkAgedUnresolved,
+    { payToPaymentId },
+  )
   await projectPayerPayment(ctx, agreement, {
     paymentStatus: 'initiating',
     paymentVerificationPending: false,
@@ -491,6 +507,13 @@ async function scheduleRetryAfterConfirmedFailure(
         paymentVerificationPending: false,
         paymentAttentionRequired: true,
       })
+      emitPayToPaymentCriticalSignal('unresolved_ambiguity', {
+        payToPaymentId: payment._id,
+        payToAgreementId: payment.payToAgreementId,
+        environment: payment.environment,
+        observedAt,
+        reason: 'retry_acknowledgement_uncertain',
+      })
       return
     }
   }
@@ -590,6 +613,18 @@ export async function requireCreationRecoveryAttention(
     paymentVerificationPending: true,
     paymentAttentionRequired: true,
   })
+  if (
+    reason === 'recovery_exhausted' &&
+    payment.attention?.kind !== 'creation_recovery_required'
+  ) {
+    emitPayToPaymentCriticalSignal('unresolved_ambiguity', {
+      payToPaymentId: payment._id,
+      payToAgreementId: payment.payToAgreementId,
+      environment: payment.environment,
+      observedAt,
+      reason: 'creation_recovery_exhausted',
+    })
+  }
 }
 
 export function reconciliationLeaseAuthorizes(input: {
@@ -902,6 +937,13 @@ export const claimCreateWork = internalMutation({
       (gate.dailyPaymentValueCapCents !== undefined &&
         reservedPaymentValueCents > gate.dailyPaymentValueCapCents)
     ) {
+      emitPayToPaymentCriticalSignal('cap_breach', {
+        payToPaymentId: payment._id,
+        payToAgreementId: payment.payToAgreementId,
+        environment: payment.environment,
+        observedAt: args.nowMs,
+        reason: 'daily_payment_capacity',
+      })
       return null
     }
 
@@ -1204,6 +1246,13 @@ export const recordCreateFailure = internalMutation({
       errorCategory: args.errorCategory,
       observedAt: args.observedAt,
     })
+    emitPayToPaymentErrorCriticalSignal({
+      payToPaymentId: payment._id,
+      payToAgreementId: payment.payToAgreementId,
+      environment: payment.environment,
+      category: args.errorCategory,
+      observedAt: args.observedAt,
+    })
     if (
       !isCurrentDispatchedCreateAttempt(
         attempt,
@@ -1264,6 +1313,13 @@ export const recordCreatePreDispatchFailure = internalMutation({
       ),
       classification: 'refused',
       errorCategory: args.errorCategory,
+      observedAt: args.observedAt,
+    })
+    emitPayToPaymentErrorCriticalSignal({
+      payToPaymentId: attempt.payment._id,
+      payToAgreementId: attempt.payment.payToAgreementId,
+      environment: attempt.payment.environment,
+      category: args.errorCategory,
       observedAt: args.observedAt,
     })
     if (
@@ -1651,10 +1707,33 @@ export const applyEvidence = internalMutation({
 
     if (decision.kind === 'confirmed') {
       const paymentStatus = payerStatusForConfirmedLifecycle(decision.state)
+      if (
+        decision.state === 'settled' &&
+        payment.lifecycleState !== 'settled'
+      ) {
+        emitPayToPaymentAggregateMetric({
+          kind: 'settlement_latency',
+          payToPaymentId: payment._id,
+          observedAt: args.observedAt,
+          latencyMs: Math.max(0, args.observedAt - payment.establishedAt),
+        })
+      } else if (
+        decision.state === 'failed' &&
+        payment.lifecycleState !== 'failed'
+      ) {
+        emitPayToPaymentAggregateMetric({
+          kind: 'confirmed_failure',
+          payToPaymentId: payment._id,
+          observedAt: args.observedAt,
+        })
+      }
       await ctx.db.patch('payToPayments', payment._id, {
         creationState: 'provider_established',
         lifecycleState: decision.state,
         lifecycleObservedAt: args.observedAt,
+        ...(decision.state === 'settled'
+          ? { agedUnresolvedMonitoringCompletedAt: args.observedAt }
+          : {}),
         lastReconciledAt: args.observedAt,
         provisionalLifecycleState: undefined,
         reconciliationAlert: undefined,
@@ -1705,6 +1784,7 @@ export const applyEvidence = internalMutation({
         ...completedWorkPatch,
       })
     } else if (decision.kind === 'unknown') {
+      const newlyUnknown = payment.attention?.kind !== 'unknown_provider_state'
       await ctx.db.patch('payToPayments', payment._id, {
         creationState: 'provider_established',
         lastReconciledAt: args.observedAt,
@@ -1724,7 +1804,17 @@ export const applyEvidence = internalMutation({
         availableAt: nextAvailableAt(decision.delayMs),
         ...completedWorkPatch,
       })
+      if (newlyUnknown) {
+        emitPayToPaymentCriticalSignal('unknown_provider_state', {
+          payToPaymentId: payment._id,
+          payToAgreementId: payment.payToAgreementId,
+          environment: payment.environment,
+          observedAt: args.observedAt,
+        })
+      }
     } else {
+      const newlyContradictory =
+        payment.attention?.kind !== 'settlement_contradiction'
       await ctx.db.patch('payToPayments', payment._id, {
         creationState: 'provider_established',
         lastReconciledAt: args.observedAt,
@@ -1745,9 +1835,14 @@ export const applyEvidence = internalMutation({
         availableAt: args.observedAt,
         ...completedWorkPatch,
       })
-      console.error('PayTo Payment settlement contradiction', {
-        payToPaymentId: payment._id,
-      })
+      if (newlyContradictory) {
+        emitPayToPaymentCriticalSignal('settlement_contradiction', {
+          payToPaymentId: payment._id,
+          payToAgreementId: payment.payToAgreementId,
+          environment: payment.environment,
+          observedAt: args.observedAt,
+        })
+      }
     }
     if (immediateFollowUp) {
       await ctx.scheduler.runAfter(
@@ -1777,6 +1872,20 @@ export const dispatchCreationRecoveryDue = internalMutation({
         q.eq('state', 'running').lte('leaseExpiresAt', nowMs),
       )
       .take(Math.max(0, 50 - queued.length))
+    warnIfPayToPaymentWorkOverdue({
+      nowMs,
+      queue: 'creation',
+      work: [
+        ...queued.map((work) => ({
+          payToPaymentId: work.payToPaymentId,
+          overdueAt: work.availableAt,
+        })),
+        ...expired.map((work) => ({
+          payToPaymentId: work.payToPaymentId,
+          overdueAt: work.leaseExpiresAt ?? nowMs,
+        })),
+      ],
+    })
     for (const workItem of [...queued, ...expired]) {
       await ctx.scheduler.runAfter(0, internal.payToPaymentCreation.create, {
         payToPaymentId: workItem.payToPaymentId,

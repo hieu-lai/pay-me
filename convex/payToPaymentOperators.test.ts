@@ -2,7 +2,7 @@
 
 import type { UserIdentity } from 'convex/server'
 import { convexTest } from 'convex-test'
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 
 import { api } from './_generated/api'
 import schema from './schema'
@@ -24,20 +24,23 @@ async function setupPayment(operatorRole = true) {
       tokenIdentifier: operatorIdentity.tokenIdentifier,
       clerkUserId: operatorIdentity.subject,
       email: operatorIdentity.email,
-      name: operatorIdentity.name,
+      displayName: operatorIdentity.name,
+      searchText: operatorIdentity.name,
       ...(operatorRole ? { roles: ['payment_operator'] as const } : {}),
     })
     const requesterUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'https://clerk.example.test|operator_requester',
       clerkUserId: 'operator_requester',
       email: 'requester@example.test',
-      name: 'Requester',
+      displayName: 'Requester',
+      searchText: 'Requester',
     })
     const payerUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'https://clerk.example.test|operator_payer',
       clerkUserId: 'operator_payer',
       email: 'payer@example.test',
-      name: 'Payer',
+      displayName: 'Payer',
+      searchText: 'Payer',
     })
     const creditorDestinationId = await ctx.db.insert('paymentDestinations', {
       ownerUserId: requesterUserId,
@@ -433,6 +436,9 @@ test('lets a Payment operator request immediate GET reconciliation and audits th
 })
 
 test('audits unauthenticated, insufficient-role, and already-due reconciliation requests', async () => {
+  const critical = vi
+    .spyOn(console, 'error')
+    .mockImplementation(() => undefined)
   const unauthenticated = await setupPayment()
   await expect(
     unauthenticated.t.mutation(
@@ -453,6 +459,16 @@ test('audits unauthenticated, insufficient-role, and already-due reconciliation 
         reason: 'recover_stalled_work',
       }),
   ).resolves.toEqual({ decision: 'refused', code: 'insufficient_role' })
+
+  expect(critical).toHaveBeenCalledTimes(2)
+  expect(critical).toHaveBeenNthCalledWith(
+    1,
+    'PayTo Payment critical signal',
+    expect.objectContaining({
+      kind: 'unauthorized_operation',
+      payToPaymentId: unauthenticated.payToPaymentId,
+    }),
+  )
 
   const alreadyDue = await setupPayment()
   await expect(

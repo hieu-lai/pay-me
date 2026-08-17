@@ -15,6 +15,7 @@ import type * as lib_moneyRequestIngress from "../lib/moneyRequestIngress.js";
 import type * as lib_payIdCapability from "../lib/payIdCapability.js";
 import type * as lib_payToAgreementActivation from "../lib/payToAgreementActivation.js";
 import type * as lib_payToPaymentProjection from "../lib/payToPaymentProjection.js";
+import type * as lib_payToPaymentTelemetry from "../lib/payToPaymentTelemetry.js";
 import type * as lib_paymentCreationPool from "../lib/paymentCreationPool.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_paymentRetryPool from "../lib/paymentRetryPool.js";
@@ -49,6 +50,7 @@ import type * as payToAgreementCreationState from "../payToAgreementCreationStat
 import type * as payToAgreementReconciliation from "../payToAgreementReconciliation.js";
 import type * as payToAgreementReconciliationState from "../payToAgreementReconciliationState.js";
 import type * as payToPaymentCreation from "../payToPaymentCreation.js";
+import type * as payToPaymentMonitoring from "../payToPaymentMonitoring.js";
 import type * as payToPaymentOperators from "../payToPaymentOperators.js";
 import type * as payToPaymentReconciliation from "../payToPaymentReconciliation.js";
 import type * as payToPaymentReconciliationState from "../payToPaymentReconciliationState.js";
@@ -81,6 +83,7 @@ const fullApi: ApiFromModules<{
   "lib/payIdCapability": typeof lib_payIdCapability;
   "lib/payToAgreementActivation": typeof lib_payToAgreementActivation;
   "lib/payToPaymentProjection": typeof lib_payToPaymentProjection;
+  "lib/payToPaymentTelemetry": typeof lib_payToPaymentTelemetry;
   "lib/paymentCreationPool": typeof lib_paymentCreationPool;
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/paymentRetryPool": typeof lib_paymentRetryPool;
@@ -115,6 +118,7 @@ const fullApi: ApiFromModules<{
   payToAgreementReconciliation: typeof payToAgreementReconciliation;
   payToAgreementReconciliationState: typeof payToAgreementReconciliationState;
   payToPaymentCreation: typeof payToPaymentCreation;
+  payToPaymentMonitoring: typeof payToPaymentMonitoring;
   payToPaymentOperators: typeof payToPaymentOperators;
   payToPaymentReconciliation: typeof payToPaymentReconciliation;
   payToPaymentReconciliationState: typeof payToPaymentReconciliationState;

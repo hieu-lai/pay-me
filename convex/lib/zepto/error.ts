@@ -7,6 +7,7 @@ export type ZeptoClientErrorKind =
   | 'network'
   | 'sandbox_only'
   | 'timeout'
+  | 'uid_mismatch'
 
 type ZeptoClientErrorOptions = {
   kind: ZeptoClientErrorKind

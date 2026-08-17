@@ -1,5 +1,9 @@
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import {
+  emitPayToPaymentAggregateMetric,
+  emitPayToPaymentCriticalSignal,
+} from './payToPaymentTelemetry'
 
 export const PAYER_PAYMENT_STATUSES = [
   'not_started',
@@ -28,6 +32,8 @@ type MoneyRequestProjection = {
 }
 
 function projectionInvariantError(): never {
+  emitPayToPaymentCriticalSignal('projection_inconsistency', {})
+  emitPayToPaymentAggregateMetric({ kind: 'projection_inconsistency' })
   throw new Error('PayTo Payment projection invariant failed')
 }
 

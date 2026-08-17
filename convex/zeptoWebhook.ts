@@ -3,6 +3,7 @@ import { v } from 'convex/values'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
+import { emitPayToPaymentAggregateMetric } from './lib/payToPaymentTelemetry'
 import {
   agreementStateForWebhookEvent,
   paymentStateForWebhookEvent,
@@ -43,6 +44,12 @@ async function recordPaymentWebhookDuplicate(
   },
 ) {
   await ctx.db.insert('payToPaymentWebhookDeduplication', args)
+  emitPayToPaymentAggregateMetric({
+    kind: 'webhook_deduplication',
+    payToPaymentId: args.payToPaymentId,
+    observedAt: args.observedAt,
+    outcome: args.outcome,
+  })
 }
 
 export const applyDelivery = internalMutation({

@@ -7,6 +7,12 @@ import type { MutationCtx } from './_generated/server'
 import { internalAction, internalMutation } from './_generated/server'
 import { paymentRetryPool } from './lib/paymentRetryPool'
 import { consumePaymentRetryEndpointCall } from './lib/paymentRetryRateLimiter'
+import {
+  emitPayToPaymentAggregateMetric,
+  emitPayToPaymentCriticalSignal,
+  emitPayToPaymentErrorCriticalSignal,
+  warnIfPayToPaymentWorkOverdue,
+} from './lib/payToPaymentTelemetry'
 import { createEnvironmentZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import { retryPayment } from './lib/zepto/payment'
@@ -15,10 +21,23 @@ import {
   makePayToPaymentReconciliationDue,
   moneyMovingDenial,
 } from './payToPayments'
+import type { PayToPaymentCreateErrorCategory } from './validators/payToPayments'
+import {
+  payToPaymentCreateErrorCategories,
+  payToPaymentCreateErrorCategoryValidator,
+} from './validators/payToPayments'
 
 const RETRY_LEASE_MS = 3 * 60_000
 const MAX_RETRY_CALLS = 6
 const MAX_RETRY_SUBMISSIONS = 3
+const retryErrorCategories = new Set<string>(payToPaymentCreateErrorCategories)
+
+function retryErrorCategory(error: unknown): PayToPaymentCreateErrorCategory {
+  return error instanceof ZeptoClientError &&
+    retryErrorCategories.has(error.kind)
+    ? (error.kind as PayToPaymentCreateErrorCategory)
+    : 'unclassified'
+}
 
 const retryClaimValidator = v.object({
   payToPaymentId: v.id('payToPayments'),
@@ -221,6 +240,19 @@ export const claimWork = internalMutation({
       overlap ||
       reconciliationWork?.state !== 'stopped'
     ) {
+      if (
+        retryCalls >= MAX_RETRY_CALLS ||
+        acceptedRetries >= MAX_RETRY_SUBMISSIONS ||
+        rollingSubmissions >= 5
+      ) {
+        emitPayToPaymentCriticalSignal('cap_breach', {
+          payToPaymentId: payment._id,
+          payToAgreementId: payment.payToAgreementId,
+          environment: payment.environment,
+          observedAt: args.nowMs,
+          reason: 'retry_capacity',
+        })
+      }
       await ctx.db.patch('payToPaymentRetryWorkItems', work._id, {
         state: 'stopped',
       })
@@ -275,6 +307,20 @@ export const dispatchDue = internalMutation({
         q.eq('state', 'running').lte('leaseExpiresAt', nowMs),
       )
       .take(Math.max(0, 50 - due.length))
+    warnIfPayToPaymentWorkOverdue({
+      nowMs,
+      queue: 'retry',
+      work: [
+        ...due.map((work) => ({
+          payToPaymentId: work.payToPaymentId,
+          overdueAt: work.availableAt,
+        })),
+        ...expired.map((work) => ({
+          payToPaymentId: work.payToPaymentId,
+          overdueAt: work.leaseExpiresAt ?? nowMs,
+        })),
+      ],
+    })
     for (const work of [...due, ...expired]) {
       await paymentRetryPool.enqueueAction(
         ctx,
@@ -332,6 +378,13 @@ export const markDispatchStarted = internalMutation({
       attempt.payment._id,
     )
     if (!callCapacity.ok) {
+      emitPayToPaymentCriticalSignal('cap_breach', {
+        payToPaymentId: attempt.payment._id,
+        payToAgreementId: attempt.payment.payToAgreementId,
+        environment: attempt.payment.environment,
+        observedAt: args.observedAt,
+        reason: 'retry_endpoint_rate_limit',
+      })
       await ctx.db.patch('payToPaymentOperations', attempt.operation!._id, {
         outcome: { classification: 'refused', observedAt: args.observedAt },
       })
@@ -378,6 +431,12 @@ export const recordAccepted = internalMutation({
       classification: 'completed',
       observedAt: args.observedAt,
     })
+    emitPayToPaymentAggregateMetric({
+      kind: 'retry_attempt',
+      payToPaymentId: attempt.payment._id,
+      observedAt: args.observedAt,
+      outcome: 'accepted',
+    })
     await ctx.db.patch('payToPaymentRetryWorkItems', attempt.work!._id, {
       state: 'locked',
       leaseToken: undefined,
@@ -395,6 +454,7 @@ export const recordAccepted = internalMutation({
 export const recordFailure = internalMutation({
   args: retryAttemptArgs.extend({
     ambiguous: v.boolean(),
+    errorCategory: v.optional(payToPaymentCreateErrorCategoryValidator),
     providerCode: v.optional(v.string()),
     retryAfterMs: v.optional(v.number()),
   }).fields,
@@ -425,7 +485,23 @@ export const recordFailure = internalMutation({
       dispatchCertainty: attempt.operation!.dispatchCertainty,
       classification,
       providerFailureCode: args.providerCode,
+      errorCategory: args.errorCategory,
       observedAt: args.observedAt,
+    })
+    if (args.errorCategory !== undefined) {
+      emitPayToPaymentErrorCriticalSignal({
+        payToPaymentId: attempt.payment._id,
+        payToAgreementId: attempt.payment.payToAgreementId,
+        environment: attempt.payment.environment,
+        category: args.errorCategory,
+        observedAt: args.observedAt,
+      })
+    }
+    emitPayToPaymentAggregateMetric({
+      kind: 'retry_attempt',
+      payToPaymentId: attempt.payment._id,
+      observedAt: args.observedAt,
+      outcome: args.ambiguous ? 'ambiguous' : 'refused',
     })
     if (args.ambiguous) {
       await ctx.db.patch('payToPaymentRetryWorkItems', attempt.work!._id, {
@@ -497,7 +573,7 @@ export const retry = internalAction({
       client = createEnvironmentZeptoClientFromEnv(input.environment, {
         maxRetries: 0,
       })
-    } catch {
+    } catch (error) {
       const recorded: boolean = await ctx.runMutation(
         internal.payToPaymentRetry.recordFailure,
         {
@@ -505,6 +581,7 @@ export const retry = internalAction({
           operationId: input.operationId,
           leaseToken,
           ambiguous: false,
+          errorCategory: retryErrorCategory(error),
           observedAt: Date.now(),
         },
       )
@@ -546,6 +623,7 @@ export const retry = internalAction({
           operationId: input.operationId,
           leaseToken,
           ambiguous: !documentedRejection,
+          errorCategory: retryErrorCategory(error),
           providerCode,
           retryAfterMs:
             error instanceof ZeptoClientError ? error.retryAfterMs : undefined,

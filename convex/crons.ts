@@ -32,4 +32,25 @@ crons.interval(
   {},
 )
 
+crons.interval(
+  'emit PayTo Payment aggregate monitoring',
+  { minutes: 5 },
+  internal.payToPaymentMonitoring.emitAggregateSnapshot,
+  {},
+)
+
+crons.interval(
+  'sweep aged unresolved PayTo Payments',
+  { hours: 1 },
+  internal.payToPaymentMonitoring.sweepAgedUnresolved,
+  {
+    paginationOpts: {
+      numItems: 100,
+      cursor: null,
+      maximumRowsRead: 100,
+      maximumBytesRead: 1_000_000,
+    },
+  },
+)
+
 export default crons

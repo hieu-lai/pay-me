@@ -82,6 +82,14 @@ function invalidResponse(): never {
   })
 }
 
+function uidMismatch(): never {
+  throw new ZeptoClientError({
+    kind: 'uid_mismatch',
+    message: 'Zepto Payment response violated its permanent UID binding.',
+    path: '/payto/payments/{payment_uid}',
+  })
+}
+
 function validateInput(input: unknown): asserts input is CreatePaymentInput {
   if (
     typeof input !== 'object' ||
@@ -127,9 +135,13 @@ export async function createPayment(
     invalidResponse()
   }
   if (
-    response.status !== 201 ||
     payment.uid !== input.providerUid ||
-    payment.agreement_uid !== input.agreementProviderUid ||
+    payment.agreement_uid !== input.agreementProviderUid
+  ) {
+    uidMismatch()
+  }
+  if (
+    response.status !== 201 ||
     payment.priority !== input.priority ||
     payment.amount !== input.amountCents ||
     !knownProviderStates.has(payment.state) ||
@@ -171,7 +183,11 @@ export async function getPaymentLifecycleByUid(
   }
   if (
     payment.uid !== input.providerUid ||
-    payment.agreement_uid !== input.agreementProviderUid ||
+    payment.agreement_uid !== input.agreementProviderUid
+  ) {
+    uidMismatch()
+  }
+  if (
     payment.amount !== input.amountCents ||
     payment.priority !== input.priority ||
     Number.isNaN(Date.parse(payment.created_at))

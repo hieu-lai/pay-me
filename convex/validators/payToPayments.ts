@@ -109,6 +109,7 @@ export const payToPaymentCreateErrorCategories = [
   'network',
   'sandbox_only',
   'timeout',
+  'uid_mismatch',
   'unclassified',
 ] as const
 export const payToPaymentCreateErrorCategoryValidator = literals(

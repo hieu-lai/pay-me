@@ -100,28 +100,47 @@ describe('Zepto PayTo Payment creation', () => {
   })
 
   test.each([
-    [{ uid: 'another_payment' }, 'returned another Payment UID'],
-    [{ agreement_uid: 'another_agreement' }, 'returned another Agreement UID'],
-    [{ state: 'unknown' }, 'returned an invalid lifecycle'],
-    [{ created_at: 'not-a-date' }, 'returned an invalid timestamp'],
-    [{ amount: undefined }, 'omitted a required Payment field'],
-  ] as const)('rejects a response that %s', async (overrides, _description) => {
-    const client = createZeptoClient({
-      environment: 'sandbox',
-      accessToken: 'sandbox-token',
-      fetch: async () => paymentResponse(overrides),
-      maxRetries: 0,
-    })
+    [
+      { uid: 'another_payment' },
+      'returned another Payment UID',
+      'uid_mismatch',
+    ],
+    [
+      { agreement_uid: 'another_agreement' },
+      'returned another Agreement UID',
+      'uid_mismatch',
+    ],
+    [{ state: 'unknown' }, 'returned an invalid lifecycle', 'invalid_response'],
+    [
+      { created_at: 'not-a-date' },
+      'returned an invalid timestamp',
+      'invalid_response',
+    ],
+    [
+      { amount: undefined },
+      'omitted a required Payment field',
+      'invalid_response',
+    ],
+  ] as const)(
+    'rejects a response that %s',
+    async (overrides, _description, kind) => {
+      const client = createZeptoClient({
+        environment: 'sandbox',
+        accessToken: 'sandbox-token',
+        fetch: async () => paymentResponse(overrides),
+        maxRetries: 0,
+      })
 
-    await expect(
-      createPayment(client, {
-        providerUid: 'payment_36',
-        agreementProviderUid: 'agreement_36',
-        amountCents: 12_500,
-        priority: 'unattended',
-      }),
-    ).rejects.toMatchObject({ kind: 'invalid_response' })
-  })
+      await expect(
+        createPayment(client, {
+          providerUid: 'payment_36',
+          agreementProviderUid: 'agreement_36',
+          amountCents: 12_500,
+          priority: 'unattended',
+        }),
+      ).rejects.toMatchObject({ kind })
+    },
+  )
 
   test('rejects an invalid request before transport', async () => {
     const fetch = vi.fn(async () => paymentResponse())
@@ -197,26 +216,33 @@ describe('Zepto PayTo Payment reconciliation', () => {
   })
 
   test.each([
-    [{ uid: 'another_payment' }, 'another Payment UID'],
-    [{ agreement_uid: 'another_agreement' }, 'another Agreement UID'],
-    [{ amount: 99_999 }, 'another amount'],
-  ] as const)('rejects a GET response for %s', async (override, _case) => {
-    const client = createZeptoClient({
-      environment: 'sandbox',
-      accessToken: 'sandbox-token',
-      fetch: async () => paymentResponse(override, 200),
-      maxRetries: 0,
-    })
+    [{ uid: 'another_payment' }, 'another Payment UID', 'uid_mismatch'],
+    [
+      { agreement_uid: 'another_agreement' },
+      'another Agreement UID',
+      'uid_mismatch',
+    ],
+    [{ amount: 99_999 }, 'another amount', 'invalid_response'],
+  ] as const)(
+    'rejects a GET response for %s',
+    async (override, _case, kind) => {
+      const client = createZeptoClient({
+        environment: 'sandbox',
+        accessToken: 'sandbox-token',
+        fetch: async () => paymentResponse(override, 200),
+        maxRetries: 0,
+      })
 
-    await expect(
-      getPaymentLifecycleByUid(client, {
-        providerUid: 'payment_36',
-        agreementProviderUid: 'agreement_36',
-        amountCents: 12_500,
-        priority: 'unattended',
-      }),
-    ).rejects.toMatchObject({ kind: 'invalid_response' })
-  })
+      await expect(
+        getPaymentLifecycleByUid(client, {
+          providerUid: 'payment_36',
+          agreementProviderUid: 'agreement_36',
+          amountCents: 12_500,
+          priority: 'unattended',
+        }),
+      ).rejects.toMatchObject({ kind })
+    },
+  )
 
   test('returns only the retry evidence from a failed Payment', async () => {
     const client = createZeptoClient({

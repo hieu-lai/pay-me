@@ -227,6 +227,27 @@ async function establishProviderPayment() {
   return setup
 }
 
+async function insertUnscheduledPaymentCopy(
+  setup: Awaited<ReturnType<typeof establishProviderPayment>>,
+) {
+  return await setup.t.run(async (ctx) => {
+    const payment = await ctx.db.get('payToPayments', setup.payToPaymentId)
+    if (!payment) throw new Error('Expected PayTo Payment')
+    await ctx.db.patch('payToPayments', payment._id, {
+      agedUnresolvedMonitoringCompletedAt:
+        payment.establishedAt + 24 * 60 * 60_000,
+    })
+    const { _id, _creationTime, ...values } = payment
+    void _id
+    void _creationTime
+    return await ctx.db.insert('payToPayments', {
+      ...values,
+      providerUid: `${payment.providerUid}-unscheduled`,
+      agedUnresolvedMonitoringCompletedAt: undefined,
+    })
+  })
+}
+
 async function prepareFirstRetry(
   setup: Awaited<ReturnType<typeof establishProviderPayment>>,
   leaseToken: string,
@@ -685,6 +706,9 @@ describe('PayTo Payment immutable intent', () => {
         activatedAt: 2_500,
       })
     })
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
     await t.mutation(internal.payToPayments.ensure, {
       payToAgreementId,
       observedAt: 3_000,
@@ -702,6 +726,14 @@ describe('PayTo Payment immutable intent', () => {
         observedAt: 4_000,
       }),
     ).resolves.toMatchObject({ kind: 'mismatch' })
+    expect(critical).toHaveBeenCalledWith(
+      'PayTo Payment critical signal',
+      expect.objectContaining({
+        kind: 'configuration_mismatch',
+        reason: 'immutable_intent_mismatch',
+        observedAt: 4_000,
+      }),
+    )
 
     const after = await paymentState(t, payToAgreementId)
     expect(after.payments[0]).toMatchObject({
@@ -1197,6 +1229,9 @@ describe('PayTo Payment create operation', () => {
         dailyPaymentValueCapCents: 0,
       })
     })
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
 
     await expect(
       t.mutation(internal.payToPayments.claimCreateWork, {
@@ -1205,6 +1240,14 @@ describe('PayTo Payment create operation', () => {
         nowMs: 4_000,
       }),
     ).resolves.toBeNull()
+    expect(critical).toHaveBeenCalledWith(
+      'PayTo Payment critical signal',
+      expect.objectContaining({
+        kind: 'cap_breach',
+        payToPaymentId,
+        observedAt: 4_000,
+      }),
+    )
     await expect(
       t.run(async (ctx) =>
         ctx.db
@@ -1465,11 +1508,21 @@ describe('PayTo Payment create operation', () => {
         headers: { 'Content-Type': 'application/json' },
       }),
     )
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
     const { t, payToPaymentId } = await establishPayment()
 
     await t.finishAllScheduledFunctions(() => {})
 
     expect(fetch).toHaveBeenCalledOnce()
+    expect(critical).toHaveBeenCalledWith(
+      'PayTo Payment critical signal',
+      expect.objectContaining({
+        kind: 'suspected_duplication',
+        payToPaymentId,
+      }),
+    )
     await expect(
       t.run(async (ctx) => ({
         evidence: await ctx.db
@@ -1526,7 +1579,10 @@ describe('PayTo Payment create operation', () => {
     ['a malformed success body', { created_at: 'not-a-date' }],
   ] as const)(
     'holds creation uncertainty after %s',
-    async (_case, override) => {
+    async (caseName, override) => {
+      const critical = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined)
       const fetch = vi
         .spyOn(globalThis, 'fetch')
         .mockImplementation(async (request) => {
@@ -1546,6 +1602,15 @@ describe('PayTo Payment create operation', () => {
       await t.finishAllScheduledFunctions(() => {})
 
       expect(fetch).toHaveBeenCalledOnce()
+      if (caseName === 'a mismatched UID') {
+        expect(critical).toHaveBeenCalledWith(
+          'PayTo Payment critical signal',
+          expect.objectContaining({
+            kind: 'permanent_uid_invariant_breach',
+            payToPaymentId,
+          }),
+        )
+      }
       await expect(
         t.run(async (ctx) => ({
           payment: await ctx.db.get('payToPayments', payToPaymentId),
@@ -2452,6 +2517,9 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
 
   test('ends unresolved creation recovery at fifteen minutes', async () => {
     const setup = await establishPayment()
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
     const create = await setup.t.mutation(
       internal.payToPayments.claimCreateWork,
       {
@@ -2496,6 +2564,14 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
         },
       ],
     })
+    expect(critical).toHaveBeenCalledWith(
+      'PayTo Payment critical signal',
+      expect.objectContaining({
+        kind: 'unresolved_ambiguity',
+        payToPaymentId: setup.payToPaymentId,
+        reason: 'creation_recovery_exhausted',
+      }),
+    )
   })
 
   test('uses the 30-second then 2-minute uncertainty cadence', async () => {
@@ -3033,6 +3109,9 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
       },
     )
     if (!contradictionWork) throw new Error('Expected contradiction GET work')
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
     await t.mutation(internal.payToPayments.applyEvidence, {
       payToPaymentId,
       evidence: {
@@ -3044,6 +3123,14 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
       },
       observedAt: 5_001,
     })
+    expect(critical).toHaveBeenCalledWith(
+      'PayTo Payment critical signal',
+      expect.objectContaining({
+        kind: 'settlement_contradiction',
+        payToPaymentId,
+        observedAt: 5_001,
+      }),
+    )
 
     await expect(paymentState(t, payToAgreementId)).resolves.toMatchObject({
       agreement: {
@@ -3201,6 +3288,7 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
 
   test('alerts after 24 hours without any successful GET reconciliation', async () => {
     const { t, payToPaymentId } = await establishProviderPayment()
+    const alert = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const dayLater = 3_000 + 24 * 60 * 60_000
     const work = await t.mutation(
       internal.payToPaymentReconciliation.claimWork,
@@ -3227,6 +3315,13 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
         observedAt: dayLater,
       },
     })
+    expect(alert).toHaveBeenCalledWith(
+      'PayTo Payment operational alert',
+      expect.objectContaining({
+        payToPaymentId,
+        observedAt: dayLater,
+      }),
+    )
   })
 
   test('counts expired GET leases toward the outage threshold', async () => {
@@ -3443,6 +3538,431 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
       },
       paymentVerificationPendingPayerCount: 0,
       paymentAttentionRequiredPayerCount: 0,
+    })
+  })
+})
+
+describe('PayTo Payment operational monitoring', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  test('warns once work is more than five minutes overdue with bounded safe queue context', async () => {
+    const setup = await establishProviderPayment()
+    await setup.t.run(async (ctx) => {
+      const work = await ctx.db
+        .query('payToPaymentReconciliationWorkItems')
+        .withIndex('by_payToPaymentId', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .unique()
+      if (!work) throw new Error('Expected reconciliation work')
+      await ctx.db.patch(work._id, { state: 'queued', availableAt: 10_000 })
+    })
+    const warning = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined)
+
+    await setup.t.mutation(internal.payToPaymentReconciliation.dispatchDue, {
+      nowMs: 10_000 + 5 * 60_000 + 1,
+    })
+
+    expect(warning).toHaveBeenCalledOnce()
+    expect(warning).toHaveBeenCalledWith('PayTo Payment operational warning', {
+      kind: 'work_overdue',
+      observedAt: 10_000 + 5 * 60_000 + 1,
+      queue: 'reconciliation',
+      dueCount: 1,
+      oldestAgeMs: 5 * 60_000 + 1,
+      sampledPayToPaymentIds: [setup.payToPaymentId],
+      truncated: false,
+    })
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('ciphertext')
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('123456')
+  })
+
+  test('warns for overdue creation and retry work but not at exactly five minutes', async () => {
+    const setup = await establishProviderPayment()
+    await setup.t.run(async (ctx) => {
+      const creation = await ctx.db
+        .query('payToPaymentWorkItems')
+        .withIndex('by_payToPaymentId', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .unique()
+      if (!creation) throw new Error('Expected creation work')
+      await ctx.db.patch(creation._id, {
+        state: 'queued',
+        availableAt: 20_000,
+      })
+      await ctx.db.insert('payToPaymentRetryWorkItems', {
+        payToPaymentId: setup.payToPaymentId,
+        state: 'queued',
+        retryNumber: 1,
+        availableAt: 30_000,
+      })
+    })
+    const warning = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined)
+
+    await setup.t.mutation(internal.payToPayments.dispatchCreationRecoveryDue, {
+      nowMs: 20_000 + 5 * 60_000,
+    })
+    await setup.t.mutation(internal.payToPaymentRetry.dispatchDue, {
+      nowMs: 30_000 + 5 * 60_000 + 1,
+    })
+    await setup.t.mutation(internal.payToPayments.dispatchCreationRecoveryDue, {
+      nowMs: 20_000 + 5 * 60_000 + 1,
+    })
+
+    const queues = warning.mock.calls
+      .filter(([message]) => message === 'PayTo Payment operational warning')
+      .map(([, context]) => (context as { queue: string }).queue)
+    expect(queues).toEqual(['retry', 'creation'])
+  })
+
+  test('emits one operational alert at the GET outage threshold and recovers without changing Payment truth', async () => {
+    const setup = await establishProviderPayment()
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const alert = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    for (let failure = 1; failure <= 7; failure += 1) {
+      const work = await setup.t.run(async (ctx) =>
+        ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+      )
+      if (!work) throw new Error('Expected reconciliation work')
+      const leaseToken = `monitoring-outage-${failure}`
+      const claimed = await setup.t.mutation(
+        internal.payToPaymentReconciliation.claimWork,
+        {
+          payToPaymentId: setup.payToPaymentId,
+          leaseToken,
+          nowMs: work.availableAt,
+        },
+      )
+      if (!claimed) throw new Error('Expected claimed GET')
+      await setup.t.mutation(
+        internal.payToPaymentReconciliation.recordFailure,
+        {
+          payToPaymentId: setup.payToPaymentId,
+          operationId: claimed.operationId,
+          leaseToken,
+          category: 'network',
+          observedAt: work.availableAt + 1,
+        },
+      )
+    }
+
+    const operationalAlerts = alert.mock.calls.filter(([message, context]) => {
+      const observedAt = (context as { observedAt?: number }).observedAt
+      return (
+        message === 'PayTo Payment operational alert' &&
+        observedAt !== undefined &&
+        observedAt < 1_000_000_000
+      )
+    })
+    expect(operationalAlerts).toHaveLength(1)
+    expect(operationalAlerts[0]).toEqual([
+      'PayTo Payment operational alert',
+      expect.objectContaining({
+        kind: 'lifecycle_tracking_outage',
+        payToPaymentId: setup.payToPaymentId,
+        consecutiveFailures: 6,
+      }),
+    ])
+    await expect(
+      setup.t.run((ctx) => ctx.db.get('payToPayments', setup.payToPaymentId)),
+    ).resolves.toMatchObject({
+      provisionalLifecycleState: 'pending',
+      reconciliationAlert: { kind: 'lifecycle_tracking_outage' },
+    })
+  })
+
+  test('emits deduplicated critical signals for unknown provider truth', async () => {
+    const setup = await establishProviderPayment()
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+
+    for (let observation = 0; observation < 2; observation += 1) {
+      const work = await setup.t.run(async (ctx) =>
+        ctx.db
+          .query('payToPaymentReconciliationWorkItems')
+          .withIndex('by_payToPaymentId', (q) =>
+            q.eq('payToPaymentId', setup.payToPaymentId),
+          )
+          .unique(),
+      )
+      if (!work) throw new Error('Expected reconciliation work')
+      const leaseToken = `unknown-state-monitor-${observation}`
+      const claimed = await setup.t.mutation(
+        internal.payToPaymentReconciliation.claimWork,
+        {
+          payToPaymentId: setup.payToPaymentId,
+          leaseToken,
+          nowMs: work.availableAt,
+        },
+      )
+      if (!claimed) throw new Error('Expected claimed GET')
+      await setup.t.mutation(internal.payToPayments.applyEvidence, {
+        payToPaymentId: setup.payToPaymentId,
+        evidence: {
+          source: 'per_uid_get',
+          intentFingerprint: payment.intent.fingerprint,
+          providerState: 'provider_added_state',
+          operationId: claimed.operationId,
+          leaseToken,
+        },
+        observedAt: work.availableAt + 1,
+      })
+    }
+
+    const unknownStateSignals = critical.mock.calls.filter(
+      ([message, context]) =>
+        message === 'PayTo Payment critical signal' &&
+        (context as { kind?: string }).kind === 'unknown_provider_state',
+    )
+    expect(unknownStateSignals).toHaveLength(1)
+    expect(unknownStateSignals[0]).toEqual([
+      'PayTo Payment critical signal',
+      expect.objectContaining({
+        kind: 'unknown_provider_state',
+        payToPaymentId: setup.payToPaymentId,
+      }),
+    ])
+    expect(JSON.stringify(unknownStateSignals)).not.toContain(
+      'provider_added_state',
+    )
+  })
+
+  test('immediately signals GET configuration mismatches without Payment attention', async () => {
+    const setup = await establishProviderPayment()
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
+    const claimed = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'configuration-get-worker',
+        nowMs: 4_002,
+      },
+    )
+    if (!claimed) throw new Error('Expected claimed GET')
+
+    await setup.t.mutation(internal.payToPaymentReconciliation.recordFailure, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: claimed.operationId,
+      leaseToken: 'configuration-get-worker',
+      category: 'configuration',
+      observedAt: 4_003,
+    })
+
+    expect(critical).toHaveBeenCalledWith(
+      'PayTo Payment critical signal',
+      expect.objectContaining({
+        kind: 'configuration_mismatch',
+        payToPaymentId: setup.payToPaymentId,
+        observedAt: 4_003,
+      }),
+    )
+    await expect(
+      setup.t.run((ctx) => ctx.db.get('payToPayments', setup.payToPaymentId)),
+    ).resolves.not.toHaveProperty('attention')
+  })
+
+  test('immediately signals retry configuration mismatches without exposing provider detail', async () => {
+    const setup = await establishProviderPayment()
+    const { retry, dueAt } = await claimFirstRetry(
+      setup,
+      'configuration-retry-worker',
+    )
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
+
+    await setup.t.mutation(internal.payToPaymentRetry.recordFailure, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: retry.operationId,
+      leaseToken: 'configuration-retry-worker',
+      ambiguous: false,
+      errorCategory: 'configuration',
+      observedAt: dueAt + 2,
+    })
+
+    const signals = critical.mock.calls.filter(
+      ([message, context]) =>
+        message === 'PayTo Payment critical signal' &&
+        (context as { kind?: string }).kind === 'configuration_mismatch',
+    )
+    expect(signals).toEqual([
+      [
+        'PayTo Payment critical signal',
+        expect.objectContaining({
+          payToPaymentId: setup.payToPaymentId,
+          observedAt: dueAt + 2,
+          reason: 'configuration',
+        }),
+      ],
+    ])
+    expect(JSON.stringify(signals)).not.toContain('providerFailureCode')
+  })
+
+  test('emits a bounded aggregate snapshot for Payment health', async () => {
+    const setup = await establishProviderPayment()
+    await setup.t.run(async (ctx) => {
+      await ctx.db.insert('payToPaymentWebhookDeduplication', {
+        payToPaymentId: setup.payToPaymentId,
+        outcome: 'duplicate_delivery',
+        deliveryId: 'safe-delivery-id',
+        observedAt: 4_500,
+      })
+    })
+    const telemetry = vi
+      .spyOn(console, 'info')
+      .mockImplementation(() => undefined)
+
+    const snapshot = await setup.t.mutation(
+      internal.payToPaymentMonitoring.emitAggregateSnapshot,
+      { nowMs: 24 * 60 * 60_000 + 4_003 },
+    )
+
+    expect(snapshot).toEqual({
+      observedAt: 24 * 60 * 60_000 + 4_003,
+      sampledPaymentCount: 1,
+      sampleTruncated: false,
+      settlement: { settledCount: 0, averageLatencyMs: 0, maxLatencyMs: 0 },
+      agedUnresolvedPaymentCount: 1,
+      confirmedFailureCount: 0,
+      confirmedFailureRate: 0,
+      retry: { attemptCount: 0, failureCount: 0, failureRate: 0 },
+      webhookDeduplication: {
+        duplicateDeliveryCount: 1,
+        duplicateEventCount: 0,
+      },
+      projection: { checkedCount: 1, inconsistencyCount: 0 },
+    })
+    expect(telemetry).toHaveBeenCalledWith(
+      'PayTo Payment aggregate monitoring',
+      snapshot,
+    )
+    expect(JSON.stringify(telemetry.mock.calls)).not.toContain(
+      'safe-delivery-id',
+    )
+  })
+
+  test('emits a per-Payment aggregate metric when unresolved work reaches 24 hours', async () => {
+    const setup = await establishProviderPayment()
+    const unscheduledPaymentId = await insertUnscheduledPaymentCopy(setup)
+    const telemetry = vi
+      .spyOn(console, 'info')
+      .mockImplementation(() => undefined)
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentMonitoring.checkAgedUnresolved, {
+        payToPaymentId: unscheduledPaymentId,
+      }),
+    ).resolves.toBe(true)
+
+    expect(telemetry).toHaveBeenCalledWith('PayTo Payment aggregate metric', {
+      kind: 'aged_unresolved_payment',
+      payToPaymentId: unscheduledPaymentId,
+      observedAt: 3_000 + 24 * 60 * 60_000,
+    })
+    expect(JSON.stringify(telemetry.mock.calls)).not.toContain('ciphertext')
+    await expect(
+      setup.t.mutation(internal.payToPaymentMonitoring.checkAgedUnresolved, {
+        payToPaymentId: unscheduledPaymentId,
+      }),
+    ).resolves.toBe(false)
+  })
+
+  test('backfills the aged unresolved milestone for pre-existing Payments in bounded pages', async () => {
+    const setup = await establishProviderPayment()
+    const unscheduledPaymentId = await insertUnscheduledPaymentCopy(setup)
+    const telemetry = vi
+      .spyOn(console, 'info')
+      .mockImplementation(() => undefined)
+    const nowMs = 3_000 + 25 * 60 * 60_000
+
+    await expect(
+      setup.t.mutation(internal.payToPaymentMonitoring.sweepAgedUnresolved, {
+        paginationOpts: {
+          numItems: 100,
+          cursor: null,
+          maximumRowsRead: 100,
+          maximumBytesRead: 1_000_000,
+        },
+        nowMs,
+      }),
+    ).resolves.toEqual({ emittedCount: 1, isDone: true })
+
+    expect(telemetry).toHaveBeenCalledWith('PayTo Payment aggregate metric', {
+      kind: 'aged_unresolved_payment',
+      payToPaymentId: unscheduledPaymentId,
+      observedAt: nowMs,
+    })
+    await expect(
+      setup.t.mutation(internal.payToPaymentMonitoring.sweepAgedUnresolved, {
+        paginationOpts: {
+          numItems: 100,
+          cursor: null,
+          maximumRowsRead: 100,
+          maximumBytesRead: 1_000_000,
+        },
+        nowMs: nowMs + 60 * 60_000,
+      }),
+    ).resolves.toEqual({ emittedCount: 0, isDone: true })
+  })
+
+  test('signals projection inconsistencies through critical and aggregate telemetry', async () => {
+    const setup = await establishProviderPayment()
+    await setup.t.run(async (ctx) => {
+      await ctx.db.patch('moneyRequests', setup.moneyRequestId, {
+        paymentCounts: {
+          not_started: 1,
+          initiating: 0,
+          processing: 0,
+          under_investigation: 0,
+          failed: 0,
+          paid: 0,
+        },
+      })
+    })
+    const critical = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
+    const telemetry = vi
+      .spyOn(console, 'info')
+      .mockImplementation(() => undefined)
+
+    const snapshot = await setup.t.mutation(
+      internal.payToPaymentMonitoring.emitAggregateSnapshot,
+      { nowMs: 5_000 },
+    )
+
+    expect(snapshot.projection).toEqual({
+      checkedCount: 1,
+      inconsistencyCount: 1,
+    })
+    expect(critical).toHaveBeenCalledWith('PayTo Payment critical signal', {
+      kind: 'projection_inconsistency',
+    })
+    expect(telemetry).toHaveBeenCalledWith('PayTo Payment aggregate metric', {
+      kind: 'projection_inconsistency',
     })
   })
 })

@@ -8,6 +8,7 @@ import {
   requestImmediatePayToPaymentReconciliation,
   requestPayToPaymentResume,
 } from './payToPayments'
+import { emitPayToPaymentCriticalSignal } from './lib/payToPaymentTelemetry'
 import {
   payToPaymentCreationStateValidator,
   payToPaymentEvidenceSourceValidator,
@@ -53,15 +54,29 @@ async function paymentOperatorActor(ctx: Pick<QueryCtx, 'auth' | 'db'>) {
   }
 }
 
-async function requirePaymentOperator(ctx: QueryCtx) {
+async function requirePaymentOperator(
+  ctx: QueryCtx,
+  payToPaymentId?: Id<'payToPayments'>,
+  observedAt?: number,
+) {
   const actor = await paymentOperatorActor(ctx)
   if (actor.authentication === 'unauthenticated') {
+    emitPayToPaymentCriticalSignal('unauthorized_operation', {
+      payToPaymentId,
+      observedAt,
+      reason: 'unauthenticated_diagnostics',
+    })
     throw new ConvexError({
       code: 'UNAUTHENTICATED',
       message: 'You must be signed in to call this function.',
     })
   }
   if (actor.authorization !== 'payment_operator') {
+    emitPayToPaymentCriticalSignal('unauthorized_operation', {
+      payToPaymentId,
+      observedAt,
+      reason: 'insufficient_role_diagnostics',
+    })
     throw new ConvexError({
       code: 'FORBIDDEN',
       message: 'The signed-in user is not a Payment operator.',
@@ -247,6 +262,16 @@ async function auditedOperatorRequest(
     resultCode: result.code,
     requestedAt,
   })
+  if (
+    result.code === 'unauthenticated' ||
+    result.code === 'insufficient_role'
+  ) {
+    emitPayToPaymentCriticalSignal('unauthorized_operation', {
+      payToPaymentId: args.payToPaymentId,
+      observedAt: requestedAt,
+      reason: result.code,
+    })
+  }
   return result
 }
 
@@ -307,7 +332,7 @@ export const diagnostics = query({
   },
   returns: diagnosticResultValidator,
   handler: async (ctx, args) => {
-    await requirePaymentOperator(ctx)
+    await requirePaymentOperator(ctx, args.payToPaymentId, args.nowMs)
     const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
     if (!payment) {
       throw new ConvexError({

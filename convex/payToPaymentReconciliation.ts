@@ -3,6 +3,11 @@ import { v } from 'convex/values'
 
 import { internal } from './_generated/api'
 import { internalAction, internalMutation } from './_generated/server'
+import {
+  emitPayToPaymentErrorCriticalSignal,
+  emitPayToPaymentOperationalAlert,
+  warnIfPayToPaymentWorkOverdue,
+} from './lib/payToPaymentTelemetry'
 import { createEnvironmentZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
 import { getPaymentLifecycleByUid } from './lib/zepto/payment'
@@ -196,6 +201,13 @@ export const claimWork = internalMutation({
             observedAt: args.nowMs,
           },
         })
+        if (payment.reconciliationAlert === undefined) {
+          emitPayToPaymentOperationalAlert({
+            payToPaymentId: payment._id,
+            observedAt: args.nowMs,
+            consecutiveFailures: expiredProgress.consecutiveFailures,
+          })
+        }
       }
     }
     const operationId = await allocatePayToPaymentOperationId(ctx, args.nowMs)
@@ -257,16 +269,19 @@ export const dispatchDue = internalMutation({
         q.eq('state', 'running').lte('leaseExpiresAt', nowMs),
       )
       .take(Math.max(0, 50 - due.length))
-    const oldestAvailableAt = due.at(0)?.availableAt
-    if (
-      oldestAvailableAt !== undefined &&
-      nowMs - oldestAvailableAt >= 5 * 60_000
-    ) {
-      console.warn('PayTo Payment reconciliation queue is stale', {
-        dueCount: due.length,
-        oldestAgeMs: nowMs - oldestAvailableAt,
-      })
-    }
+    const queuedContext = due.map((work) => ({
+      payToPaymentId: work.payToPaymentId,
+      overdueAt: work.availableAt,
+    }))
+    const expiredContext = expired.map((work) => ({
+      payToPaymentId: work.payToPaymentId,
+      overdueAt: work.leaseExpiresAt ?? nowMs,
+    }))
+    warnIfPayToPaymentWorkOverdue({
+      nowMs,
+      queue: 'reconciliation',
+      work: [...queuedContext, ...expiredContext],
+    })
     for (const workItem of [...due, ...expired]) {
       await ctx.scheduler.runAfter(
         0,
@@ -330,6 +345,13 @@ export const recordFailure = internalMutation({
       }
       return false
     }
+    emitPayToPaymentErrorCriticalSignal({
+      payToPaymentId: payment._id,
+      payToAgreementId: payment.payToAgreementId,
+      environment: payment.environment,
+      category: args.category,
+      observedAt: args.observedAt,
+    })
     if (
       payment.creationState === 'creation_uncertain' &&
       payment.creationRecovery !== undefined
@@ -410,6 +432,8 @@ export const recordFailure = internalMutation({
     await ctx.db.patch('payToPaymentOperations', operation._id, {
       outcome: { classification: 'uncertain', observedAt: args.observedAt },
     })
+    const newlyAlerting =
+      decision.kind === 'alert' && payment.reconciliationAlert === undefined
     await ctx.db.patch('payToPayments', payment._id, {
       ...(decision.kind === 'alert'
         ? {
@@ -433,9 +457,10 @@ export const recordFailure = internalMutation({
       consecutiveFailures,
       failureStartedAt,
     })
-    if (decision.kind === 'alert') {
-      console.error('PayTo Payment lifecycle tracking outage', {
+    if (newlyAlerting) {
+      emitPayToPaymentOperationalAlert({
         payToPaymentId: payment._id,
+        observedAt: args.observedAt,
         consecutiveFailures,
       })
     }
