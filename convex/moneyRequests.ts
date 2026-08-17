@@ -33,6 +33,7 @@ import {
   payIdCapabilityStatus,
   pseudonymousPayIdRequesterId,
 } from './lib/payIdCapability'
+import { profileImageUrl } from './lib/profileImageStorage'
 import { decryptPaymentDestination } from './lib/paymentDestinationCrypto'
 import { requireUser } from './lib/requireUser'
 import { resolvePayIdAlias } from './lib/zepto/aliasResolution'
@@ -688,7 +689,7 @@ export const accept = internalMutation({
     }
     const moneyRequestId = await ctx.db.insert('moneyRequests', {
       requesterUserId: requester._id,
-      requesterNameSnapshot: requester.name,
+      requesterNameSnapshot: requester.displayName,
       amountCents: args.intent.amountCents,
       currency: 'AUD',
       purpose: 'other',
@@ -705,7 +706,7 @@ export const accept = internalMutation({
       const payToAgreementId = await ctx.db.insert('payToAgreements', {
         moneyRequestId,
         payerUserId: payer._id,
-        payerNameSnapshot: payer.name,
+        payerNameSnapshot: payer.displayName,
         sourceDebtorPaymentDestinationId: payerDestination.destination._id,
         debtorSnapshot: payerDestination.snapshot,
         provider: 'zepto',
@@ -750,14 +751,13 @@ function publicUserIdentity(
   submittedName: string,
   currentUser: Doc<'users'> | null,
 ) {
+  const imageUrl = profileImageUrl(currentUser?.profileImageSource)
   return {
     name: submittedName,
     ...(currentUser?.username === undefined
       ? {}
       : { username: currentUser.username }),
-    ...(currentUser?.imageUrl === undefined
-      ? {}
-      : { imageUrl: currentUser.imageUrl }),
+    ...(imageUrl === undefined ? {} : { imageUrl }),
   }
 }
 

@@ -59,13 +59,15 @@ async function setupAgreement(
       tokenIdentifier: requesterIdentity.tokenIdentifier,
       clerkUserId: requesterIdentity.subject,
       email: 'requester@example.test',
-      name: requesterIdentity.name,
+      displayName: requesterIdentity.name,
+      searchText: requesterIdentity.name,
     })
     const payerUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'https://clerk.example.test|payer_webhook',
       clerkUserId: 'payer_webhook',
       email: 'payer@example.test',
-      name: 'Webhook Payer',
+      displayName: 'Webhook Payer',
+      searchText: 'Webhook Payer',
     })
     const requesterDestinationId = await ctx.db.insert('paymentDestinations', {
       ownerUserId: requesterUserId,

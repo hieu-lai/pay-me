@@ -1808,13 +1808,19 @@ describe('Money Request submission and requester read', () => {
     })
     await t.run(async (ctx) => {
       await ctx.db.patch('users', requesterUserId, {
-        name: 'Current Requester Name',
+        displayName: 'Current Requester Name',
         username: 'requester-now',
-        imageUrl: 'https://example.com/requester.png',
+        profileImageSource: {
+          kind: 'legacyExternal',
+          url: 'https://example.com/requester.png',
+        },
       })
       await ctx.db.patch('users', payerUserId, {
         username: 'payer-now',
-        imageUrl: 'https://example.com/payer.png',
+        profileImageSource: {
+          kind: 'legacyExternal',
+          url: 'https://example.com/payer.png',
+        },
       })
     })
 
@@ -1874,7 +1880,10 @@ describe('Money Request submission and requester read', () => {
     await t.run(async (ctx) => {
       await ctx.db.patch('users', payerUserId, {
         username: 'payer-now',
-        imageUrl: 'https://example.com/payer.png',
+        profileImageSource: {
+          kind: 'legacyExternal',
+          url: 'https://example.com/payer.png',
+        },
       })
     })
 
@@ -1941,7 +1950,10 @@ describe('Money Request submission and requester read', () => {
     await t.run(async (ctx) => {
       await ctx.db.patch('users', requesterUserId, {
         username: 'requester-now',
-        imageUrl: 'https://example.com/requester.png',
+        profileImageSource: {
+          kind: 'legacyExternal',
+          url: 'https://example.com/requester.png',
+        },
       })
     })
 

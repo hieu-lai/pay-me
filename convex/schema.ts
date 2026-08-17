@@ -30,6 +30,14 @@ import {
   payToPaymentOperationValidator,
   providerPayToPaymentStateValidator,
 } from './validators/payToPayments'
+import {
+  profileImageCleanupObjectKindValidator,
+  profileImageCleanupStateValidator,
+  profileImageMediaTypeValidator,
+  profileImageRejectionReasonValidator,
+  profileImageSourceValidator,
+  profileImageUploadStateValidator,
+} from './validators/profileImages'
 
 const agreementEvidenceBaseValidator = v.object({
   payToAgreementId: v.id('payToAgreements'),
@@ -41,10 +49,11 @@ export default defineSchema({
     tokenIdentifier: v.string(),
     clerkUserId: v.string(),
     email: v.string(),
-    name: v.string(),
+    displayName: v.string(),
+    bio: v.optional(v.string()),
     username: v.optional(v.string()),
-    searchText: v.optional(v.string()),
-    imageUrl: v.optional(v.string()),
+    searchText: v.string(),
+    profileImageSource: v.optional(profileImageSourceValidator),
     defaultPaymentDestinationId: v.optional(v.id('paymentDestinations')),
   })
     .index('by_tokenIdentifier', ['tokenIdentifier'])
@@ -52,6 +61,44 @@ export default defineSchema({
     .searchIndex('search_by_searchText', {
       searchField: 'searchText',
     }),
+
+  profileImageUploads: defineTable({
+    ownerUserId: v.id('users'),
+    state: profileImageUploadStateValidator,
+    stagingObjectKey: v.string(),
+    assetObjectKey: v.string(),
+    declaredSizeBytes: v.number(),
+    declaredMediaType: profileImageMediaTypeValidator,
+    detectedSizeBytes: v.optional(v.number()),
+    detectedMediaType: v.optional(profileImageMediaTypeValidator),
+    detectedWidth: v.optional(v.number()),
+    detectedHeight: v.optional(v.number()),
+    validatedSha256: v.optional(v.string()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    validationAttemptCount: v.number(),
+    nextAttemptAt: v.optional(v.number()),
+    rejectionReason: v.optional(profileImageRejectionReasonValidator),
+    terminalAt: v.optional(v.number()),
+  })
+    .index('by_ownerUserId_and_state', ['ownerUserId', 'state'])
+    .index('by_ownerUserId_and_createdAt', ['ownerUserId', 'createdAt'])
+    .index('by_state_and_expiresAt', ['state', 'expiresAt'])
+    .index('by_state_and_nextAttemptAt', ['state', 'nextAttemptAt'])
+    .index('by_terminalAt', ['terminalAt']),
+
+  profileImageCleanupObligations: defineTable({
+    objectKind: profileImageCleanupObjectKindValidator,
+    objectKey: v.string(),
+    state: profileImageCleanupStateValidator,
+    nextAttemptAt: v.number(),
+    attemptCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastFailure: v.optional(v.string()),
+  })
+    .index('by_objectKey', ['objectKey'])
+    .index('by_state_and_nextAttemptAt', ['state', 'nextAttemptAt']),
 
   paymentDestinations: defineTable({
     ownerUserId: v.id('users'),

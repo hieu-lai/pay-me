@@ -6,6 +6,7 @@ import { internalMutation, internalQuery } from './_generated/server'
 import { requireUser } from './lib/requireUser'
 import { userQuery } from './lib/userFunctions'
 import { userSearchText } from './lib/userSearch'
+import { normalizeDisplayName, presentUser } from './lib/userProfile'
 import { userValidator } from './validators/users'
 
 const zodInternalQuery = zCustomQuery(internalQuery, NoOp)
@@ -18,10 +19,15 @@ export const me = userQuery({
     name: z.string(),
     imageUrl: z.string().optional(),
   }),
-  handler: async (ctx) => ({
-    name: ctx.user.name,
-    ...(ctx.user.imageUrl === undefined ? {} : { imageUrl: ctx.user.imageUrl }),
-  }),
+  handler: async (ctx) => {
+    const presentation = presentUser(ctx.user)
+    return {
+      name: presentation.name,
+      ...(presentation.imageUrl === undefined
+        ? {}
+        : { imageUrl: presentation.imageUrl }),
+    }
+  },
 })
 
 /** Find public profiles by name or PayMe Username. */
@@ -49,13 +55,18 @@ export const search = userQuery({
     return users
       .filter((user) => user._id !== ctx.user._id)
       .slice(0, 10)
-      .map((user) => ({
-        id: user._id,
-        name: user.name,
-        hasPaymentDestination: user.defaultPaymentDestinationId !== undefined,
-        ...(user.username === undefined ? {} : { username: user.username }),
-        ...(user.imageUrl === undefined ? {} : { imageUrl: user.imageUrl }),
-      }))
+      .map((user) => {
+        const presentation = presentUser(user)
+        return {
+          id: presentation.id,
+          name: presentation.name,
+          hasPaymentDestination: user.defaultPaymentDestinationId !== undefined,
+          ...(user.username === undefined ? {} : { username: user.username }),
+          ...(presentation.imageUrl === undefined
+            ? {}
+            : { imageUrl: presentation.imageUrl }),
+        }
+      })
   },
 })
 
@@ -79,13 +90,21 @@ export const addUser = zodInternalMutation({
       return existingUser._id
     }
 
+    const displayName = normalizeDisplayName(args.name)
     return await ctx.db.insert('users', {
       tokenIdentifier: args.tokenIdentifier,
       clerkUserId: args.clerkUserId,
       email: args.email,
-      name: args.name,
-      searchText: userSearchText({ name: args.name }),
-      ...(args.imageUrl === undefined ? {} : { imageUrl: args.imageUrl }),
+      displayName,
+      searchText: userSearchText({ displayName }),
+      ...(args.imageUrl === undefined
+        ? {}
+        : {
+            profileImageSource: {
+              kind: 'legacyExternal' as const,
+              url: args.imageUrl,
+            },
+          }),
     })
   },
 })

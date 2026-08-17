@@ -43,6 +43,12 @@ type Env = {
   readonly PAYMENT_DESTINATION_ENCRYPTION_KEYS: string;
   readonly PAYMENT_DESTINATION_FINGERPRINT_KEY: string;
   readonly PAYME_RELEASE_COMMIT: string | undefined;
+  readonly PROFILE_IMAGE_CDN_ORIGIN: string;
+  readonly PROFILE_IMAGE_DELIVERY_MODE: "development" | "public_custom_domain";
+  readonly R2_ACCESS_KEY_ID: string;
+  readonly R2_BUCKET: string;
+  readonly R2_ENDPOINT: string;
+  readonly R2_SECRET_ACCESS_KEY: string;
   readonly ZEPTO_ENVIRONMENT: "sandbox" | "production" | undefined;
   readonly ZEPTO_PAYID_CAPABILITY: string | undefined;
   readonly ZEPTO_PERSONAL_ACCESS_TOKEN: string | undefined;

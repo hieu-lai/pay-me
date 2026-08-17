@@ -19,8 +19,10 @@ import type * as lib_paymentCreationPool from "../lib/paymentCreationPool.js";
 import type * as lib_paymentDestinationCrypto from "../lib/paymentDestinationCrypto.js";
 import type * as lib_paymentRetryPool from "../lib/paymentRetryPool.js";
 import type * as lib_paymentRetryRateLimiter from "../lib/paymentRetryRateLimiter.js";
+import type * as lib_profileImageStorage from "../lib/profileImageStorage.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_userFunctions from "../lib/userFunctions.js";
+import type * as lib_userProfile from "../lib/userProfile.js";
 import type * as lib_userSearch from "../lib/userSearch.js";
 import type * as lib_zepto_agreement from "../lib/zepto/agreement.js";
 import type * as lib_zepto_aliasResolution from "../lib/zepto/aliasResolution.js";
@@ -58,6 +60,7 @@ import type * as validators_payToAgreements from "../validators/payToAgreements.
 import type * as validators_payToPaymentProjections from "../validators/payToPaymentProjections.js";
 import type * as validators_payToPayments from "../validators/payToPayments.js";
 import type * as validators_paymentDestinations from "../validators/paymentDestinations.js";
+import type * as validators_profileImages from "../validators/profileImages.js";
 import type * as validators_users from "../validators/users.js";
 import type * as validators_zeptoWebhook from "../validators/zeptoWebhook.js";
 import type * as zeptoWebhook from "../zeptoWebhook.js";
@@ -81,8 +84,10 @@ const fullApi: ApiFromModules<{
   "lib/paymentDestinationCrypto": typeof lib_paymentDestinationCrypto;
   "lib/paymentRetryPool": typeof lib_paymentRetryPool;
   "lib/paymentRetryRateLimiter": typeof lib_paymentRetryRateLimiter;
+  "lib/profileImageStorage": typeof lib_profileImageStorage;
   "lib/requireUser": typeof lib_requireUser;
   "lib/userFunctions": typeof lib_userFunctions;
+  "lib/userProfile": typeof lib_userProfile;
   "lib/userSearch": typeof lib_userSearch;
   "lib/zepto/agreement": typeof lib_zepto_agreement;
   "lib/zepto/aliasResolution": typeof lib_zepto_aliasResolution;
@@ -120,6 +125,7 @@ const fullApi: ApiFromModules<{
   "validators/payToPaymentProjections": typeof validators_payToPaymentProjections;
   "validators/payToPayments": typeof validators_payToPayments;
   "validators/paymentDestinations": typeof validators_paymentDestinations;
+  "validators/profileImages": typeof validators_profileImages;
   "validators/users": typeof validators_users;
   "validators/zeptoWebhook": typeof validators_zeptoWebhook;
   zeptoWebhook: typeof zeptoWebhook;
@@ -153,6 +159,8 @@ export const internal: FilterApi<
 
 export const components = componentsGeneric() as unknown as {
   migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
+  r2: import("@convex-dev/r2/_generated/component.js").ComponentApi;
+  profileImageUploadRateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"profileImageUploadRateLimiter">;
   paymentRetryRateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"paymentRetryRateLimiter">;
   agreementCreationWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"agreementCreationWorkpool">;
   paymentCreationWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"paymentCreationWorkpool">;

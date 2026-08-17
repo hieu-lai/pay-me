@@ -58,10 +58,9 @@ const legacySchema = defineSchema({
     tokenIdentifier: v.string(),
     clerkUserId: v.string(),
     email: v.string(),
-    name: v.string(),
+    displayName: v.string(),
     username: v.optional(v.string()),
-    searchText: v.optional(v.string()),
-    imageUrl: v.optional(v.string()),
+    searchText: v.string(),
     defaultPaymentDestinationId: v.optional(v.id('paymentDestinations')),
   }),
 })
@@ -72,13 +71,15 @@ async function insertLegacyPayToAgreement(t: ReturnType<typeof convexTest>) {
       tokenIdentifier: 'issuer|legacy-requester',
       clerkUserId: 'legacy-requester',
       email: 'legacy-requester@example.com',
-      name: 'Legacy Requester',
+      displayName: 'Legacy Requester',
+      searchText: 'Legacy Requester',
     })
     const payerUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'issuer|legacy-payer',
       clerkUserId: 'legacy-payer',
       email: 'legacy-payer@example.com',
-      name: 'Legacy Payer',
+      displayName: 'Legacy Payer',
+      searchText: 'Legacy Payer',
     })
     const destination = {
       type: 'bban' as const,
@@ -155,7 +156,8 @@ test('backfills missing payment destination search labels idempotently', async (
       tokenIdentifier: 'issuer|migration-user',
       clerkUserId: 'migration-user',
       email: 'migration@example.com',
-      name: 'Migration User',
+      displayName: 'Migration User',
+      searchText: 'Migration User',
     })
     const encrypted = {
       ciphertext: 'ciphertext',
@@ -217,49 +219,6 @@ test('backfills missing payment destination search labels idempotently', async (
   await expect(
     t.run(async (ctx) => ctx.db.get('paymentDestinations', labeledId)),
   ).resolves.toMatchObject({ searchLabel: 'Everyday' })
-})
-
-test('backfills missing user search text from name and optional username', async () => {
-  const t = convexTest(legacySchema, modules)
-  migrationComponent.register(t)
-
-  const { namedUserId, usernameUserId } = await t.run(async (ctx) => {
-    const insertedNamedUserId = await ctx.db.insert('users', {
-      tokenIdentifier: 'issuer|searchable-user',
-      clerkUserId: 'searchable-user',
-      email: 'searchable@example.com',
-      name: 'Searchable User',
-    })
-    const insertedUsernameUserId = await ctx.db.insert('users', {
-      tokenIdentifier: 'issuer|username-user',
-      clerkUserId: 'username-user',
-      email: 'username@example.com',
-      name: 'Username User',
-      username: 'payme-user',
-    })
-    return {
-      namedUserId: insertedNamedUserId,
-      usernameUserId: insertedUsernameUserId,
-    }
-  })
-
-  await t.run(async (ctx) => {
-    await runToCompletion(
-      ctx,
-      components.migrations,
-      internal.migrations.backfillUserSearchText,
-    )
-  })
-
-  await expect(
-    t.run(async (ctx) => ({
-      namedUser: await ctx.db.get('users', namedUserId),
-      usernameUser: await ctx.db.get('users', usernameUserId),
-    })),
-  ).resolves.toMatchObject({
-    namedUser: { searchText: 'Searchable User' },
-    usernameUser: { searchText: 'Username User payme-user' },
-  })
 })
 
 test('permanently excludes legacy PayTo Agreements from new activation provenance', async () => {
@@ -407,7 +366,7 @@ test('repairs exact mixed Payer counts and becomes paid only when every Payer is
         tokenIdentifier: `issuer|repair-payer-${index}`,
         clerkUserId: `repair-payer-${index}`,
         email: `repair-payer-${index}@example.com`,
-        name: `Repair Payer ${index}`,
+        displayName: `Repair Payer ${index}`,
         searchText: `Repair Payer ${index}`,
       })
       await ctx.db.insert('payToAgreements', {
@@ -483,14 +442,14 @@ test('deletes all money request and PayTo agreement data', async () => {
       tokenIdentifier: 'issuer|cleanup-requester',
       clerkUserId: 'cleanup-requester',
       email: 'requester@example.com',
-      name: 'Cleanup Requester',
+      displayName: 'Cleanup Requester',
       searchText: 'Cleanup Requester',
     })
     const payerUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'issuer|cleanup-payer',
       clerkUserId: 'cleanup-payer',
       email: 'payer@example.com',
-      name: 'Cleanup Payer',
+      displayName: 'Cleanup Payer',
       searchText: 'Cleanup Payer',
     })
     const routingDestination = {

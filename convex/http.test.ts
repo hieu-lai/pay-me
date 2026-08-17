@@ -124,8 +124,12 @@ describe('POST /clerk', () => {
       tokenIdentifier: 'https://clerk.example.test|user_123',
       clerkUserId: 'user_123',
       email: 'ada@example.com',
-      name: 'Ada Lovelace',
-      imageUrl: 'https://example.com/ada.png',
+      displayName: 'Ada Lovelace',
+      searchText: 'Ada Lovelace',
+      profileImageSource: {
+        kind: 'legacyExternal',
+        url: 'https://example.com/ada.png',
+      },
     })
   })
 
@@ -153,6 +157,23 @@ describe('POST /clerk', () => {
       )
     },
   )
+
+  test('preserves a non-empty Clerk image URL byte-for-byte', async () => {
+    const addUser = vi.fn(async () => undefined)
+    const response = await handleClerkWebhook(
+      await signedRequest(
+        userCreatedPayload({ image_url: ' https://example.com/ada.png ' }),
+      ),
+      webhookDependencies(addUser),
+    )
+
+    expect(response.status).toBe(200)
+    expect(addUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageUrl: ' https://example.com/ada.png ',
+      }),
+    )
+  })
 
   test('rejects a user without the matching primary email', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)

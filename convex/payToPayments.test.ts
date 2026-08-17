@@ -23,13 +23,15 @@ async function setupAgreement() {
       tokenIdentifier: 'https://clerk.example.test|payment_requester',
       clerkUserId: 'payment_requester',
       email: 'payment-requester@example.test',
-      name: 'Payment Requester',
+      displayName: 'Payment Requester',
+      searchText: 'Payment Requester',
     })
     const payerUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'https://clerk.example.test|payment_payer',
       clerkUserId: 'payment_payer',
       email: 'payment-payer@example.test',
-      name: 'Payment Payer',
+      displayName: 'Payment Payer',
+      searchText: 'Payment Payer',
     })
     const creditorDestinationId = await ctx.db.insert('paymentDestinations', {
       ownerUserId: requesterUserId,
@@ -124,7 +126,8 @@ async function addSecondAgreement(
       tokenIdentifier: 'https://clerk.example.test|payment_payer_two',
       clerkUserId: 'payment_payer_two',
       email: 'payment-payer-two@example.test',
-      name: 'Payment Payer Two',
+      displayName: 'Payment Payer Two',
+      searchText: 'Payment Payer Two',
     })
     const debtorDestinationId = await ctx.db.insert('paymentDestinations', {
       ownerUserId: payerUserId,
