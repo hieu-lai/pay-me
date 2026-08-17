@@ -161,7 +161,7 @@ export const internal: FilterApi<
 
 export const components = componentsGeneric() as unknown as {
   migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
-  r2: import("@convex-dev/r2/_generated/component.js").ComponentApi;
+  r2: import("@convex-dev/r2/_generated/component.js").ComponentApi<"r2">;
   profileImageUploadRateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"profileImageUploadRateLimiter">;
   paymentRetryRateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"paymentRetryRateLimiter">;
   agreementCreationWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"agreementCreationWorkpool">;
