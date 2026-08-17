@@ -6,6 +6,10 @@ import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalAction, internalMutation } from './_generated/server'
 import { agreementCreationPool } from './lib/agreementCreationPool'
+import {
+  boundedEvidenceCode,
+  fingerprintSensitiveIdentifier,
+} from './lib/evidenceRedaction'
 import { firstConfirmedActivePatch } from './lib/payToAgreementActivation'
 import { decryptPaymentDestination } from './lib/paymentDestinationCrypto'
 import { createAgreement, getAgreementByUid } from './lib/zepto/agreement'
@@ -515,18 +519,19 @@ export const recordPostFailure = internalMutation({
         ? { verificationAttempt: 1 }
         : {}),
     })
+    const category = boundedEvidenceCode(args.category) ?? 'redacted'
     if (nextState === 'failed') {
       await ctx.db.insert('payToAgreementEvidence', {
         payToAgreementId: agreement._id,
         kind: 'creation_failed',
-        reason: args.category,
+        reason: category,
         observedAt: args.observedAt,
       })
     } else if (nextState === 'manual_hold') {
       await ctx.db.insert('payToAgreementEvidence', {
         payToAgreementId: agreement._id,
         kind: 'creation_manual_hold',
-        reason: args.category,
+        reason: category,
         observedAt: args.observedAt,
       })
     } else {
@@ -536,7 +541,7 @@ export const recordPostFailure = internalMutation({
           nextState === 'retry_wait'
             ? 'provider_create_temporarily_rejected'
             : 'provider_create_ambiguous',
-        category: args.category,
+        category,
         observedAt: args.observedAt,
       })
     }
@@ -680,10 +685,11 @@ export const recordVerificationFailure = internalMutation({
       lastPostAt: workItem.lastPostAt ?? args.observedAt,
       nowMs: args.observedAt,
     })
+    const category = boundedEvidenceCode(args.category) ?? 'redacted'
     await ctx.db.insert('payToAgreementEvidence', {
       payToAgreementId: agreement._id,
       kind: 'provider_verification_failed',
-      category: args.category,
+      category,
       observedAt: args.observedAt,
     })
     if (decision.kind === 'hold') {
@@ -756,6 +762,8 @@ export const reopenManualHold = internalMutation({
     if (!workItem) unavailable()
 
     const nowMs = Date.now()
+    const operatorFingerprint =
+      await fingerprintSensitiveIdentifier(operatorIdentity)
     const absenceEstablished =
       (workItem.absenceCount ?? 0) >= 2 &&
       workItem.postCycle !== undefined &&
@@ -786,8 +794,8 @@ export const reopenManualHold = internalMutation({
     await ctx.db.insert('payToAgreementEvidence', {
       payToAgreementId: agreement._id,
       kind: 'operator_reopened',
-      operatorIdentity,
-      reason,
+      operatorFingerprint,
+      reason: 'operator_requested_recovery',
       mode,
       observedAt: nowMs,
     })

@@ -5,6 +5,7 @@ import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalAction, internalMutation } from './_generated/server'
+import { boundedEvidenceCode } from './lib/evidenceRedaction'
 import { paymentRetryPool } from './lib/paymentRetryPool'
 import { consumePaymentRetryEndpointCall } from './lib/paymentRetryRateLimiter'
 import {
@@ -177,6 +178,7 @@ export const claimWork = internalMutation({
     ) {
       await ctx.db.patch('payToPaymentRetryWorkItems', work._id, {
         state: 'stopped',
+        availableAt: args.nowMs,
       })
       return null
     }
@@ -255,6 +257,7 @@ export const claimWork = internalMutation({
       }
       await ctx.db.patch('payToPaymentRetryWorkItems', work._id, {
         state: 'stopped',
+        availableAt: args.nowMs,
       })
       return null
     }
@@ -370,6 +373,7 @@ export const markDispatchStarted = internalMutation({
       })
       await ctx.db.patch('payToPaymentRetryWorkItems', attempt.work!._id, {
         state: 'stopped',
+        availableAt: args.observedAt,
       })
       return false
     }
@@ -390,6 +394,7 @@ export const markDispatchStarted = internalMutation({
       })
       await ctx.db.patch('payToPaymentRetryWorkItems', attempt.work!._id, {
         state: 'stopped',
+        availableAt: args.observedAt,
       })
       return false
     }
@@ -473,6 +478,7 @@ export const recordFailure = internalMutation({
       return false
     }
     const classification = args.ambiguous ? 'uncertain' : 'refused'
+    const providerCode = boundedEvidenceCode(args.providerCode)
     await ctx.db.patch('payToPaymentOperations', attempt.operation!._id, {
       outcome: { classification, observedAt: args.observedAt },
     })
@@ -484,7 +490,7 @@ export const recordFailure = internalMutation({
       providerUid: attempt.payment.providerUid,
       dispatchCertainty: attempt.operation!.dispatchCertainty,
       classification,
-      providerFailureCode: args.providerCode,
+      providerFailureCode: providerCode,
       errorCategory: args.errorCategory,
       observedAt: args.observedAt,
     })
@@ -517,10 +523,10 @@ export const recordFailure = internalMutation({
       return true
     }
     const cooldown =
-      args.providerCode === 'ZPPRY03' &&
+      providerCode === 'ZPPRY03' &&
       args.retryAfterMs !== undefined &&
       (attempt.work!.cooldownReschedules ?? 0) < 1
-    const requiresRefresh = args.providerCode === 'ZPPRY00'
+    const requiresRefresh = providerCode === 'ZPPRY00'
     await ctx.db.patch('payToPaymentRetryWorkItems', attempt.work!._id, {
       state: cooldown || requiresRefresh ? 'queued' : 'stopped',
       availableAt: cooldown
@@ -551,11 +557,13 @@ function retryProviderCode(error: unknown) {
   const errors = (error.body as Record<string, unknown>).errors
   if (!Array.isArray(errors)) return undefined
   const first = errors[0]
-  return typeof first === 'object' &&
+  const code =
+    typeof first === 'object' &&
     first !== null &&
     typeof (first as Record<string, unknown>).code === 'string'
-    ? ((first as Record<string, unknown>).code as string)
-    : undefined
+      ? ((first as Record<string, unknown>).code as string)
+      : undefined
+  return boundedEvidenceCode(code)
 }
 
 export const retry = internalAction({

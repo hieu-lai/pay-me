@@ -423,7 +423,7 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
     await t.mutation(internal.payToAgreementReconciliation.recordSuccess, {
       payToAgreementId,
       leaseToken: 'lease-unknown',
-      providerState: 'paused_by_bank',
+      providerState: 'paused account=9876543210 bearer secret',
       observedAt: 3_000,
     })
 
@@ -439,13 +439,13 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
         },
       ],
     })
-    expect(JSON.stringify(projection)).not.toContain('paused_by_bank')
+    expect(JSON.stringify(projection)).not.toContain('9876543210')
     const agreement = await t.run(async (ctx) =>
       ctx.db.get('payToAgreements', payToAgreementId),
     )
     expect(agreement).toMatchObject({
       lifecycleState: 'unknown',
-      lifecycleRawState: 'paused_by_bank',
+      lifecycleRawState: 'unknown',
     })
   })
 
@@ -461,7 +461,7 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
                 id: 'event-investigation',
                 resource_uid: 'agreement_reconciliation_1',
                 published_at: '2026-08-11T02:00:00.000Z',
-                type: 'payto_agreement.future_state',
+                type: 'account=9876543210 bearer secret',
                 body: { reason: 'must not be retained' },
               },
             ],
@@ -494,11 +494,12 @@ describe('PayTo Agreement lifecycle reconciliation', () => {
         expect.objectContaining({
           kind: 'provider_history_investigated',
           eventCount: 1,
-          eventTypes: ['payto_agreement.future_state'],
+          eventTypes: ['unknown'],
         }),
       ]),
     )
     expect(JSON.stringify(evidence)).not.toContain('must not be retained')
+    expect(JSON.stringify(evidence)).not.toContain('9876543210')
   })
 
   test('protects a confirmed terminal projection from contradictory GET truth', async () => {

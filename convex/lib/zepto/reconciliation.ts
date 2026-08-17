@@ -1,3 +1,4 @@
+import { boundedEvidenceCode } from '../evidenceRedaction'
 import type { ZeptoClient } from './client'
 import { ZeptoClientError } from './error'
 
@@ -75,7 +76,7 @@ export async function getAgreementHistoryEvidence(
     }
     const publishedAt = Date.parse(event.published_at)
     if (Number.isNaN(publishedAt)) invalidResponse(path)
-    eventTypes.add(event.type)
+    eventTypes.add(boundedEvidenceCode(event.type) ?? 'unknown')
     latestProviderPublishedAt = Math.max(
       latestProviderPublishedAt ?? publishedAt,
       publishedAt,

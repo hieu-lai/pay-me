@@ -6,7 +6,9 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
+import { boundedEvidenceCode } from './lib/evidenceRedaction'
 import { paymentCreationPool } from './lib/paymentCreationPool'
+import { paymentAuditExpiresAt } from './lib/payToPaymentRetentionPolicy'
 import { projectPayerPayment } from './lib/payToPaymentProjection'
 import {
   emitPayToPaymentAggregateMetric,
@@ -58,7 +60,6 @@ const IMMEDIATE_RECONCILIATION_DELAY_MS = 1_000
 export const CREATE_RECOVERY_WINDOW_MS = 15 * 60_000
 const MAX_CREATE_POST_ATTEMPTS = 3
 const MAX_CREATE_RECOVERY_CYCLES = 2
-
 type PaymentOperationKind = Infer<typeof payToPaymentOperationKindValidator>
 
 const intentReferenceResultValidator = v.union(
@@ -322,6 +323,19 @@ export async function ensurePayToPayment(
     return { kind: 'mismatch' as const, payToPaymentId: existing._id }
   }
 
+  const retiredIdentity = await ctx.db
+    .query('payToPaymentRetiredIdentities')
+    .withIndex('by_payToAgreementId', (q) =>
+      q.eq('payToAgreementId', agreement._id),
+    )
+    .unique()
+  if (retiredIdentity) {
+    return {
+      kind: 'ineligible' as const,
+      reason: 'agreement_not_eligible' as const,
+    }
+  }
+
   if (
     agreement.activationProvenancePolicy !== 'track_first_confirmation' ||
     agreement.firstConfirmedActiveAt === undefined ||
@@ -371,6 +385,7 @@ export async function ensurePayToPayment(
     intent,
     creationState: 'create_pending',
     establishedAt: agreement.firstConfirmedActiveAt,
+    auditExpiresAt: paymentAuditExpiresAt(args.observedAt),
   })
   const workItemId = await ctx.db.insert('payToPaymentWorkItems', {
     payToPaymentId,
@@ -501,6 +516,7 @@ async function scheduleRetryAfterConfirmedFailure(
       })
       await ctx.db.patch('payToPaymentRetryWorkItems', existing._id, {
         state: 'stopped',
+        availableAt: observedAt,
       })
       await projectPayerPayment(ctx, agreement, {
         paymentStatus: agreement.paymentStatus ?? 'failed',
@@ -1207,6 +1223,7 @@ export const recordCreateResult = internalMutation({
     })
     await ctx.db.patch('payToPaymentWorkItems', workItem._id, {
       state: 'completed',
+      availableAt: args.observedAt,
       completedAt: args.observedAt,
       leaseToken: undefined,
       leaseExpiresAt: undefined,
@@ -1529,6 +1546,10 @@ export const applyEvidence = internalMutation({
   handler: async (ctx, args) => {
     const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
     if (!payment) return { kind: 'not_found' as const }
+    const durableProviderState =
+      args.evidence.providerState === undefined
+        ? undefined
+        : (boundedEvidenceCode(args.evidence.providerState) ?? 'unknown')
 
     if (args.evidence.source !== 'per_uid_get') {
       const accepted = await acceptIntentReference(ctx, {
@@ -1541,7 +1562,7 @@ export const applyEvidence = internalMutation({
         payToPaymentId: args.payToPaymentId,
         source: args.evidence.source,
         intentFingerprint: args.evidence.intentFingerprint,
-        providerState: args.evidence.providerState,
+        providerState: durableProviderState,
         observedAt: args.observedAt,
       })
       await makePayToPaymentReconciliationDue(ctx, payment._id, args.observedAt)
@@ -1560,6 +1581,9 @@ export const applyEvidence = internalMutation({
             .unique()
     const providerState = args.evidence.providerState
     const providerAbsent = args.evidence.providerAbsent === true
+    const providerFailureCode = boundedEvidenceCode(
+      args.evidence.providerFailureCode,
+    )
     const currentLease =
       (providerState !== undefined || providerAbsent) &&
       reconciliationLeaseAuthorizes({
@@ -1580,7 +1604,7 @@ export const applyEvidence = internalMutation({
           ...(operation
             ? payToPaymentOperationEvidenceProvenance(payment, operation)
             : { providerUid: payment.providerUid }),
-          providerState,
+          providerState: durableProviderState,
           providerAbsent: providerAbsent || undefined,
           observedAt: args.observedAt,
         })
@@ -1683,8 +1707,8 @@ export const applyEvidence = internalMutation({
       intentFingerprint: args.evidence.intentFingerprint,
       operationId: operation.operationId,
       ...payToPaymentOperationEvidenceProvenance(payment, operation),
-      providerState,
-      providerFailureCode: args.evidence.providerFailureCode,
+      providerState: durableProviderState,
+      providerFailureCode,
       providerFailureRetryable: args.evidence.providerFailureRetryable,
       outcome: decision.kind,
       observedAt: args.observedAt,
@@ -1739,14 +1763,15 @@ export const applyEvidence = internalMutation({
         reconciliationAlert: undefined,
         confirmedFailure:
           decision.state === 'failed' &&
-          args.evidence.providerFailureCode !== undefined &&
+          providerFailureCode !== undefined &&
           args.evidence.providerFailureRetryable !== undefined
             ? {
-                code: args.evidence.providerFailureCode,
+                code: providerFailureCode,
                 retryable: args.evidence.providerFailureRetryable,
                 observedAt: args.observedAt,
               }
             : undefined,
+        auditExpiresAt: paymentAuditExpiresAt(args.observedAt),
         ...(payment.attention?.kind === 'unknown_provider_state'
           ? { attention: undefined }
           : {}),
@@ -1754,7 +1779,7 @@ export const applyEvidence = internalMutation({
       if (
         decision.state === 'failed' &&
         args.evidence.providerFailureRetryable === true &&
-        args.evidence.providerFailureCode !== undefined
+        providerFailureCode !== undefined
       ) {
         await scheduleRetryAfterConfirmedFailure(ctx, payment, args.observedAt)
       } else {

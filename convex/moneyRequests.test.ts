@@ -1166,13 +1166,20 @@ describe('Money Request submission and requester read', () => {
     })
 
     const state = await recoveryStateForAgreement(t, agreement._id)
+    const operatorFingerprint = await sha256(operatorIdentity.tokenIdentifier)
     expect(state.agreement?.creationState).toBe('verifying')
     expect(state.evidence.at(-1)).toMatchObject({
       kind: 'operator_reopened',
-      operatorIdentity: operatorIdentity.tokenIdentifier,
-      reason: 'Investigate ambiguous sandbox response',
+      operatorFingerprint,
+      reason: 'operator_requested_recovery',
       mode: 'verifying',
     })
+    expect(JSON.stringify(state.evidence)).not.toContain(
+      'Investigate ambiguous sandbox response',
+    )
+    expect(JSON.stringify(state.evidence)).not.toContain(
+      operatorIdentity.tokenIdentifier,
+    )
   })
 
   test('requires an authenticated operator and a non-empty recovery reason', async () => {
@@ -1234,8 +1241,8 @@ describe('Money Request submission and requester read', () => {
     expect(state.evidence.at(-1)).toMatchObject({
       kind: 'operator_reopened',
       mode: 'queued',
-      operatorIdentity: operatorIdentity.tokenIdentifier,
-      reason: 'Provider lookup established absence',
+      operatorFingerprint: await sha256(operatorIdentity.tokenIdentifier),
+      reason: 'operator_requested_recovery',
     })
   })
 

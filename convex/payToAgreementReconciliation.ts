@@ -4,6 +4,7 @@ import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { ActionCtx } from './_generated/server'
 import { internalAction, internalMutation } from './_generated/server'
+import { boundedEvidenceCode } from './lib/evidenceRedaction'
 import { firstConfirmedActivePatch } from './lib/payToAgreementActivation'
 import { createEnvironmentZeptoClientFromEnv } from './lib/zepto/env'
 import { ZeptoClientError } from './lib/zepto/error'
@@ -74,6 +75,7 @@ export const claimWork = internalMutation({
         workItem._id,
         {
           state: 'stopped',
+          stoppedAt: args.nowMs,
           leaseToken: undefined,
           leaseExpiresAt: undefined,
         },
@@ -162,6 +164,8 @@ export const recordSuccess = internalMutation({
       currentConfidence: agreement.lifecycleConfidence,
       providerState: args.providerState,
     })
+    const safeProviderState =
+      boundedEvidenceCode(args.providerState) ?? 'unknown'
     const previousFailureCount = workItem.consecutiveFailures ?? 0
     if (previousFailureCount > 0) {
       await ctx.db.insert('payToAgreementEvidence', {
@@ -206,6 +210,7 @@ export const recordSuccess = internalMutation({
           consecutiveFailures: 0,
           failureStartedAt: undefined,
           lastSuccessAt: args.observedAt,
+          stoppedAt: stopped ? args.observedAt : undefined,
         },
       )
       if (decision.state === 'active') {
@@ -218,7 +223,7 @@ export const recordSuccess = internalMutation({
     } else if (decision.kind === 'unknown') {
       await ctx.db.patch('payToAgreements', agreement._id, {
         lifecycleState: 'unknown',
-        lifecycleRawState: decision.rawState,
+        lifecycleRawState: safeProviderState,
         lifecycleConfidence: 'confirmed',
         lifecycleObservedAt: args.observedAt,
         lifecycleProviderPublishedAt: undefined,
@@ -274,7 +279,7 @@ export const recordSuccess = internalMutation({
     await ctx.db.insert('payToAgreementEvidence', {
       payToAgreementId: agreement._id,
       kind: 'provider_lifecycle_get_observed',
-      providerState: args.providerState,
+      providerState: safeProviderState,
       outcome: decision.kind,
       observedAt: args.observedAt,
     })
@@ -333,16 +338,17 @@ export const recordFailure = internalMutation({
       consecutiveFailures,
       failureStartedAt,
     })
+    const category = boundedEvidenceCode(args.category) ?? 'redacted'
     await ctx.db.insert('payToAgreementEvidence', {
       payToAgreementId: agreement._id,
       kind: 'provider_lifecycle_get_failed',
-      category: args.category,
+      category,
       consecutiveFailures,
       observedAt: args.observedAt,
     })
     console.warn('PayTo lifecycle reconciliation GET failed', {
       payToAgreementId: agreement._id,
-      category: args.category,
+      category,
       consecutiveFailures,
       nextAttemptAt: args.observedAt + decision.delayMs,
       reviewRequired: decision.kind === 'review',
@@ -350,7 +356,7 @@ export const recordFailure = internalMutation({
     if (decision.kind === 'review') {
       console.error('PayTo lifecycle tracking needs review', {
         payToAgreementId: agreement._id,
-        category: args.category,
+        category,
         consecutiveFailures,
       })
     }
@@ -380,24 +386,32 @@ export const recordHistory = internalMutation({
     const agreement = await ctx.db.get('payToAgreements', args.payToAgreementId)
     if (!agreement) return null
     if (args.result.kind === 'success') {
+      const eventTypes = [
+        ...new Set(
+          args.result.eventTypes.map(
+            (eventType) => boundedEvidenceCode(eventType) ?? 'unknown',
+          ),
+        ),
+      ].sort()
       await ctx.db.insert('payToAgreementEvidence', {
         payToAgreementId: agreement._id,
         kind: 'provider_history_investigated',
         eventCount: args.result.eventCount,
-        eventTypes: args.result.eventTypes,
+        eventTypes,
         latestProviderPublishedAt: args.result.latestProviderPublishedAt,
         observedAt: args.observedAt,
       })
     } else {
+      const category = boundedEvidenceCode(args.result.category) ?? 'redacted'
       await ctx.db.insert('payToAgreementEvidence', {
         payToAgreementId: agreement._id,
         kind: 'provider_history_investigation_failed',
-        category: args.result.category,
+        category,
         observedAt: args.observedAt,
       })
       console.warn('PayTo lifecycle history investigation failed', {
         payToAgreementId: agreement._id,
-        category: args.result.category,
+        category,
       })
     }
     return null

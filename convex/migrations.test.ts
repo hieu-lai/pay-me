@@ -221,6 +221,166 @@ test('backfills missing payment destination search labels idempotently', async (
   ).resolves.toMatchObject({ searchLabel: 'Everyday' })
 })
 
+test('redacts sensitive legacy evidence across retained Payment records', async () => {
+  const t = convexTest(schema, modules)
+  migrationComponent.register(t)
+  const payToAgreementId = await insertLegacyPayToAgreement(t)
+  const secret = 'account=9876543210 token=legacy-bearer-value'
+
+  const { payToPaymentId } = await t.run(async (ctx) => {
+    const agreement = await ctx.db.get('payToAgreements', payToAgreementId)
+    if (!agreement) throw new Error('Expected legacy PayTo Agreement')
+    const moneyRequest = await ctx.db.get(
+      'moneyRequests',
+      agreement.moneyRequestId,
+    )
+    if (!moneyRequest) throw new Error('Expected legacy money request')
+    await ctx.db.patch('payToAgreements', payToAgreementId, {
+      lifecycleReason: { code: secret, title: secret, detail: secret },
+      lifecycleRawState: secret,
+    })
+    await ctx.db.insert('payToAgreementEvidence', {
+      payToAgreementId,
+      kind: 'operator_reopened',
+      operatorIdentity: secret,
+      reason: secret,
+      mode: 'queued',
+      observedAt: 2_000,
+    })
+    await ctx.db.insert('payToAgreementEvidence', {
+      payToAgreementId,
+      kind: 'provider_lifecycle_get_failed',
+      category: secret,
+      consecutiveFailures: 1,
+      observedAt: 2_001,
+    })
+    await ctx.db.insert('payToAgreementEvidence', {
+      payToAgreementId,
+      kind: 'provider_lifecycle_get_observed',
+      providerState: secret,
+      outcome: 'unknown',
+      observedAt: 2_002,
+    })
+    await ctx.db.insert('payToAgreementEvidence', {
+      payToAgreementId,
+      kind: 'provider_history_investigated',
+      eventCount: 1,
+      eventTypes: [secret],
+      observedAt: 2_003,
+    })
+    await ctx.db.insert('zeptoWebhookEvents', {
+      providerEventId: 'legacy-sensitive-event',
+      eventType: 'payto_payment.failed',
+      resourceUid: 'legacy-payment',
+      providerPublishedAt: 2_000,
+      deliveryId: 'legacy-sensitive-delivery',
+      observedAt: 2_000,
+      reason: { code: secret, title: secret, detail: secret },
+    })
+    const insertedPayToPaymentId = await ctx.db.insert('payToPayments', {
+      payToAgreementId,
+      moneyRequestId: agreement.moneyRequestId,
+      payerUserId: agreement.payerUserId,
+      environment: 'sandbox',
+      providerUid: 'legacy-payment',
+      intent: {
+        agreementProviderUid: agreement.providerUid,
+        amount: { cents: moneyRequest.amountCents, currency: 'AUD' },
+        routing: {
+          sourceCreditorPaymentDestinationId:
+            moneyRequest.sourceCreditorPaymentDestinationId,
+          sourceDebtorPaymentDestinationId:
+            agreement.sourceDebtorPaymentDestinationId,
+          creditorSnapshot: moneyRequest.creditorSnapshot,
+          debtorSnapshot: agreement.debtorSnapshot,
+        },
+        priority: 'unattended',
+        apiVersion: '20260101',
+        fingerprint: 'legacy-sensitive-intent-fingerprint',
+      },
+      creationState: 'provider_established',
+      establishedAt: 2_000,
+      lifecycleState: 'failed',
+      lifecycleObservedAt: 2_000,
+      confirmedFailure: {
+        code: secret,
+        retryable: false,
+        observedAt: 2_000,
+      },
+    })
+    await ctx.db.insert('payToPaymentEvidence', {
+      payToPaymentId: insertedPayToPaymentId,
+      source: 'per_uid_get',
+      intentFingerprint: 'legacy-sensitive-intent-fingerprint',
+      providerFailureCode: secret,
+      providerState: secret,
+      observedAt: 2_000,
+    })
+    return { payToPaymentId: insertedPayToPaymentId }
+  })
+
+  for (const migration of [
+    internal.migrations.redactLegacyOperatorAgreementEvidence,
+    internal.migrations.redactLegacyAgreementWebhookContext,
+    internal.migrations.redactLegacyAgreementEvidenceDetails,
+    internal.migrations.redactLegacyWebhookEventContext,
+    internal.migrations.redactLegacyPaymentEvidenceCodes,
+    internal.migrations.redactLegacyPaymentFailureCodes,
+  ]) {
+    await t.run(async (ctx) => {
+      await runToCompletion(ctx, components.migrations, migration)
+    })
+  }
+
+  const retainedEvidence = await t.run(async (ctx) => ({
+    agreement: await ctx.db.get('payToAgreements', payToAgreementId),
+    agreementEvidence: await ctx.db
+      .query('payToAgreementEvidence')
+      .withIndex('by_payToAgreementId_and_observedAt', (q) =>
+        q.eq('payToAgreementId', payToAgreementId),
+      )
+      .take(10),
+    webhookEvents: await ctx.db.query('zeptoWebhookEvents').take(10),
+    payment: await ctx.db.get('payToPayments', payToPaymentId),
+    paymentEvidence: await ctx.db
+      .query('payToPaymentEvidence')
+      .withIndex('by_payToPaymentId_and_observedAt', (q) =>
+        q.eq('payToPaymentId', payToPaymentId),
+      )
+      .take(10),
+  }))
+  expect(retainedEvidence.agreement?.lifecycleReason).toBeUndefined()
+  expect(retainedEvidence.agreement?.lifecycleRawState).toBeUndefined()
+  expect(retainedEvidence.webhookEvents[0]?.reason).toBeUndefined()
+  expect(retainedEvidence.payment?.confirmedFailure).toBeUndefined()
+  expect(
+    retainedEvidence.paymentEvidence[0]?.providerFailureCode,
+  ).toBeUndefined()
+  expect(retainedEvidence.paymentEvidence[0]?.providerState).toBe('unknown')
+  expect(retainedEvidence.agreementEvidence).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'operator_reopened',
+        operatorFingerprint: expect.any(String),
+        reason: 'operator_requested_recovery',
+      }),
+      expect.objectContaining({
+        kind: 'provider_lifecycle_get_failed',
+        category: 'redacted',
+      }),
+      expect.objectContaining({
+        kind: 'provider_lifecycle_get_observed',
+        providerState: 'unknown',
+      }),
+      expect.objectContaining({
+        kind: 'provider_history_investigated',
+        eventTypes: ['unknown'],
+      }),
+    ]),
+  )
+  expect(JSON.stringify(retainedEvidence)).not.toContain(secret)
+})
+
 test('permanently excludes legacy PayTo Agreements from new activation provenance', async () => {
   const t = convexTest(schema, modules)
   migrationComponent.register(t)

@@ -160,6 +160,7 @@ export const payToPaymentOperationValidator = v.object({
   leaseToken: v.optional(v.string()),
   leaseExpiresAt: v.optional(v.number()),
   dispatchStartedAt: v.optional(v.number()),
+  mechanicsRetiredAt: v.optional(v.number()),
   outcome: v.optional(
     v.object({
       classification: payToPaymentOperationClassificationValidator,
@@ -204,5 +205,6 @@ export const payToPaymentEvidenceValidator = v.object({
     literals('confirmed', 'unknown', 'contradiction', 'failure', 'absence'),
   ),
   consecutiveFailures: v.optional(v.number()),
+  mechanicsRetiredAt: v.optional(v.number()),
   observedAt: v.number(),
 })

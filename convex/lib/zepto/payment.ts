@@ -33,9 +33,9 @@ const paymentResponseValidator = z
     metadata: z.unknown().optional(),
     failure: z
       .object({
-        title: z.string(),
+        title: z.string().max(512),
         detail: z.string(),
-        code: z.string(),
+        code: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
         retryable: z.boolean(),
       })
       .nullable(),

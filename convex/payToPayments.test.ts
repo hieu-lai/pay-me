@@ -2189,6 +2189,127 @@ describe('PayTo Payment authoritative lifecycle reconciliation', () => {
     ).resolves.toBeNull()
   })
 
+  test('drops free-form provider failure codes at the Payment evidence seam', async () => {
+    const setup = await establishProviderPayment()
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+    const get = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'sensitive-provider-code-get',
+        nowMs: 4_002,
+      },
+    )
+    if (!get) throw new Error('Expected reconciliation GET')
+
+    await setup.t.mutation(internal.payToPayments.applyEvidence, {
+      payToPaymentId: setup.payToPaymentId,
+      evidence: {
+        source: 'per_uid_get',
+        intentFingerprint: payment.intent.fingerprint,
+        providerState: 'failed',
+        providerFailureCode: 'SECRET account=9876543210 token=bearer-value',
+        providerFailureRetryable: false,
+        operationId: get.operationId,
+        leaseToken: 'sensitive-provider-code-get',
+      },
+      observedAt: 5_000,
+    })
+
+    const durable = await setup.t.run(async (ctx) => ({
+      payment: await ctx.db.get('payToPayments', setup.payToPaymentId),
+      evidence: await ctx.db
+        .query('payToPaymentEvidence')
+        .withIndex('by_payToPaymentId_and_observedAt', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .take(20),
+    }))
+    expect(durable.payment?.confirmedFailure).toBeUndefined()
+    expect(JSON.stringify(durable)).not.toContain('9876543210')
+    expect(JSON.stringify(durable)).not.toContain('bearer-value')
+  })
+
+  test('classifies free-form provider states before durable evidence', async () => {
+    const setup = await establishProviderPayment()
+    const payment = await setup.t.run((ctx) =>
+      ctx.db.get('payToPayments', setup.payToPaymentId),
+    )
+    if (!payment) throw new Error('Expected PayTo Payment')
+
+    const get = await setup.t.mutation(
+      internal.payToPaymentReconciliation.claimWork,
+      {
+        payToPaymentId: setup.payToPaymentId,
+        leaseToken: 'sensitive-provider-state-get',
+        nowMs: 4_002,
+      },
+    )
+    if (!get) throw new Error('Expected reconciliation GET')
+
+    await expect(
+      setup.t.mutation(internal.payToPayments.applyEvidence, {
+        payToPaymentId: setup.payToPaymentId,
+        evidence: {
+          source: 'per_uid_get',
+          intentFingerprint: payment.intent.fingerprint,
+          providerState: 'paused account=9876543210 bearer secret',
+          operationId: get.operationId,
+          leaseToken: 'sensitive-provider-state-get',
+        },
+        observedAt: 5_000,
+      }),
+    ).resolves.toEqual({ kind: 'accepted' })
+
+    const evidence = await setup.t.run((ctx) =>
+      ctx.db
+        .query('payToPaymentEvidence')
+        .withIndex('by_payToPaymentId_and_observedAt', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .order('desc')
+        .first(),
+    )
+    expect(evidence?.providerState).toBe('unknown')
+    expect(JSON.stringify(evidence)).not.toContain('9876543210')
+  })
+
+  test('drops free-form provider failure codes at the retry evidence seam', async () => {
+    const setup = await establishProviderPayment()
+    const { retry, dueAt } = await claimFirstRetry(
+      setup,
+      'sensitive-retry-provider-code',
+    )
+    await setup.t.mutation(internal.payToPaymentRetry.markDispatchStarted, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: retry.operationId,
+      leaseToken: 'sensitive-retry-provider-code',
+      observedAt: dueAt + 2,
+    })
+    await setup.t.mutation(internal.payToPaymentRetry.recordFailure, {
+      payToPaymentId: setup.payToPaymentId,
+      operationId: retry.operationId,
+      leaseToken: 'sensitive-retry-provider-code',
+      ambiguous: false,
+      providerCode: 'SECRET account=9876543210 token=retry-bearer-value',
+      observedAt: dueAt + 3,
+    })
+
+    const evidence = await setup.t.run((ctx) =>
+      ctx.db
+        .query('payToPaymentEvidence')
+        .withIndex('by_payToPaymentId_and_observedAt', (q) =>
+          q.eq('payToPaymentId', setup.payToPaymentId),
+        )
+        .take(20),
+    )
+    expect(JSON.stringify(evidence)).not.toContain('9876543210')
+    expect(JSON.stringify(evidence)).not.toContain('retry-bearer-value')
+  })
+
   test('stops queued retry work when fresh GET changes retryability to false', async () => {
     const setup = await establishProviderPayment()
     const { payment, dueAt } = await prepareFirstRetry(

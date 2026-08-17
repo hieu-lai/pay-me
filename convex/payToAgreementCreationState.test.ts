@@ -100,6 +100,13 @@ describe('PayTo Agreement creation state model', () => {
         },
       }),
     ).toBe('http_422_ZPAGR15')
+    expect(
+      normalizedProviderErrorCategory({
+        kind: 'http',
+        status: 422,
+        body: { errors: [{ code: 'account=9876543210 bearer secret' }] },
+      }),
+    ).toBe('http_422')
   })
 
   test('holds a retry-class rejection after the second POST cycle', () => {

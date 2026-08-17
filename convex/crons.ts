@@ -53,4 +53,11 @@ crons.interval(
   },
 )
 
+crons.interval(
+  'delete expired PayTo Payment records',
+  { hours: 24 },
+  internal.payToPaymentRetention.cleanupExpired,
+  {},
+)
+
 export default crons

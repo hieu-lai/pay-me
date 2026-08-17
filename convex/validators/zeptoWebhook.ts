@@ -12,8 +12,14 @@ export const zeptoWebhookCausedByValidator = v.union(
 
 export const zeptoWebhookReasonValidator = v.object({
   code: v.optional(v.string()),
+  // Legacy documents may contain free-form fields. New ingress uses the safe
+  // validator below; migration removes these before a later schema tightening.
   title: v.optional(v.string()),
   detail: v.optional(v.string()),
+})
+
+const safeZeptoWebhookReasonValidator = v.object({
+  code: v.optional(v.string()),
 })
 
 export const zeptoWebhookClassificationValidator = v.union(
@@ -31,7 +37,7 @@ export const zeptoWebhookItemValidator = v.object({
   classification: zeptoWebhookClassificationValidator,
   providerPublishedAt: v.number(),
   causedBy: v.optional(zeptoWebhookCausedByValidator),
-  reason: v.optional(zeptoWebhookReasonValidator),
+  reason: v.optional(safeZeptoWebhookReasonValidator),
 })
 export type ZeptoWebhookItem = Infer<typeof zeptoWebhookItemValidator>
 
@@ -48,12 +54,13 @@ export const zeptoWebhookDeliveryValidator =
   })
 
 export const zeptoWebhookEventValidator = zeptoWebhookItemValidator
-  .omit('resourceType', 'classification')
+  .omit('resourceType', 'classification', 'reason')
   .extend({
     resourceType: v.optional(v.string()),
     classification: v.optional(zeptoWebhookClassificationValidator),
     deliveryId: v.string(),
     observedAt: v.number(),
+    reason: v.optional(zeptoWebhookReasonValidator),
   })
 
 export const zeptoWebhookOutcomeValidator = v.union(
@@ -74,4 +81,11 @@ export const applyZeptoWebhookDeliveryValidator = v.object({
   environment: zeptoEnvironmentValidator,
   payloadHash: v.string(),
   items: v.array(zeptoWebhookItemValidator),
+})
+
+export const zeptoWebhookRejectionValidator = v.object({
+  reason: v.union(v.literal('missing_headers'), v.literal('invalid_signature')),
+  deliveryId: v.optional(v.string()),
+  payloadHash: v.optional(v.string()),
+  observedAt: v.number(),
 })

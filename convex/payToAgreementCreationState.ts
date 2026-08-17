@@ -1,3 +1,5 @@
+import { boundedEvidenceCode } from './lib/evidenceRedaction'
+
 export const creationStates = [
   'queued',
   'submitting',
@@ -153,7 +155,7 @@ function firstProviderCode(body: unknown): string | undefined {
 export function normalizedProviderErrorCategory(error: ProviderError): string {
   if (error.kind !== 'http') return error.kind
   const status = error.status === undefined ? 'unknown' : String(error.status)
-  const code = firstProviderCode(error.body)
+  const code = boundedEvidenceCode(firstProviderCode(error.body))
   return code === undefined ? `http_${status}` : `http_${status}_${code}`
 }
 

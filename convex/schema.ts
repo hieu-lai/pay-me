@@ -41,6 +41,7 @@ import {
   zeptoWebhookEventValidator,
   zeptoWebhookEvidenceValidator,
   zeptoWebhookReasonValidator,
+  zeptoWebhookRejectionValidator,
 } from './validators/zeptoWebhook'
 
 const agreementEvidenceBaseValidator = v.object({
@@ -274,6 +275,14 @@ export default defineSchema({
       }),
       agreementEvidenceBaseValidator.extend({
         kind: v.literal('operator_reopened'),
+        operatorFingerprint: v.string(),
+        reason: v.literal('operator_requested_recovery'),
+        mode: v.union(v.literal('queued'), v.literal('verifying')),
+      }),
+      // Kept temporarily so legacy rows can be redacted by migration before a
+      // later schema tightening deploy.
+      agreementEvidenceBaseValidator.extend({
+        kind: v.literal('operator_reopened'),
         operatorIdentity: v.string(),
         reason: v.string(),
         mode: v.union(v.literal('queued'), v.literal('verifying')),
@@ -324,19 +333,24 @@ export default defineSchema({
         category: v.string(),
       }),
     ),
-  ).index('by_payToAgreementId_and_observedAt', [
-    'payToAgreementId',
-    'observedAt',
-  ]),
+  )
+    .index('by_payToAgreementId_and_observedAt', [
+      'payToAgreementId',
+      'observedAt',
+    ])
+    .index('by_observedAt', ['observedAt']),
 
-  zeptoWebhookDeliveries: defineTable(zeptoWebhookDeliveryValidator).index(
-    'by_deliveryId',
-    ['deliveryId'],
-  ),
+  zeptoWebhookDeliveries: defineTable(zeptoWebhookDeliveryValidator)
+    .index('by_deliveryId', ['deliveryId'])
+    .index('by_receivedAt', ['receivedAt']),
 
-  zeptoWebhookEvents: defineTable(zeptoWebhookEventValidator).index(
-    'by_providerEventId',
-    ['providerEventId'],
+  zeptoWebhookEvents: defineTable(zeptoWebhookEventValidator)
+    .index('by_providerEventId', ['providerEventId'])
+    .index('by_observedAt', ['observedAt']),
+
+  zeptoWebhookRejections: defineTable(zeptoWebhookRejectionValidator).index(
+    'by_observedAt',
+    ['observedAt'],
   ),
 
   payToAgreementReconciliationWorkItems: defineTable({
@@ -353,9 +367,11 @@ export default defineSchema({
     consecutiveFailures: v.optional(v.number()),
     failureStartedAt: v.optional(v.number()),
     lastSuccessAt: v.optional(v.number()),
+    stoppedAt: v.optional(v.number()),
   })
     .index('by_payToAgreementId', ['payToAgreementId'])
     .index('by_state_and_availableAt', ['state', 'availableAt'])
+    .index('by_state_and_stoppedAt', ['state', 'stoppedAt'])
     .index('by_state_and_leaseExpiresAt', ['state', 'leaseExpiresAt']),
 
   payToAgreementWorkItems: defineTable({
@@ -382,7 +398,9 @@ export default defineSchema({
     verificationAttempt: v.optional(v.number()),
     absenceCount: v.optional(v.number()),
     lastPostAt: v.optional(v.number()),
-  }).index('by_payToAgreementId', ['payToAgreementId']),
+  })
+    .index('by_payToAgreementId', ['payToAgreementId'])
+    .index('by_state_and_completedAt', ['state', 'completedAt']),
 
   payToPaymentRuntimeGates: defineTable({
     environment: zeptoEnvironmentValidator,
@@ -404,6 +422,7 @@ export default defineSchema({
     intent: payToPaymentIntentValidator,
     creationState: payToPaymentCreationStateValidator,
     establishedAt: v.number(),
+    auditExpiresAt: v.optional(v.number()),
     creationRecovery: v.optional(
       v.object({
         startedAt: v.number(),
@@ -440,7 +459,13 @@ export default defineSchema({
       'agedUnresolvedMonitoringCompletedAt',
       'establishedAt',
     ])
+    .index('by_auditExpiresAt', ['auditExpiresAt'])
     .index('by_environment_and_providerUid', ['environment', 'providerUid']),
+
+  payToPaymentRetiredIdentities: defineTable({
+    payToAgreementId: v.id('payToAgreements'),
+    retiredAt: v.number(),
+  }).index('by_payToAgreementId', ['payToAgreementId']),
 
   payToPaymentOperations: defineTable(payToPaymentOperationValidator)
     .index('by_payToPaymentId_and_authorizedAt', [
@@ -452,7 +477,12 @@ export default defineSchema({
       'operationKind',
       'authorizedAt',
     ])
-    .index('by_operationId', ['operationId']),
+    .index('by_operationId', ['operationId'])
+    .index('by_authorizedAt', ['authorizedAt'])
+    .index('by_mechanicsRetiredAt_and_authorizedAt', [
+      'mechanicsRetiredAt',
+      'authorizedAt',
+    ]),
 
   payToPaymentWorkItems: defineTable({
     payToPaymentId: v.id('payToPayments'),
@@ -472,6 +502,7 @@ export default defineSchema({
   })
     .index('by_payToPaymentId', ['payToPaymentId'])
     .index('by_state_and_availableAt', ['state', 'availableAt'])
+    .index('by_state_and_completedAt', ['state', 'completedAt'])
     .index('by_state_and_leaseExpiresAt', ['state', 'leaseExpiresAt']),
 
   payToPaymentReconciliationWorkItems: defineTable({
@@ -514,10 +545,13 @@ export default defineSchema({
     .index('by_state_and_availableAt', ['state', 'availableAt'])
     .index('by_state_and_leaseExpiresAt', ['state', 'leaseExpiresAt']),
 
-  payToPaymentEvidence: defineTable(payToPaymentEvidenceValidator).index(
-    'by_payToPaymentId_and_observedAt',
-    ['payToPaymentId', 'observedAt'],
-  ),
+  payToPaymentEvidence: defineTable(payToPaymentEvidenceValidator)
+    .index('by_payToPaymentId_and_observedAt', ['payToPaymentId', 'observedAt'])
+    .index('by_observedAt', ['observedAt'])
+    .index('by_mechanicsRetiredAt_and_observedAt', [
+      'mechanicsRetiredAt',
+      'observedAt',
+    ]),
 
   payToPaymentOperatorActions: defineTable({
     payToPaymentId: v.id('payToPayments'),
@@ -536,10 +570,12 @@ export default defineSchema({
     decision: payToPaymentOperatorDecisionValidator,
     resultCode: payToPaymentOperatorResultCodeValidator,
     requestedAt: v.number(),
-  }).index('by_payToPaymentId_and_requestedAt', [
-    'payToPaymentId',
-    'requestedAt',
-  ]),
+  })
+    .index('by_payToPaymentId_and_requestedAt', [
+      'payToPaymentId',
+      'requestedAt',
+    ])
+    .index('by_requestedAt', ['requestedAt']),
 
   payToPaymentWebhookDeduplication: defineTable({
     payToPaymentId: v.id('payToPayments'),
@@ -550,8 +586,7 @@ export default defineSchema({
     deliveryId: v.string(),
     providerEventId: v.optional(v.string()),
     observedAt: v.number(),
-  }).index('by_payToPaymentId_and_observedAt', [
-    'payToPaymentId',
-    'observedAt',
-  ]),
+  })
+    .index('by_payToPaymentId_and_observedAt', ['payToPaymentId', 'observedAt'])
+    .index('by_observedAt', ['observedAt']),
 })

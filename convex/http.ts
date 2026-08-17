@@ -3,6 +3,7 @@ import { httpRouter } from 'convex/server'
 
 import { internal } from './_generated/api'
 import { env, httpAction } from './_generated/server'
+import { boundedEvidenceCode } from './lib/evidenceRedaction'
 import { verifyZeptoWebhookSignature } from './lib/zepto/webhook'
 import { classifyZeptoWebhookEvent } from './lib/zepto/webhookEvents'
 import type { ZeptoWebhookItem } from './validators/zeptoWebhook'
@@ -95,6 +96,12 @@ type ZeptoWebhookDependencies = {
     receivedAt: number
     items: ZeptoWebhookItem[]
   }) => Promise<unknown>
+  recordRejectedDelivery?: (args: {
+    reason: 'missing_headers' | 'invalid_signature'
+    deliveryId?: string
+    payloadHash?: string
+    observedAt: number
+  }) => Promise<unknown>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -162,12 +169,6 @@ function isZeptoWebhookCause(value: unknown): value is ZeptoWebhookCause {
   )
 }
 
-function boundedString(value: unknown, maxLength: number) {
-  return typeof value === 'string' && value.length <= maxLength
-    ? value
-    : undefined
-}
-
 function safeIdentifier(value: unknown, maxLength: number) {
   return typeof value === 'string' &&
     value.length >= 1 &&
@@ -194,14 +195,8 @@ function parseZeptoWebhookContext(value: Record<string, unknown>) {
   const providerReason = isRecord(value.body.reason)
     ? value.body.reason
     : undefined
-  const code = boundedString(providerReason?.code, 128)
-  const title = boundedString(providerReason?.title, 512)
-  const detail = boundedString(providerReason?.detail, 4_096)
-  const reason = {
-    ...(code === undefined ? {} : { code }),
-    ...(title === undefined ? {} : { title }),
-    ...(detail === undefined ? {} : { detail }),
-  }
+  const code = boundedEvidenceCode(providerReason?.code)
+  const reason = code === undefined ? {} : { code }
 
   return {
     ...(causedBy === undefined ? {} : { causedBy }),
@@ -259,6 +254,17 @@ export async function handleZeptoWebhook(
   const splitSignature = request.headers.get('split-signature')?.trim()
 
   if (deliveryId === null || !splitSignature) {
+    try {
+      await dependencies.recordRejectedDelivery?.({
+        reason: 'missing_headers',
+        ...(deliveryId === null ? {} : { deliveryId }),
+        observedAt: dependencies.nowMs(),
+      })
+    } catch {
+      console.error('Failed to retain rejected Zepto webhook metadata', {
+        reason: 'storage_failure',
+      })
+    }
     console.error('Zepto webhook verification failed', {
       reason: 'missing_headers',
     })
@@ -275,6 +281,18 @@ export async function handleZeptoWebhook(
       nowMs: dependencies.nowMs(),
     }))
   } catch {
+    try {
+      await dependencies.recordRejectedDelivery?.({
+        reason: 'invalid_signature',
+        deliveryId,
+        payloadHash: await sha256Base64Url(rawBody),
+        observedAt: dependencies.nowMs(),
+      })
+    } catch {
+      console.error('Failed to retain rejected Zepto webhook metadata', {
+        reason: 'storage_failure',
+      })
+    }
     console.error('Zepto webhook verification failed', {
       reason: 'invalid_signature',
     })
@@ -302,8 +320,10 @@ export async function handleZeptoWebhook(
       receivedAt: dependencies.nowMs(),
       items,
     })
-  } catch (error) {
-    console.error('Failed to commit Zepto webhook', error)
+  } catch {
+    console.error('Failed to commit Zepto webhook', {
+      reason: 'storage_failure',
+    })
     return new Response('Unable to commit Zepto webhook', { status: 500 })
   }
   return new Response(null, { status: 200 })
@@ -336,6 +356,12 @@ http.route({
       nowMs: Date.now,
       applyDelivery: async (args) => {
         await ctx.runMutation(internal.zeptoWebhook.applyDelivery, args)
+      },
+      recordRejectedDelivery: async (args) => {
+        await ctx.runMutation(
+          internal.payToPaymentRetention.recordRejectedDelivery,
+          args,
+        )
       },
     }),
   ),

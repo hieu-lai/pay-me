@@ -489,9 +489,9 @@ describe('POST /zepto/webhooks', () => {
   })
 
   test('returns 500 when durable webhook intake fails', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const applyDelivery = vi.fn(async () => {
-      throw new Error('storage unavailable')
+      throw new Error('storage unavailable: bearer-secret provider-detail')
     })
     const signed = await signedDelivery('delivery-storage-failure', {
       data: {
@@ -523,11 +523,14 @@ describe('POST /zepto/webhooks', () => {
         payloadHash: expect.any(String),
       }),
     )
+    expect(JSON.stringify(error.mock.calls)).not.toContain('bearer-secret')
+    expect(JSON.stringify(error.mock.calls)).not.toContain('provider-detail')
   })
 
   test('returns bounded security telemetry for invalid authentication', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const applyDelivery = vi.fn(async () => undefined)
+    const recordRejectedDelivery = vi.fn(async () => undefined)
     const signed = await signedDelivery('delivery-invalid-auth', {
       data: {
         id: 'event-invalid-auth',
@@ -548,11 +551,21 @@ describe('POST /zepto/webhooks', () => {
         environment: 'sandbox',
         nowMs: Date.now,
         applyDelivery,
+        recordRejectedDelivery,
       },
     )
 
     expect(response.status).toBe(400)
     expect(applyDelivery).not.toHaveBeenCalled()
+    expect(recordRejectedDelivery).toHaveBeenCalledWith({
+      reason: 'invalid_signature',
+      deliveryId: 'delivery-invalid-auth',
+      payloadHash: expect.any(String),
+      observedAt: expect.any(Number),
+    })
+    expect(JSON.stringify(recordRejectedDelivery.mock.calls)).not.toContain(
+      signed.body,
+    )
     expect(error).toHaveBeenCalledWith('Zepto webhook verification failed', {
       reason: 'invalid_signature',
     })
@@ -670,8 +683,6 @@ describe('POST /zepto/webhooks', () => {
       causedBy: 'debtor',
       reason: {
         code: 'AG01',
-        title: 'Transaction Forbidden',
-        detail: 'The Payer Customer Account is unable to be debited',
       },
     }
     expect(durable.event).toMatchObject(context)
@@ -680,6 +691,10 @@ describe('POST /zepto/webhooks', () => {
       lifecycleCausedBy: context.causedBy,
       lifecycleReason: context.reason,
     })
+    expect(JSON.stringify(durable)).not.toContain(
+      'The Payer Customer Account is unable to be debited',
+    )
+    expect(JSON.stringify(durable)).not.toContain('Transaction Forbidden')
   })
 
   test('atomically applies a verified multi-item lifecycle delivery and schedules reconciliation', async () => {
@@ -994,8 +1009,6 @@ describe('POST /zepto/webhooks', () => {
       lifecycleCausedBy: 'debtor',
       lifecycleReason: {
         code: 'MD16',
-        title: 'Mandate cancelled',
-        detail: 'The debtor cancelled the agreement',
       },
     })
     expect(durable.events).toEqual([
@@ -1020,5 +1033,13 @@ describe('POST /zepto/webhooks', () => {
         outcome: 'conflict',
       }),
     ])
+    expect(JSON.stringify(durable)).not.toContain(
+      'This must not replace the current lifecycle context',
+    )
+    expect(JSON.stringify(durable)).not.toContain(
+      'The debtor cancelled the agreement',
+    )
+    expect(JSON.stringify(durable)).not.toContain('Mandate cancelled')
+    expect(JSON.stringify(durable)).not.toContain('Stale context')
   })
 })
