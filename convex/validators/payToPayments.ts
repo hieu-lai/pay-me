@@ -118,6 +118,34 @@ export type PayToPaymentCreateErrorCategory = Infer<
   typeof payToPaymentCreateErrorCategoryValidator
 >
 
+export const payToPaymentOperatorReasonValidator = literals(
+  'investigate_provider_state',
+  'recover_stalled_work',
+  'respond_to_alert',
+  'verify_payment_outcome',
+)
+
+export const payToPaymentOperatorActionValidator = literals(
+  'request_reconciliation',
+  'request_resume',
+)
+
+export const payToPaymentOperatorDecisionValidator = literals(
+  'authorized',
+  'refused',
+  'no_op',
+)
+
+export const payToPaymentOperatorResultCodeValidator = literals(
+  'scheduled',
+  'already_due',
+  'unauthenticated',
+  'insufficient_role',
+  'payment_not_found',
+  'attention_required',
+  'operation_not_allowed',
+)
+
 export const payToPaymentOperationValidator = v.object({
   payToPaymentId: v.id('payToPayments'),
   operationId: v.string(),

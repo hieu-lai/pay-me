@@ -468,10 +468,21 @@ describe('POST /zepto/webhooks', () => {
       deliveries: await ctx.db.query('zeptoWebhookDeliveries').collect(),
       events: await ctx.db.query('zeptoWebhookEvents').collect(),
       evidence: await ctx.db.query('payToPaymentEvidence').collect(),
+      deduplication: await ctx.db
+        .query('payToPaymentWebhookDeduplication')
+        .withIndex('by_payToPaymentId_and_observedAt', (q) =>
+          q.eq('payToPaymentId', payToPaymentId),
+        )
+        .take(10),
     }))
     expect(durable.deliveries).toHaveLength(2)
     expect(durable.events).toHaveLength(2)
     expect(durable.evidence).toHaveLength(2)
+    expect(durable.deduplication.map(({ outcome }) => outcome)).toEqual([
+      'duplicate_event',
+      'duplicate_delivery',
+      'duplicate_event',
+    ])
     expect(durable.payment).toMatchObject({ lifecycleState: 'pending' })
   })
 

@@ -48,6 +48,9 @@ An authorization from a Payer that permits a Requester to initiate payments unde
 The one payment associated with a PayTo Agreement, automatically initiated by PayMe for its Payer after that agreement is confirmed active. A Payer's obligation is paid only when this payment settles.
 _Avoid_: Transfer, when referring to the payment initiated under a PayTo Agreement
 
+**Payment Operator**:
+An authenticated User with the server-managed role that permits redacted PayTo Payment diagnostics and audited requests for policy-bound recovery. A Payment Operator cannot directly change Payment lifecycle truth, immutable intent, provider identity, or recovery budgets.
+
 **Money Request**:
 A Requester's request for one fixed amount from each of one to five Payers. A Money Request creates one PayTo Agreement for each Payer.
 _Avoid_: Payment Request

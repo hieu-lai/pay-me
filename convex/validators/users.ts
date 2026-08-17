@@ -10,6 +10,7 @@ export const userValidator = z.object(
     username: z.string().optional(),
     searchText: z.string().optional(),
     imageUrl: z.string().optional(),
+    roles: z.array(z.literal('payment_operator')).optional(),
     defaultPaymentDestinationId: zid('paymentDestinations').optional(),
   }),
 )

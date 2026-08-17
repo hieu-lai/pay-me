@@ -653,6 +653,101 @@ export async function makePayToPaymentReconciliationDue(
   })
 }
 
+export async function requestImmediatePayToPaymentReconciliation(
+  ctx: MutationCtx,
+  args: {
+    payToPaymentId: Id<'payToPayments'>
+    observedAt: number
+  },
+) {
+  const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
+  if (!payment) {
+    return { decision: 'refused' as const, code: 'payment_not_found' as const }
+  }
+  if (
+    payment.creationState !== 'creation_uncertain' &&
+    payment.creationState !== 'provider_established'
+  ) {
+    return {
+      decision: 'refused' as const,
+      code:
+        payment.attention === undefined
+          ? ('operation_not_allowed' as const)
+          : ('attention_required' as const),
+    }
+  }
+  return await scheduleRequestedPaymentReconciliation(
+    ctx,
+    payment,
+    args.observedAt,
+  )
+}
+
+async function scheduleRequestedPaymentReconciliation(
+  ctx: MutationCtx,
+  payment: Doc<'payToPayments'>,
+  observedAt: number,
+) {
+  const work = await reconciliationWorkItem(ctx, payment._id)
+  if (work?.state === 'queued' && work.availableAt <= observedAt) {
+    return { decision: 'no_op' as const, code: 'already_due' as const }
+  }
+  await makePayToPaymentReconciliationDue(ctx, payment._id, observedAt)
+  return { decision: 'authorized' as const, code: 'scheduled' as const }
+}
+
+export async function requestPayToPaymentResume(
+  ctx: MutationCtx,
+  args: {
+    payToPaymentId: Id<'payToPayments'>
+    observedAt: number
+  },
+) {
+  const payment = await ctx.db.get('payToPayments', args.payToPaymentId)
+  if (!payment) {
+    return { decision: 'refused' as const, code: 'payment_not_found' as const }
+  }
+  if (
+    payment.creationState !== 'creation_uncertain' &&
+    payment.creationState !== 'provider_established'
+  ) {
+    return {
+      decision: 'refused' as const,
+      code:
+        payment.attention === undefined
+          ? ('operation_not_allowed' as const)
+          : ('attention_required' as const),
+    }
+  }
+  if (payment.lifecycleState === 'settled') {
+    return {
+      decision: 'refused' as const,
+      code: 'operation_not_allowed' as const,
+    }
+  }
+  if (payment.creationState === 'creation_uncertain') {
+    const agreement = await ctx.db.get(
+      'payToAgreements',
+      payment.payToAgreementId,
+    )
+    if (
+      !agreement ||
+      agreement.lifecycleState !== 'active' ||
+      agreement.lifecycleConfidence !== 'confirmed'
+    ) {
+      return {
+        decision: 'refused' as const,
+        code: 'operation_not_allowed' as const,
+      }
+    }
+  }
+  return await scheduleRequestedPaymentReconciliation(
+    ctx,
+    payment,
+    args.observedAt,
+  )
+}
+
 export async function observePayToPaymentWebhook(
   ctx: MutationCtx,
   args: {

@@ -28,6 +28,10 @@ import {
   payToPaymentGateModeValidator,
   payToPaymentIntentValidator,
   payToPaymentOperationValidator,
+  payToPaymentOperatorActionValidator,
+  payToPaymentOperatorDecisionValidator,
+  payToPaymentOperatorReasonValidator,
+  payToPaymentOperatorResultCodeValidator,
   providerPayToPaymentStateValidator,
 } from './validators/payToPayments'
 
@@ -45,6 +49,7 @@ export default defineSchema({
     username: v.optional(v.string()),
     searchText: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    roles: v.optional(v.array(v.literal('payment_operator'))),
     defaultPaymentDestinationId: v.optional(v.id('paymentDestinations')),
   })
     .index('by_tokenIdentifier', ['tokenIdentifier'])
@@ -461,4 +466,40 @@ export default defineSchema({
     'by_payToPaymentId_and_observedAt',
     ['payToPaymentId', 'observedAt'],
   ),
+
+  payToPaymentOperatorActions: defineTable({
+    payToPaymentId: v.id('payToPayments'),
+    actorUserId: v.optional(v.id('users')),
+    authentication: v.union(
+      v.literal('authenticated'),
+      v.literal('unauthenticated'),
+    ),
+    authorization: v.union(
+      v.literal('payment_operator'),
+      v.literal('insufficient_role'),
+      v.literal('not_authenticated'),
+    ),
+    action: payToPaymentOperatorActionValidator,
+    reason: payToPaymentOperatorReasonValidator,
+    decision: payToPaymentOperatorDecisionValidator,
+    resultCode: payToPaymentOperatorResultCodeValidator,
+    requestedAt: v.number(),
+  }).index('by_payToPaymentId_and_requestedAt', [
+    'payToPaymentId',
+    'requestedAt',
+  ]),
+
+  payToPaymentWebhookDeduplication: defineTable({
+    payToPaymentId: v.id('payToPayments'),
+    outcome: v.union(
+      v.literal('duplicate_delivery'),
+      v.literal('duplicate_event'),
+    ),
+    deliveryId: v.string(),
+    providerEventId: v.optional(v.string()),
+    observedAt: v.number(),
+  }).index('by_payToPaymentId_and_observedAt', [
+    'payToPaymentId',
+    'observedAt',
+  ]),
 })

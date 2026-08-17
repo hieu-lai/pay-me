@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 
 import type { Id } from './_generated/dataModel'
+import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
 import {
   agreementStateForWebhookEvent,
@@ -8,6 +9,7 @@ import {
 } from './lib/zepto/webhookEvents'
 import { observePayToPaymentWebhook } from './payToPayments'
 import { applyZeptoWebhookDeliveryValidator } from './validators/zeptoWebhook'
+import type { ZeptoWebhookItem } from './validators/zeptoWebhook'
 
 const terminalLifecycleStates = new Set([
   'cancelled',
@@ -15,6 +17,33 @@ const terminalLifecycleStates = new Set([
   'failed',
   'expired',
 ])
+
+async function paymentForWebhookItem(
+  ctx: Pick<MutationCtx, 'db'>,
+  environment: 'sandbox' | 'production',
+  item: ZeptoWebhookItem,
+) {
+  if (item.resourceType !== 'payto_payment') return null
+  return await ctx.db
+    .query('payToPayments')
+    .withIndex('by_environment_and_providerUid', (q) =>
+      q.eq('environment', environment).eq('providerUid', item.resourceUid),
+    )
+    .unique()
+}
+
+async function recordPaymentWebhookDuplicate(
+  ctx: Pick<MutationCtx, 'db'>,
+  args: {
+    payToPaymentId: Id<'payToPayments'>
+    outcome: 'duplicate_delivery' | 'duplicate_event'
+    deliveryId: string
+    providerEventId?: string
+    observedAt: number
+  },
+) {
+  await ctx.db.insert('payToPaymentWebhookDeduplication', args)
+}
 
 export const applyDelivery = internalMutation({
   args: applyZeptoWebhookDeliveryValidator.fields,
@@ -24,7 +53,21 @@ export const applyDelivery = internalMutation({
       .query('zeptoWebhookDeliveries')
       .withIndex('by_deliveryId', (q) => q.eq('deliveryId', args.deliveryId))
       .unique()
-    if (existingDelivery) return { duplicate: true, appliedItems: 0 }
+    if (existingDelivery) {
+      const recordedPayments = new Set<Id<'payToPayments'>>()
+      for (const item of args.items) {
+        const payment = await paymentForWebhookItem(ctx, args.environment, item)
+        if (!payment || recordedPayments.has(payment._id)) continue
+        recordedPayments.add(payment._id)
+        await recordPaymentWebhookDuplicate(ctx, {
+          payToPaymentId: payment._id,
+          outcome: 'duplicate_delivery',
+          deliveryId: args.deliveryId,
+          observedAt: args.receivedAt,
+        })
+      }
+      return { duplicate: true, appliedItems: 0 }
+    }
 
     await ctx.db.insert('zeptoWebhookDeliveries', {
       deliveryId: args.deliveryId,
@@ -38,7 +81,19 @@ export const applyDelivery = internalMutation({
     const eventIdsInDelivery = new Set<string>()
     const reconciliationByAgreementId = new Map<Id<'payToAgreements'>, string>()
     for (const item of args.items) {
-      if (eventIdsInDelivery.has(item.providerEventId)) continue
+      const payment = await paymentForWebhookItem(ctx, args.environment, item)
+      if (eventIdsInDelivery.has(item.providerEventId)) {
+        if (payment) {
+          await recordPaymentWebhookDuplicate(ctx, {
+            payToPaymentId: payment._id,
+            outcome: 'duplicate_event',
+            deliveryId: args.deliveryId,
+            providerEventId: item.providerEventId,
+            observedAt: args.receivedAt,
+          })
+        }
+        continue
+      }
       eventIdsInDelivery.add(item.providerEventId)
       const existingEvent = await ctx.db
         .query('zeptoWebhookEvents')
@@ -46,7 +101,18 @@ export const applyDelivery = internalMutation({
           q.eq('providerEventId', item.providerEventId),
         )
         .unique()
-      if (existingEvent) continue
+      if (existingEvent) {
+        if (payment) {
+          await recordPaymentWebhookDuplicate(ctx, {
+            payToPaymentId: payment._id,
+            outcome: 'duplicate_event',
+            deliveryId: args.deliveryId,
+            providerEventId: item.providerEventId,
+            observedAt: args.receivedAt,
+          })
+        }
+        continue
+      }
 
       await ctx.db.insert('zeptoWebhookEvents', {
         ...item,
@@ -55,17 +121,6 @@ export const applyDelivery = internalMutation({
       })
       appliedItems += 1
 
-      const payment =
-        item.resourceType === 'payto_payment'
-          ? await ctx.db
-              .query('payToPayments')
-              .withIndex('by_environment_and_providerUid', (q) =>
-                q
-                  .eq('environment', args.environment)
-                  .eq('providerUid', item.resourceUid),
-              )
-              .unique()
-          : null
       if (payment) {
         await observePayToPaymentWebhook(ctx, {
           payToPaymentId: payment._id,
