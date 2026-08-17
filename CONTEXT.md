@@ -4,6 +4,16 @@ PayMe lets a user specify where another person should send requested money.
 
 ## Language
 
+**User Profile**:
+The public presentation of a User to other authenticated Users, comprising their Display Name and optional Profile Image and Bio. Authentication details such as email are not part of the User Profile.
+
+**Profile Image Candidate**:
+An image proposed by a User for their User Profile. It is bound to that User before upload, may become the active Profile Image only after validation, and can be activated at most once. A User may have multiple Profile Image Candidates in progress concurrently.
+
+**Display Name**:
+The user-editable name by which a User is shown to other Users. It is distinct from the User's PayMe Username.
+_Avoid_: Profile name, username
+
 **Payment Destination**:
 A saved Bank Account or PayID that identifies where a User can receive money and, for the current PayTo scope, the account from which the User may authorize a debit.
 _Avoid_: Payment method, payout method, receiving method
@@ -33,6 +43,10 @@ _Avoid_: Recipient, when referring to the person being asked to pay
 
 **PayTo Agreement**:
 An authorization from a Payer that permits a Requester to initiate payments under agreed terms.
+
+**PayTo Payment**:
+The one payment associated with a PayTo Agreement, automatically initiated by PayMe for its Payer after that agreement is confirmed active. A Payer's obligation is paid only when this payment settles.
+_Avoid_: Transfer, when referring to the payment initiated under a PayTo Agreement
 
 **Money Request**:
 A Requester's request for one fixed amount from each of one to five Payers. A Money Request creates one PayTo Agreement for each Payer.
