@@ -35,13 +35,15 @@ async function setupAgreement(environment: ZeptoEnvironment = 'sandbox') {
       tokenIdentifier: requesterIdentity.tokenIdentifier,
       clerkUserId: requesterIdentity.subject,
       email: 'requester-reconciliation@example.test',
-      name: requesterIdentity.name,
+      displayName: requesterIdentity.name,
+      searchText: requesterIdentity.name,
     })
     const payerUserId = await ctx.db.insert('users', {
       tokenIdentifier: 'https://clerk.example.test|payer_reconciliation',
       clerkUserId: 'payer_reconciliation',
       email: 'payer-reconciliation@example.test',
-      name: 'Reconciliation Payer',
+      displayName: 'Reconciliation Payer',
+      searchText: 'Reconciliation Payer',
     })
     const requesterDestinationId = await ctx.db.insert('paymentDestinations', {
       ownerUserId: requesterUserId,

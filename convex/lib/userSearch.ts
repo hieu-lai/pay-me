@@ -1,8 +1,8 @@
 export function userSearchText(profile: {
-  name: string
+  displayName: string
   username?: string
 }): string {
-  return [profile.name, profile.username]
+  return [profile.displayName, profile.username]
     .filter((value): value is string => value !== undefined)
     .join(' ')
 }

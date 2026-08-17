@@ -65,7 +65,7 @@ export async function handleClerkWebhook(
     .map((part) => part?.trim())
     .filter((part): part is string => Boolean(part))
     .join(' ')
-  const imageUrl = event.data.image_url.trim()
+  const imageUrl = event.data.image_url
 
   try {
     await dependencies.addUser({
@@ -73,7 +73,7 @@ export async function handleClerkWebhook(
       clerkUserId: event.data.id,
       email: primaryEmail.trim(),
       name: name || `User #${dependencies.randomFourDigitNumber().toString()}`,
-      ...(imageUrl ? { imageUrl } : {}),
+      ...(imageUrl.trim() ? { imageUrl } : {}),
     })
   } catch (error) {
     console.error('Failed to provision Clerk user', error)

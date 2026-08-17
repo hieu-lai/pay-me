@@ -27,6 +27,22 @@ const addUserArgs = {
 }
 
 describe('users.addUser', () => {
+  test('normalizes the Clerk Display Name and omits an empty image', async () => {
+    const t = convexTest(schema, modules)
+    const userId = await t.mutation(internal.users.addUser, {
+      ...addUserArgs,
+      name: '  A\u030Ada\u00a0  Lovelace  ',
+      imageUrl: undefined,
+    })
+
+    await expect(
+      t.run(async (ctx) => ctx.db.get('users', userId)),
+    ).resolves.toMatchObject({
+      displayName: 'Åda Lovelace',
+      searchText: 'Åda Lovelace',
+    })
+  })
+
   test('creates a Clerk user and returns its ID', async () => {
     const t = convexTest(schema, modules)
     const userId = await t.mutation(internal.users.addUser, addUserArgs)
@@ -34,8 +50,18 @@ describe('users.addUser', () => {
     const user = await t.run(async (ctx) => ctx.db.get('users', userId))
 
     expect(user).toMatchObject({
-      ...addUserArgs,
+      tokenIdentifier: addUserArgs.tokenIdentifier,
+      clerkUserId: addUserArgs.clerkUserId,
+      email: addUserArgs.email,
+      displayName: 'First User',
+      searchText: 'First User',
+      profileImageSource: {
+        kind: 'legacyExternal',
+        url: addUserArgs.imageUrl,
+      },
     })
+    expect(user).not.toHaveProperty('name')
+    expect(user).not.toHaveProperty('imageUrl')
   })
 
   test('returns the existing ID without updating profile fields', async () => {
@@ -53,7 +79,15 @@ describe('users.addUser', () => {
 
     expect(repeatedUserId).toBe(userId)
     expect(user).toMatchObject({
-      ...addUserArgs,
+      tokenIdentifier: addUserArgs.tokenIdentifier,
+      clerkUserId: addUserArgs.clerkUserId,
+      email: addUserArgs.email,
+      displayName: addUserArgs.name,
+      searchText: addUserArgs.name,
+      profileImageSource: {
+        kind: 'legacyExternal',
+        url: addUserArgs.imageUrl,
+      },
     })
   })
 
@@ -89,6 +123,34 @@ describe('users.me', () => {
       name: identity.name,
       imageUrl: identity.pictureUrl,
     })
+  })
+
+  test('resolves an owned image through the configured CDN without leaking its key', async () => {
+    process.env.R2_BUCKET = 'test-bucket'
+    process.env.R2_ENDPOINT = 'https://account.r2.cloudflarestorage.com'
+    process.env.R2_ACCESS_KEY_ID = 'test-access-key'
+    process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key'
+    process.env.PROFILE_IMAGE_CDN_ORIGIN = 'https://images.example.com'
+    process.env.PROFILE_IMAGE_DELIVERY_MODE = 'public_custom_domain'
+    const t = convexTest(schema, modules)
+    const authenticated = t.withIdentity(identity)
+    const userId = await t.mutation(internal.users.addUser, addUserArgs)
+    await t.run(async (ctx) =>
+      ctx.db.patch('users', userId, {
+        profileImageSource: {
+          kind: 'ownedR2',
+          objectKey: 'profile-images/assets/owned_123',
+        },
+      }),
+    )
+
+    const result = await authenticated.query(api.users.me, {})
+
+    expect(result).toEqual({
+      name: identity.name,
+      imageUrl: 'https://images.example.com/profile-images/assets/owned_123',
+    })
+    expect(JSON.stringify(result)).not.toContain('objectKey')
   })
 })
 
@@ -168,7 +230,7 @@ describe('users.search', () => {
         tokenIdentifier: 'https://clerk.example.test|user_789',
         clerkUserId: 'user_789',
         email: 'rear.admiral@example.com',
-        name: 'Rear Admiral',
+        displayName: 'Rear Admiral',
         username: 'gracehopper',
         searchText: 'Rear Admiral gracehopper',
       }),
@@ -254,5 +316,97 @@ describe('users.search', () => {
     })
 
     expect(results).toHaveLength(10)
+  })
+})
+
+describe('Profile Image operational schema', () => {
+  test('supports every bounded candidate and cleanup queue index', async () => {
+    const t = convexTest(schema, modules)
+    const ownerUserId = await t.mutation(internal.users.addUser, addUserArgs)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('profileImageUploads', {
+        ownerUserId,
+        state: 'validating',
+        stagingObjectKey: 'profile-images/staging/staging_1',
+        assetObjectKey: 'profile-images/assets/asset_1',
+        declaredSizeBytes: 1_024,
+        declaredMediaType: 'image/png',
+        detectedSizeBytes: 1_024,
+        detectedMediaType: 'image/png',
+        detectedWidth: 32,
+        detectedHeight: 32,
+        validatedSha256: 'digest',
+        createdAt: 1_000,
+        expiresAt: 2_000,
+        validationAttemptCount: 1,
+        nextAttemptAt: 1_100,
+      })
+      await ctx.db.insert('profileImageCleanupObligations', {
+        objectKind: 'staging',
+        objectKey: 'profile-images/staging/staging_1',
+        state: 'retry',
+        nextAttemptAt: 1_200,
+        attemptCount: 2,
+        createdAt: 1_000,
+        updatedAt: 1_100,
+        lastFailure: 'temporarily_unavailable',
+      })
+
+      expect(
+        await ctx.db
+          .query('profileImageUploads')
+          .withIndex('by_ownerUserId_and_state', (q) =>
+            q.eq('ownerUserId', ownerUserId).eq('state', 'validating'),
+          )
+          .collect(),
+      ).toHaveLength(1)
+      expect(
+        await ctx.db
+          .query('profileImageUploads')
+          .withIndex('by_ownerUserId_and_createdAt', (q) =>
+            q.eq('ownerUserId', ownerUserId).gte('createdAt', 0),
+          )
+          .collect(),
+      ).toHaveLength(1)
+      expect(
+        await ctx.db
+          .query('profileImageUploads')
+          .withIndex('by_state_and_expiresAt', (q) =>
+            q.eq('state', 'validating').lte('expiresAt', 2_000),
+          )
+          .collect(),
+      ).toHaveLength(1)
+      expect(
+        await ctx.db
+          .query('profileImageUploads')
+          .withIndex('by_state_and_nextAttemptAt', (q) =>
+            q.eq('state', 'validating').lte('nextAttemptAt', 1_100),
+          )
+          .collect(),
+      ).toHaveLength(1)
+      expect(
+        await ctx.db
+          .query('profileImageUploads')
+          .withIndex('by_terminalAt')
+          .collect(),
+      ).toHaveLength(1)
+      expect(
+        await ctx.db
+          .query('profileImageCleanupObligations')
+          .withIndex('by_objectKey', (q) =>
+            q.eq('objectKey', 'profile-images/staging/staging_1'),
+          )
+          .collect(),
+      ).toHaveLength(1)
+      expect(
+        await ctx.db
+          .query('profileImageCleanupObligations')
+          .withIndex('by_state_and_nextAttemptAt', (q) =>
+            q.eq('state', 'retry').lte('nextAttemptAt', 1_200),
+          )
+          .collect(),
+      ).toHaveLength(1)
+    })
   })
 })

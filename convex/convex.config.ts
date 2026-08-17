@@ -1,4 +1,5 @@
 import migrations from '@convex-dev/migrations/convex.config.js'
+import r2 from '@convex-dev/r2/convex.config'
 import rateLimiter from '@convex-dev/rate-limiter/convex.config'
 import workpool from '@convex-dev/workpool/convex.config'
 import { defineApp } from 'convex/server'
@@ -14,6 +15,15 @@ const app = defineApp({
     PAYMENT_DESTINATION_FINGERPRINT_KEY: v.string(),
     MONEY_REQUEST_INGRESS_ATTESTATION_SECRET: v.string(),
     MONEY_REQUEST_PAYID_REQUESTER_ID_SECRET: v.optional(v.string()),
+    R2_BUCKET: v.string(),
+    R2_ENDPOINT: v.string(),
+    R2_ACCESS_KEY_ID: v.string(),
+    R2_SECRET_ACCESS_KEY: v.string(),
+    PROFILE_IMAGE_CDN_ORIGIN: v.string(),
+    PROFILE_IMAGE_DELIVERY_MODE: v.union(
+      v.literal('development'),
+      v.literal('public_custom_domain'),
+    ),
     PAYME_RELEASE_COMMIT: v.optional(v.string()),
     ZEPTO_PAYID_CAPABILITY: v.optional(v.string()),
     ZEPTO_ENVIRONMENT: v.optional(
@@ -26,6 +36,8 @@ const app = defineApp({
 })
 
 app.use(migrations)
+app.use(r2)
+app.use(rateLimiter, { name: 'profileImageUploadRateLimiter' })
 app.use(rateLimiter, { name: 'paymentRetryRateLimiter' })
 app.use(workpool, { name: 'agreementCreationWorkpool' })
 app.use(workpool, { name: 'paymentCreationWorkpool' })
