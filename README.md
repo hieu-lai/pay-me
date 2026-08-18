@@ -88,6 +88,31 @@ report separately so its recorded commit remains reproducible. The report does
 not enable production initiation or replace live sandbox evidence and required
 approvals.
 
+## PayTo Payment live sandbox certification
+
+Run the provider-connected drill from a clean worktree with the sandbox
+credential, a configuration fingerprint, an active sandbox Agreement to use as
+an in-memory routing template, and an existing workflow Payment that has live
+create/GET evidence:
+
+```bash
+export ZEPTO_ENVIRONMENT=sandbox
+export PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT=<configuration-fingerprint>
+export ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN=<credential>
+export PAYTO_PAYMENT_LIVE_TEMPLATE_AGREEMENT_UID=<active-sandbox-agreement-uid>
+export PAYTO_PAYMENT_LIVE_WORKFLOW_AGREEMENT_ID=<convex-agreement-id>
+export PAYTO_PAYMENT_LIVE_WORKFLOW_PAYMENT_ID=<convex-payment-id>
+bun run certify:pay-to-payment:live
+```
+
+The command creates one-cent, one-payment sandbox Agreements and Payments using
+Zepto's documented simulation controls. It records only hashed identifiers and
+normalized outcomes in `docs/certification/pay-to-payment-live.md`; credentials,
+account details, raw payloads, and webhook bodies remain in memory. Delivery
+patterns that Zepto cannot deterministically force are recorded as provider
+limitations with deterministic evidence and written Zepto documentation. The
+report expires after 30 days and never changes the production gate.
+
 ## Deploy with Nitro
 
 This project uses Nitro as a generic server adapter, so it can run on any Node-compatible host.

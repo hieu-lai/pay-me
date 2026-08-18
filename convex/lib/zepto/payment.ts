@@ -53,6 +53,46 @@ export type CreatePaymentInput = {
   agreementProviderUid: string
   amountCents: number
   priority: 'unattended'
+  sandboxSimulation?: SandboxPaymentSimulation
+}
+
+const sandboxPaymentSimulationKinds = [
+  'auto_settle',
+  'requires_investigation',
+  'investigate_and_settle',
+  'investigate_and_fail',
+  'insufficient_funds',
+  'creditor_account_type_not_supported',
+  'creditor_account_closed',
+  'debtor_account_closed',
+  'financial_infrastructure_unavailable',
+  'debtor_alias_not_found',
+  'creditor_alias_not_found',
+  'alias_resolution_service_unavailable',
+] as const
+
+export type SandboxPaymentSimulation = {
+  simulate: (typeof sandboxPaymentSimulationKinds)[number]
+  delaySeconds?: number
+}
+
+function sandboxSimulationBody(simulation?: SandboxPaymentSimulation) {
+  if (!simulation) return undefined
+  if (
+    !sandboxPaymentSimulationKinds.includes(simulation.simulate) ||
+    (simulation.delaySeconds !== undefined &&
+      (!Number.isSafeInteger(simulation.delaySeconds) ||
+        simulation.delaySeconds < 0 ||
+        simulation.delaySeconds > 300))
+  ) {
+    invalidRequest()
+  }
+  return {
+    simulate: simulation.simulate,
+    ...(simulation.delaySeconds === undefined
+      ? {}
+      : { delay: simulation.delaySeconds }),
+  }
 }
 
 export type CreatedPayment = {
@@ -120,12 +160,14 @@ export async function createPayment(
   input: CreatePaymentInput,
 ): Promise<CreatedPayment> {
   validateInput(input)
+  const sandbox = sandboxSimulationBody(input.sandboxSimulation)
   const { data, response } = await client.payTo.POST('/payto/payments', {
     body: {
       uid: input.providerUid,
       agreement_uid: input.agreementProviderUid,
       amount: input.amountCents,
       priority: input.priority,
+      ...(sandbox === undefined ? {} : { sandbox }),
     },
   })
   let payment: z.infer<typeof paymentResponseValidator>
@@ -209,7 +251,10 @@ export async function getPaymentLifecycleByUid(
 
 export async function retryPayment(
   client: ZeptoClient,
-  input: { providerUid: string },
+  input: {
+    providerUid: string
+    sandboxSimulation?: SandboxPaymentSimulation
+  },
 ): Promise<{ accepted: true }> {
   if (
     !input.providerUid ||
@@ -218,11 +263,12 @@ export async function retryPayment(
   ) {
     invalidRequest()
   }
+  const sandbox = sandboxSimulationBody(input.sandboxSimulation)
   const { response } = await client.payTo.POST(
     '/payto/payments/{payment_uid}/retry',
     {
       params: { path: { payment_uid: input.providerUid } },
-      body: {},
+      body: sandbox === undefined ? {} : { sandbox },
     },
   )
   if (response.status !== 202) invalidResponse()

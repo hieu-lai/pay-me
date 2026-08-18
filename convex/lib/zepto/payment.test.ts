@@ -99,6 +99,55 @@ describe('Zepto PayTo Payment creation', () => {
     })
   })
 
+  test('passes an explicit Payment outcome simulation only through the sandbox contract', async () => {
+    const requests: Request[] = []
+    const client = createZeptoClient({
+      environment: 'sandbox',
+      accessToken: 'sandbox-token',
+      fetch: async (request) => {
+        requests.push(request.clone())
+        return paymentResponse()
+      },
+      maxRetries: 0,
+    })
+
+    await createPayment(client, {
+      providerUid: 'payment_36',
+      agreementProviderUid: 'agreement_36',
+      amountCents: 12_500,
+      priority: 'unattended',
+      sandboxSimulation: {
+        simulate: 'requires_investigation',
+        delaySeconds: 30,
+      },
+    })
+
+    expect(await requests[0]?.json()).toMatchObject({
+      sandbox: { simulate: 'requires_investigation', delay: 30 },
+    })
+  })
+
+  test('refuses a sandbox Payment outcome simulation before production transport', async () => {
+    const fetch = vi.fn(async () => paymentResponse())
+    const client = createZeptoClient({
+      environment: 'production',
+      accessToken: 'production-token',
+      fetch,
+      maxRetries: 0,
+    })
+
+    await expect(
+      createPayment(client, {
+        providerUid: 'payment_36',
+        agreementProviderUid: 'agreement_36',
+        amountCents: 12_500,
+        priority: 'unattended',
+        sandboxSimulation: { simulate: 'auto_settle' },
+      }),
+    ).rejects.toMatchObject({ kind: 'sandbox_only' })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   test.each([
     [
       { uid: 'another_payment' },
@@ -300,5 +349,27 @@ describe('Zepto PayTo Payment retry', () => {
       '/payto/payments/payment_36/retry',
     )
     expect(requests[0]?.headers.get('Zepto-API-Version')).toBe('20260101')
+  })
+
+  test('passes an explicit retry outcome simulation through the sandbox contract', async () => {
+    const requests: Request[] = []
+    const client = createZeptoClient({
+      environment: 'sandbox',
+      accessToken: 'sandbox-token',
+      fetch: async (request) => {
+        requests.push(request.clone())
+        return new Response(null, { status: 202 })
+      },
+      maxRetries: 0,
+    })
+
+    await retryPayment(client, {
+      providerUid: 'payment_36',
+      sandboxSimulation: { simulate: 'auto_settle' },
+    })
+
+    expect(await requests[0]?.json()).toEqual({
+      sandbox: { simulate: 'auto_settle' },
+    })
   })
 })
