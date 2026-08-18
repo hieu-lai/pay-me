@@ -8,6 +8,7 @@ import {
   CERTIFICATION_COMMANDS,
   PAYTO_PAYMENT_API_VERSION,
   buildCertificationReport,
+  resolveCertificationBindings,
   verifyCertificationEvidence,
 } from './certification/pay-to-payment'
 
@@ -20,16 +21,6 @@ function argumentValue(name: string) {
   const value = process.argv[index + 1]
   if (!value || value.startsWith('--')) {
     throw new Error(`${name} requires a value.`)
-  }
-  return value
-}
-
-function requiredBinding(argumentName: string, environmentName: string) {
-  const value = argumentValue(argumentName) ?? process.env[environmentName]
-  if (!value) {
-    throw new Error(
-      `${argumentName} or ${environmentName} is required for commit-bound certification.`,
-    )
   }
   return value
 }
@@ -62,21 +53,14 @@ function inspectRepository() {
 process.chdir(repositoryRoot)
 
 const outputPath = resolve(argumentValue('--output') ?? defaultOutput)
-const environment = requiredBinding(
-  '--environment',
-  'PAYTO_PAYMENT_CERTIFICATION_ENVIRONMENT',
-)
-if (environment !== 'sandbox' && environment !== 'production') {
-  throw new Error('Certification environment must be sandbox or production.')
-}
-const configurationFingerprint = requiredBinding(
-  '--configuration-fingerprint',
-  'PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT',
-)
-const credentialFingerprint = requiredBinding(
-  '--credential-fingerprint',
-  'PAYTO_PAYMENT_CREDENTIAL_FINGERPRINT',
-)
+const { environment, configurationFingerprint, credentialFingerprint } =
+  resolveCertificationBindings({
+    environment: process.env.ZEPTO_ENVIRONMENT,
+    configurationFingerprint:
+      process.env.PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT,
+    sandboxCredential: process.env.ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN,
+    productionCredential: process.env.ZEPTO_PERSONAL_ACCESS_TOKEN,
+  })
 
 await verifyCertificationEvidence((path) => readFile(path, 'utf8'))
 

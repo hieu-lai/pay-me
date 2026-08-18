@@ -8,6 +8,7 @@ import {
   MANDATORY_CERTIFICATION_REQUIREMENTS,
   buildCertificationReport,
   certificationFingerprint,
+  resolveCertificationBindings,
   verifyCertificationEvidence,
 } from './pay-to-payment'
 
@@ -59,6 +60,10 @@ describe('PayTo Payment deterministic certification', () => {
   test.each([
     ['missing', 'the named test has been removed'],
     ['skipped', "test.skip('the named test'"],
+    [
+      'suite skipped',
+      "describe.skip('disabled', () => { test('the named test'",
+    ],
     ['quarantined', "test('the named test', { quarantine: true }"],
   ])('fails when mandatory evidence is %s', async (_reason, source) => {
     const firstReference = CERTIFICATION_SCENARIOS[0].evidence[0]
@@ -95,6 +100,7 @@ describe('PayTo Payment deterministic certification', () => {
     expect(report).toContain(`Credential fingerprint | \`${'c'.repeat(43)}\``)
     expect(report).toMatch(/Certification fingerprint \| `[A-Za-z0-9_-]{43}`/)
     expect(report).toContain('Production activation remains denied')
+    expect(report).toContain('Ambiguous retry acknowledgement')
     expect(report).not.toContain('sensitive-routing-details')
     expect(report).not.toContain('sensitive-provider-payload')
     expect(report).not.toContain('sensitive-credential')
@@ -153,5 +159,32 @@ describe('PayTo Payment deterministic certification', () => {
         credentialFingerprint: 'd'.repeat(43),
       }),
     ).not.toBe(original)
+  })
+
+  test('derives the evidence bindings from the selected runtime configuration', () => {
+    const first = resolveCertificationBindings({
+      environment: 'sandbox',
+      configurationFingerprint: 'configuration-v1',
+      sandboxCredential: 'first-sandbox-credential',
+    })
+    const rotated = resolveCertificationBindings({
+      environment: 'sandbox',
+      configurationFingerprint: 'configuration-v1',
+      sandboxCredential: 'rotated-sandbox-credential',
+    })
+
+    expect(first).toMatchObject({
+      environment: 'sandbox',
+      configurationFingerprint: 'configuration-v1',
+      credentialFingerprint: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    })
+    expect(rotated.credentialFingerprint).not.toBe(first.credentialFingerprint)
+    expect(() =>
+      resolveCertificationBindings({
+        environment: 'production',
+        configurationFingerprint: 'configuration-v1',
+        sandboxCredential: 'wrong-environment-credential',
+      }),
+    ).toThrow('production credential')
   })
 })

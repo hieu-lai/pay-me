@@ -22,9 +22,9 @@ export type CertificationRequirement =
 export const CERTIFICATION_COMMANDS = [
   {
     id: 'formatting',
-    displayCommand: 'bun run check:certification',
+    displayCommand: 'bun run check:pay-to-payment-certification',
     executable: 'bun',
-    args: ['run', 'check:certification'],
+    args: ['run', 'check:pay-to-payment-certification'],
   },
   {
     id: 'linting',
@@ -83,6 +83,9 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
         testNames: [
           'replayed and concurrent confirmation converges on the original PayTo Payment identity',
           'allocates typed create work and immutable fingerprints before dispatch',
+          'keeps a pre-dispatch crash auditable without implying a POST',
+          'starts GET recovery when a worker crashes after provider acceptance but before outcome commit',
+          'retains accepted provider evidence when the worker vanishes before commit',
           'does not hide another POST when Zepto returns 500',
           'dispatches one provider POST for one authorized retry operation',
         ],
@@ -101,6 +104,7 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
         path: 'convex/payToPayments.test.ts',
         testNames: [
           'recovers an ambiguous create outcome through authoritative same-UID GET',
+          'holds creation uncertainty after %s',
           'authoritative absence unlocks only two same-UID recovery POSTs',
           'ends unresolved creation recovery at fifteen minutes',
         ],
@@ -297,6 +301,39 @@ export type CertificationInput = {
   results: ReadonlyArray<CertificationResult>
 }
 
+type CertificationRuntimeBindings = {
+  environment: string | undefined
+  configurationFingerprint: string | undefined
+  sandboxCredential?: string
+  productionCredential?: string
+}
+
+export function resolveCertificationBindings(
+  input: CertificationRuntimeBindings,
+) {
+  if (input.environment !== 'sandbox' && input.environment !== 'production') {
+    throw new Error('Certification environment must be sandbox or production.')
+  }
+  if (!input.configurationFingerprint) {
+    throw new Error('Payment configuration fingerprint is required.')
+  }
+  validateFingerprint(input.configurationFingerprint, 'configuration')
+  const credential =
+    input.environment === 'sandbox'
+      ? input.sandboxCredential
+      : input.productionCredential
+  if (!credential) {
+    throw new Error(`${input.environment} credential is required.`)
+  }
+  return {
+    environment: input.environment,
+    configurationFingerprint: input.configurationFingerprint,
+    credentialFingerprint: createHash('sha256')
+      .update(credential)
+      .digest('base64url'),
+  }
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -347,6 +384,15 @@ export async function verifyCertificationEvidence(
         source = await readText(reference.path)
       } catch {
         throw new Error(`Certification evidence is missing: ${reference.path}`)
+      }
+      if (
+        /\b(?:describe|test|it)\s*\.\s*(?:skip|skipIf|runIf|todo)\b|quarantin(?:e|ed)\s*[:=]\s*true/i.test(
+          source,
+        )
+      ) {
+        throw new Error(
+          `Certification evidence is not runnable in ${reference.path}: disabled or quarantined declaration`,
+        )
       }
       for (const testName of reference.testNames) {
         if (!source.includes(testName)) {
@@ -480,6 +526,12 @@ Every named test above was present and runnable before the quality gates ran. A 
 ## Activation decision
 
 This report certifies deterministic behavior for the recorded commit, environment, pinned API version, configuration fingerprint, and credential fingerprint only. Production activation remains denied: certification does not change a runtime gate, grant provider access, supply independent approvals, or replace fresh sanitized live Zepto sandbox evidence.
+
+## Known gaps
+
+- Live Zepto sandbox drills, provider delivery, quotas, enabled scopes, and production credentials are outside this deterministic evidence class and require fresh sanitized live evidence.
+- Ambiguous retry acknowledgement remains locked against automatic replay. Production approval requires written Zepto confirmation of a safe replay contract; deterministic evidence cannot close that provider gap.
+- Independent engineering, operations, security, legal/compliance, and Zepto approvals remain required before production initiation.
 
 ## Invalidation and rerun triggers
 

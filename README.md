@@ -68,15 +68,16 @@ report separately so its recorded commit remains reproducible.
 
 ## PayTo Payment deterministic certification
 
-Run the Payment safety suite from a clean worktree, supplying only opaque
-configuration and SHA-256 base64url credential fingerprints (never the
-credential itself):
+Run the Payment safety suite from a clean worktree after securely setting the
+same environment, configuration fingerprint, and credential variables used by
+the Payment runtime. The command hashes the selected credential in memory and
+never writes the credential itself:
 
 ```bash
-bun run certify:pay-to-payment \
-  --environment sandbox \
-  --configuration-fingerprint <configuration-fingerprint> \
-  --credential-fingerprint <43-character-sha256-base64url>
+export ZEPTO_ENVIRONMENT=sandbox
+export PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT=<configuration-fingerprint>
+export ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN=<credential>
+bun run certify:pay-to-payment
 ```
 
 The command verifies every mandatory scenario is present and runnable, then
