@@ -2,24 +2,24 @@
 
 | Field                     | Certified value                                                                              |
 | ------------------------- | -------------------------------------------------------------------------------------------- |
-| Commit                    | `776887c7ddbc1dbdcaec794ca4558fbcdf75c758`                                                   |
+| Commit                    | `1526d547956355be542a934d0b475ade1990efb9`                                                   |
 | Evidence date             | 2026-08-18                                                                                   |
 | Environment               | Zepto sandbox                                                                                |
 | API version               | `20260101`                                                                                   |
 | Configuration fingerprint | `deterministic-test-fixtures-v1`                                                             |
 | Credential fingerprint    | `dcAnXbcpzqnEGb-9sKU4DgeVXAgSlP2svESDKJK8iIg`                                                |
-| Certification fingerprint | `cpcBRLMQioDchYk9K89kr2N8RQpiN9iKL7tF4okINFQ`                                                |
+| Certification fingerprint | `glmCtsRABB810sQIZYf6W52U8QTF74HdRwGZ1AkDcdY`                                                |
 | Evidence class            | Deterministic automated certification through production code seams; no live provider access |
 
 ## Command results
 
-| Gate                | Command                                      | Result        |
-| ------------------- | -------------------------------------------- | ------------- |
-| formatting          | `bun run check:pay-to-payment-certification` | PASS (exit 0) |
-| linting             | `bun run lint`                               | PASS (exit 0) |
-| type-checking       | `bun run typecheck`                          | PASS (exit 0) |
-| complete-test-suite | `bun run test`                               | PASS (exit 0) |
-| production-build    | `bun run build`                              | PASS (exit 0) |
+| Gate                | Command             | Result        |
+| ------------------- | ------------------- | ------------- |
+| formatting          | `bun run check`     | PASS (exit 0) |
+| linting             | `bun run lint`      | PASS (exit 0) |
+| type-checking       | `bun run typecheck` | PASS (exit 0) |
+| complete-test-suite | `bun run test`      | PASS (exit 0) |
+| production-build    | `bun run build`     | PASS (exit 0) |
 
 All commands ran from a clean worktree at the exact certified commit. Command output is excluded so credentials, routing details, provider payloads, raw webhook bodies, environment values, and other sensitive material cannot enter this evidence.
 
