@@ -34,6 +34,8 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const defaultOutput = 'docs/certification/pay-to-payment-live.md'
 const webhookConfirmation =
   'https://docs.zeptopayments.com/docs/setting-up-your-webhooks'
+const payToOpenApiConfirmation =
+  'https://go.zeptopayments.com/api-docs/zepto/20260101/openapi.yaml'
 const paymentAmountCents = 1
 
 const templateAgreementValidator = z.object({
@@ -155,16 +157,20 @@ function providerLimitation(
     | 'repeated-webhook-delivery'
     | 'missed-webhook-recovery'
     | 'duplicate-webhook-recovery'
-    | 'reordered-webhook-recovery',
+    | 'reordered-webhook-recovery'
+    | 'pending',
   deterministicEvidence: string[],
+  confirmation = webhookConfirmation,
 ): LiveCertificationScenario {
   return {
     requirement,
     result: 'provider_limitation',
     evidence:
-      'Zepto documents delivery semantics but exposes no API control that deterministically forces this delivery pattern.',
+      requirement === 'pending'
+        ? 'Zepto documents pending as a lifecycle state but exposes no sandbox simulation that deterministically holds a Payment pending.'
+        : 'Zepto documents delivery semantics but exposes no API control that deterministically forces this delivery pattern.',
     deterministicEvidence,
-    zeptoConfirmation: webhookConfirmation,
+    zeptoConfirmation: confirmation,
   }
 }
 
@@ -411,16 +417,14 @@ async function main() {
     evidence: `Payment fingerprint ${opaqueFingerprint(nonRetryable.providerUid)} reached GET-confirmed non-retryable failure.`,
   })
 
-  const pending = await createScenarioPayment('pending', {
-    simulate: 'auto_settle',
-    delaySeconds: 30,
-  })
-  await waitForState(pending.input, 'pending', 25_000)
-  observations.set('pending', {
-    requirement: 'pending',
-    result: 'passed',
-    evidence: `Payment fingerprint ${opaqueFingerprint(pending.providerUid)} was observed pending by authoritative GET without a second create.`,
-  })
+  observations.set(
+    'pending',
+    providerLimitation(
+      'pending',
+      ['convex/payToPayments.test.ts'],
+      payToOpenApiConfirmation,
+    ),
+  )
 
   const investigation = await createScenarioPayment('investigation', {
     simulate: 'requires_investigation',

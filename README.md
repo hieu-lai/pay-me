@@ -109,9 +109,10 @@ The command creates one-cent, one-payment sandbox Agreements and Payments using
 Zepto's documented simulation controls. It records only hashed identifiers and
 normalized outcomes in `docs/certification/pay-to-payment-live.md`; credentials,
 account details, raw payloads, and webhook bodies remain in memory. Delivery
-patterns that Zepto cannot deterministically force are recorded as provider
-limitations with deterministic evidence and written Zepto documentation. The
-report expires after 30 days and never changes the production gate.
+states or delivery patterns that Zepto cannot deterministically force are
+recorded as provider limitations with deterministic evidence and written Zepto
+documentation. The report expires after 30 days and never changes the
+production gate.
 
 ## Deploy with Nitro
 
