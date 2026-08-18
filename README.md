@@ -66,6 +66,27 @@ suite, and the production build. It writes the sanitized evidence report to
 certifies the commit that existed before the report was written; commit the
 report separately so its recorded commit remains reproducible.
 
+## PayTo Payment deterministic certification
+
+Run the Payment safety suite from a clean worktree, supplying only opaque
+configuration and SHA-256 base64url credential fingerprints (never the
+credential itself):
+
+```bash
+bun run certify:pay-to-payment \
+  --environment sandbox \
+  --configuration-fingerprint <configuration-fingerprint> \
+  --credential-fingerprint <43-character-sha256-base64url>
+```
+
+The command verifies every mandatory scenario is present and runnable, then
+runs formatting, linting, type checking, the complete test suite, and the
+production build. Only after all gates pass at the same clean commit does it
+write sanitized evidence to `docs/certification/pay-to-payment.md`. Commit that
+report separately so its recorded commit remains reproducible. The report does
+not enable production initiation or replace live sandbox evidence and required
+approvals.
+
 ## Deploy with Nitro
 
 This project uses Nitro as a generic server adapter, so it can run on any Node-compatible host.

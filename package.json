@@ -17,7 +17,8 @@
     "check": "prettier --check .",
     "check:certification": "prettier --check README.md package.json scripts src/server-fns/money-requests.test.ts src/start.ts src/start.test.ts docs/certification",
     "typecheck": "tsc --noEmit",
-    "certify:bank-account-money-request": "bun scripts/certify-bank-account-money-request.ts"
+    "certify:bank-account-money-request": "bun scripts/certify-bank-account-money-request.ts",
+    "certify:pay-to-payment": "bun scripts/certify-pay-to-payment.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
