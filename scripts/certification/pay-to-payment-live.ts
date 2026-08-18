@@ -32,10 +32,19 @@ type ProviderLimitationScenario = {
   evidence: string
   deterministicEvidence: ReadonlyArray<string>
   zeptoConfirmation: string
+  confirmationKind: string
+}
+
+type IncompleteScenario = {
+  requirement: LiveCertificationRequirement
+  result: 'incomplete'
+  evidence: string
+  deterministicEvidence: ReadonlyArray<string>
+  missingEvidence: string
 }
 
 export type LiveCertificationScenario =
-  PassedScenario | ProviderLimitationScenario
+  PassedScenario | ProviderLimitationScenario | IncompleteScenario
 
 export type LiveCertificationInput = {
   certifiedCommit: string
@@ -101,18 +110,25 @@ function validateInput(input: LiveCertificationInput) {
 
   for (const scenario of input.scenarios) {
     validateBoundedEvidence(scenario.evidence, 'Live scenario evidence')
-    if (scenario.result === 'provider_limitation') {
+    if (scenario.result !== 'passed') {
       if (scenario.deterministicEvidence.length === 0) {
-        throw new Error('Provider limitation requires deterministic evidence.')
+        throw new Error('Non-live evidence requires deterministic evidence.')
       }
       for (const reference of scenario.deterministicEvidence) {
         validateBoundedEvidence(reference, 'Deterministic evidence reference')
       }
-      if (!/^https:\/\/[^\s]+$/.test(scenario.zeptoConfirmation)) {
+    }
+    if (scenario.result === 'provider_limitation') {
+      if (
+        scenario.confirmationKind !== 'direct_written_zepto_confirmation' ||
+        !/^https:\/\/[^\s]+$/.test(scenario.zeptoConfirmation)
+      ) {
         throw new Error(
           'Provider limitation requires written Zepto confirmation.',
         )
       }
+    } else if (scenario.result === 'incomplete') {
+      validateBoundedEvidence(scenario.missingEvidence, 'Missing evidence')
     }
   }
 }
@@ -140,22 +156,34 @@ export function buildLiveCertificationReport(
 ): string {
   validateInput(input)
   const fingerprint = liveCertificationFingerprint(input)
+  const certificationStatus = input.scenarios.some(
+    (scenario) => scenario.result === 'incomplete',
+  )
+    ? 'NOT CERTIFIED'
+    : 'CERTIFIED'
   const scenarioRows = input.scenarios
     .map((scenario) => {
       const result =
-        scenario.result === 'passed' ? 'PASS' : 'PROVIDER LIMITATION'
+        scenario.result === 'passed'
+          ? 'PASS'
+          : scenario.result === 'provider_limitation'
+            ? 'PROVIDER LIMITATION'
+            : 'INCOMPLETE'
       const support =
         scenario.result === 'passed'
           ? 'Live Zepto sandbox observation'
-          : `${scenario.deterministicEvidence.map((path) => `\`${path}\``).join('; ')}; [written Zepto confirmation](${scenario.zeptoConfirmation})`
+          : scenario.result === 'provider_limitation'
+            ? `${scenario.deterministicEvidence.map((path) => `\`${path}\``).join('; ')}; [direct written Zepto confirmation](${scenario.zeptoConfirmation})`
+            : `${scenario.deterministicEvidence.map((path) => `\`${path}\``).join('; ')}; missing: ${scenario.missingEvidence}`
       return `| \`${scenario.requirement}\` | ${result} | ${scenario.evidence} | ${support} |`
     })
     .join('\n')
 
   return `# PayTo Payment live Zepto sandbox certification
 
-| Field | Certified value |
+| Field | Recorded value |
 | --- | --- |
+| Certification status | ${certificationStatus} |
 | Commit | \`${input.certifiedCommit}\` |
 | Evidence date | ${input.evidenceDate} |
 | Environment | Zepto sandbox |

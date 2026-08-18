@@ -36,6 +36,7 @@ describe('PayTo Payment live sandbox certification', () => {
     expect(report).toContain('Configuration fingerprint | `sandbox-payment-v1`')
     expect(report).toMatch(/Certification fingerprint \| `[A-Za-z0-9_-]{43}`/)
     expect(report).toContain('Production activation remains denied')
+    expect(report).toContain('Certification status | CERTIFIED')
     expect(report).not.toContain('sensitive-provider-payload')
     expect(report).not.toContain('sensitive-routing-details')
   })
@@ -66,6 +67,7 @@ describe('PayTo Payment live sandbox certification', () => {
       deterministicEvidence: ['convex/zeptoWebhook.test.ts'],
       zeptoConfirmation:
         'https://docs.zeptopayments.com/docs/setting-up-your-webhooks',
+      confirmationKind: 'direct_written_zepto_confirmation' as const,
     }
 
     expect(() =>
@@ -84,6 +86,28 @@ describe('PayTo Payment live sandbox certification', () => {
         scenarios: [limitation, ...valid.scenarios.slice(1)],
       }),
     ).toContain('PROVIDER LIMITATION')
+  })
+
+  test('renders incomplete mandatory evidence as not certified', () => {
+    const valid = validInput()
+    const report = buildLiveCertificationReport({
+      ...valid,
+      scenarios: [
+        {
+          requirement: valid.scenarios[0].requirement,
+          result: 'incomplete' as const,
+          evidence:
+            'The live adapter outcome was observed but the workflow seam was not',
+          deterministicEvidence: ['convex/payToPayments.test.ts'],
+          missingEvidence: 'End-to-end sandbox workflow fixture',
+        },
+        ...valid.scenarios.slice(1),
+      ],
+    })
+
+    expect(report).toContain('Certification status | NOT CERTIFIED')
+    expect(report).toContain('INCOMPLETE')
+    expect(report).toContain('End-to-end sandbox workflow fixture')
   })
 
   test('invalidates live evidence when a material binding changes', () => {

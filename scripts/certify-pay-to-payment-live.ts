@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url'
 import { format } from 'prettier'
 import { z } from 'zod'
 
+import type { Id } from '../convex/_generated/dataModel'
 import { paymentDestinationInputValidator } from '../convex/validators/paymentDestinations'
 import type { PaymentDestinationInput } from '../convex/validators/paymentDestinations'
+import type { ProviderPayToPaymentState } from '../convex/validators/payToPayments'
 import {
   createAgreement,
   getAgreementByUid,
@@ -32,10 +34,6 @@ import {
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const defaultOutput = 'docs/certification/pay-to-payment-live.md'
-const webhookConfirmation =
-  'https://docs.zeptopayments.com/docs/setting-up-your-webhooks'
-const payToOpenApiConfirmation =
-  'https://go.zeptopayments.com/api-docs/zepto/20260101/openapi.yaml'
 const paymentAmountCents = 1
 
 const templateAgreementValidator = z.object({
@@ -48,6 +46,25 @@ const templateAgreementValidator = z.object({
     account_identifier: paymentDestinationInputValidator,
   }),
 })
+
+const payToAgreementIdValidator = z
+  .string()
+  .regex(/^[a-z0-9]{32}$/)
+  .transform((value) => value as Id<'payToAgreements'>)
+const payToPaymentIdValidator = z
+  .string()
+  .regex(/^[a-z0-9]{32}$/)
+  .transform((value) => value as Id<'payToPayments'>)
+const ensureResultValidator = z.object({
+  kind: z.string(),
+  payToPaymentId: payToPaymentIdValidator.optional(),
+})
+const paymentOperationsValidator = z.array(
+  z.object({
+    payToPaymentId: payToPaymentIdValidator.optional(),
+    operationKind: z.string().optional(),
+  }),
+)
 
 function requiredEnvironment(name: string) {
   const value = process.env[name]?.trim()
@@ -144,33 +161,26 @@ async function poll<T>(
   return latest
 }
 
-function parseJson<T>(raw: string): T {
+function parseJson<T>(raw: string, validator: z.ZodType<T>): T {
   try {
-    return JSON.parse(raw) as T
+    return validator.parse(JSON.parse(raw))
   } catch {
     throw new Error('A live certification command returned invalid JSON.')
   }
 }
 
-function providerLimitation(
-  requirement:
-    | 'repeated-webhook-delivery'
-    | 'missed-webhook-recovery'
-    | 'duplicate-webhook-recovery'
-    | 'reordered-webhook-recovery'
-    | 'pending',
+function incompleteScenario(
+  requirement: (typeof LIVE_CERTIFICATION_REQUIREMENTS)[number],
+  evidence: string,
   deterministicEvidence: string[],
-  confirmation = webhookConfirmation,
+  missingEvidence: string,
 ): LiveCertificationScenario {
   return {
     requirement,
-    result: 'provider_limitation',
-    evidence:
-      requirement === 'pending'
-        ? 'Zepto documents pending as a lifecycle state but exposes no sandbox simulation that deterministically holds a Payment pending.'
-        : 'Zepto documents delivery semantics but exposes no API control that deterministically forces this delivery pattern.',
+    result: 'incomplete',
+    evidence,
     deterministicEvidence,
-    zeptoConfirmation: confirmation,
+    missingEvidence,
   }
 }
 
@@ -184,11 +194,11 @@ async function main() {
   const templateAgreementUid = requiredEnvironment(
     'PAYTO_PAYMENT_LIVE_TEMPLATE_AGREEMENT_UID',
   )
-  const workflowAgreementId = requiredEnvironment(
-    'PAYTO_PAYMENT_LIVE_WORKFLOW_AGREEMENT_ID',
+  const workflowAgreementId = payToAgreementIdValidator.parse(
+    requiredEnvironment('PAYTO_PAYMENT_LIVE_WORKFLOW_AGREEMENT_ID'),
   )
-  const workflowPaymentId = requiredEnvironment(
-    'PAYTO_PAYMENT_LIVE_WORKFLOW_PAYMENT_ID',
+  const workflowPaymentId = payToPaymentIdValidator.parse(
+    requiredEnvironment('PAYTO_PAYMENT_LIVE_WORKFLOW_PAYMENT_ID'),
   )
   const outputPath = resolve(argumentValue('--output') ?? defaultOutput)
   const bindings = resolveCertificationBindings({
@@ -199,6 +209,33 @@ async function main() {
   })
   if (bindings.environment !== 'sandbox') {
     throw new Error('Live PayTo Payment certification is sandbox-only.')
+  }
+  const deployedEnvironment = runCommand('bunx', [
+    'convex',
+    'env',
+    'get',
+    'ZEPTO_ENVIRONMENT',
+  ])
+  const deployedCommit = runCommand('bunx', [
+    'convex',
+    'env',
+    'get',
+    'PAYME_RELEASE_COMMIT',
+  ])
+  const deployedConfigurationFingerprint = runCommand('bunx', [
+    'convex',
+    'env',
+    'get',
+    'PAYTO_PAYMENT_CONFIGURATION_FINGERPRINT',
+  ])
+  if (
+    deployedEnvironment !== bindings.environment ||
+    deployedCommit !== initial.commit ||
+    deployedConfigurationFingerprint !== bindings.configurationFingerprint
+  ) {
+    throw new Error(
+      'The selected Convex deployment does not match the live certification bindings.',
+    )
   }
   const accessToken = requiredEnvironment('ZEPTO_SANDBOX_PERSONAL_ACCESS_TOKEN')
 
@@ -272,7 +309,7 @@ async function main() {
 
   async function waitForState(
     input: ReturnType<typeof paymentInput>,
-    state: string,
+    state: ProviderPayToPaymentState,
     timeoutMs?: number,
   ) {
     return await poll(
@@ -288,29 +325,39 @@ async function main() {
     LiveCertificationScenario
   >()
 
+  function recordObservation(observation: LiveCertificationScenario) {
+    if (observations.has(observation.requirement)) {
+      throw new Error(`Duplicate live observation: ${observation.requirement}`)
+    }
+    observations.set(observation.requirement, observation)
+  }
+
   const settled = await createScenarioPayment('settled', {
     simulate: 'auto_settle',
   })
   await waitForState(settled.input, 'settled')
-  observations.set('exactly-one-creation-and-authoritative-settlement', {
+  recordObservation({
     requirement: 'exactly-one-creation-and-authoritative-settlement',
-    result: 'passed',
-    evidence: `Payment fingerprint ${opaqueFingerprint(settled.providerUid)}: one create POST and authoritative GET-confirmed settlement.`,
+    result: 'incomplete',
+    evidence: `Payment fingerprint ${opaqueFingerprint(settled.providerUid)}: the adapter issued one create POST and authoritative GET confirmed settlement.`,
+    deterministicEvidence: ['convex/payToPayments.test.ts'],
+    missingEvidence:
+      'One live workflow activation proving durable immutable intent through settlement',
   })
 
   const ensureArgs = JSON.stringify({
     payToAgreementId: workflowAgreementId,
     observedAt: Date.now(),
   })
-  const firstEnsure = parseJson<{ kind: string; payToPaymentId?: string }>(
+  const firstEnsure = parseJson(
     runCommand('bunx', ['convex', 'run', 'payToPayments:ensure', ensureArgs]),
+    ensureResultValidator,
   )
-  const secondEnsure = parseJson<{ kind: string; payToPaymentId?: string }>(
+  const secondEnsure = parseJson(
     runCommand('bunx', ['convex', 'run', 'payToPayments:ensure', ensureArgs]),
+    ensureResultValidator,
   )
-  const operations = parseJson<
-    Array<{ payToPaymentId?: string; operationKind?: string }>
-  >(
+  const operations = parseJson(
     runCommand('bunx', [
       'convex',
       'data',
@@ -320,6 +367,7 @@ async function main() {
       '--format',
       'json',
     ]),
+    paymentOperationsValidator,
   )
   const workflowCreateCount = operations.filter(
     (operation) =>
@@ -337,7 +385,7 @@ async function main() {
       'Repeated activation did not preserve one workflow Payment.',
     )
   }
-  observations.set('repeated-activation', {
+  recordObservation({
     requirement: 'repeated-activation',
     result: 'passed',
     evidence: `Workflow Payment fingerprint ${opaqueFingerprint(workflowPaymentId)} matched twice with one durable create operation.`,
@@ -378,7 +426,7 @@ async function main() {
     }
   }
   await waitForState(lostInput, 'settled')
-  observations.set('create-response-loss-and-same-uid-get-recovery', {
+  recordObservation({
     requirement: 'create-response-loss-and-same-uid-get-recovery',
     result: 'passed',
     evidence: `Payment fingerprint ${opaqueFingerprint(lostProviderUid)} recovered by same-UID GET after deliberate create-response loss.`,
@@ -396,7 +444,7 @@ async function main() {
     sandboxSimulation: { simulate: 'auto_settle' },
   })
   await waitForState(retryable.input, 'settled')
-  observations.set('retryable-failure-and-retry', {
+  recordObservation({
     requirement: 'retryable-failure-and-retry',
     result: 'passed',
     evidence: `Payment fingerprint ${opaqueFingerprint(retryable.providerUid)} failed retryably, retried the same resource, and settled authoritatively.`,
@@ -411,18 +459,18 @@ async function main() {
       'Zepto did not mark the non-retryable scenario non-retryable.',
     )
   }
-  observations.set('non-retryable-failure', {
+  recordObservation({
     requirement: 'non-retryable-failure',
     result: 'passed',
     evidence: `Payment fingerprint ${opaqueFingerprint(nonRetryable.providerUid)} reached GET-confirmed non-retryable failure.`,
   })
 
-  observations.set(
-    'pending',
-    providerLimitation(
+  recordObservation(
+    incompleteScenario(
       'pending',
+      'Zepto documents pending but the available sandbox simulations did not deterministically hold a Payment pending.',
       ['convex/payToPayments.test.ts'],
-      payToOpenApiConfirmation,
+      'Direct written Zepto confirmation or a reproducible live pending fixture',
     ),
   )
 
@@ -430,7 +478,7 @@ async function main() {
     simulate: 'requires_investigation',
   })
   await waitForState(investigation.input, 'under_investigation')
-  observations.set('under-investigation', {
+  recordObservation({
     requirement: 'under-investigation',
     result: 'passed',
     evidence: `Payment fingerprint ${opaqueFingerprint(investigation.providerUid)} reached GET-confirmed under-investigation state without a second create.`,
@@ -446,37 +494,46 @@ async function main() {
     waitForState(mixedSettled.input, 'settled'),
     waitForState(mixedFailed.input, 'failed', 120_000),
   ])
-  observations.set('multi-payer-mixed-outcomes', {
+  recordObservation({
     requirement: 'multi-payer-mixed-outcomes',
-    result: 'passed',
-    evidence: `Independent Payment fingerprints ${opaqueFingerprint(mixedSettled.providerUid)} and ${opaqueFingerprint(mixedFailed.providerUid)} reached settled and failed outcomes; deterministic Money Request projection evidence remains separately certified.`,
+    result: 'incomplete',
+    evidence: `Independent Payment fingerprints ${opaqueFingerprint(mixedSettled.providerUid)} and ${opaqueFingerprint(mixedFailed.providerUid)} reached settled and failed provider outcomes.`,
+    deterministicEvidence: ['convex/payToPayments.test.ts'],
+    missingEvidence:
+      'One live multi-Payer Money Request projecting both provider outcomes',
   })
 
-  observations.set(
-    'repeated-webhook-delivery',
-    providerLimitation('repeated-webhook-delivery', [
-      'convex/zeptoWebhook.test.ts',
-      'convex/payToPayments.test.ts',
-    ]),
+  recordObservation(
+    incompleteScenario(
+      'repeated-webhook-delivery',
+      'The live run did not force Zepto to deliver the same webhook repeatedly.',
+      ['convex/zeptoWebhook.test.ts', 'convex/payToPayments.test.ts'],
+      'Direct written Zepto confirmation or a reproducible repeated-delivery fixture',
+    ),
   )
-  observations.set(
-    'missed-webhook-recovery',
-    providerLimitation('missed-webhook-recovery', [
-      'convex/payToPaymentReconciliation.test.ts',
-    ]),
+  recordObservation(
+    incompleteScenario(
+      'missed-webhook-recovery',
+      'The live run did not force Zepto to omit a webhook for a workflow Payment.',
+      ['convex/payToPayments.test.ts'],
+      'Direct written Zepto confirmation or a reproducible missed-delivery fixture',
+    ),
   )
-  observations.set(
-    'duplicate-webhook-recovery',
-    providerLimitation('duplicate-webhook-recovery', [
-      'convex/zeptoWebhook.test.ts',
-    ]),
+  recordObservation(
+    incompleteScenario(
+      'duplicate-webhook-recovery',
+      'The live run did not force duplicate Zepto webhook delivery.',
+      ['convex/zeptoWebhook.test.ts'],
+      'Direct written Zepto confirmation or a reproducible duplicate-delivery fixture',
+    ),
   )
-  observations.set(
-    'reordered-webhook-recovery',
-    providerLimitation('reordered-webhook-recovery', [
-      'convex/zeptoWebhook.test.ts',
-      'convex/payToPayments.test.ts',
-    ]),
+  recordObservation(
+    incompleteScenario(
+      'reordered-webhook-recovery',
+      'The live run did not force reordered Zepto webhook delivery.',
+      ['convex/zeptoWebhook.test.ts', 'convex/payToPayments.test.ts'],
+      'Direct written Zepto confirmation or a reproducible reordered-delivery fixture',
+    ),
   )
 
   const scenarios = LIVE_CERTIFICATION_REQUIREMENTS.map((requirement) => {
