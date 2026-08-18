@@ -1,5 +1,6 @@
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
+convex/_generated/
 convex/lib/zepto/generated/
 convex/lib/zepto/openapi/
