@@ -22,9 +22,9 @@ export type CertificationRequirement =
 export const CERTIFICATION_COMMANDS = [
   {
     id: 'formatting',
-    displayCommand: 'bun run check:pay-to-payment-certification',
+    displayCommand: 'bun run check',
     executable: 'bun',
-    args: ['run', 'check:pay-to-payment-certification'],
+    args: ['run', 'check'],
   },
   {
     id: 'linting',
@@ -63,6 +63,7 @@ export type CertificationCommandId =
 type CertificationEvidence = {
   path: string
   testNames: ReadonlyArray<string>
+  requiredSourceFragments?: ReadonlyArray<string>
 }
 
 type CertificationScenario = {
@@ -107,6 +108,10 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
           'holds creation uncertainty after %s',
           'authoritative absence unlocks only two same-UID recovery POSTs',
           'ends unresolved creation recovery at fifteen minutes',
+        ],
+        requiredSourceFragments: [
+          "'a mismatched UID'",
+          "'a malformed success body'",
         ],
       },
     ],
@@ -386,13 +391,20 @@ export async function verifyCertificationEvidence(
         throw new Error(`Certification evidence is missing: ${reference.path}`)
       }
       if (
-        /\b(?:describe|test|it)\s*\.\s*(?:skip|skipIf|runIf|todo)\b|quarantin(?:e|ed)\s*[:=]\s*true/i.test(
+        /\.\s*(?:skip|skipIf|runIf|todo)\b|quarantin(?:e|ed)\s*[:=]\s*true/i.test(
           source,
         )
       ) {
         throw new Error(
           `Certification evidence is not runnable in ${reference.path}: disabled or quarantined declaration`,
         )
+      }
+      for (const fragment of reference.requiredSourceFragments ?? []) {
+        if (!source.includes(fragment)) {
+          throw new Error(
+            `Certification case is missing from ${reference.path}: ${fragment}`,
+          )
+        }
       }
       for (const testName of reference.testNames) {
         if (!source.includes(testName)) {

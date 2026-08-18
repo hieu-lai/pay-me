@@ -16,7 +16,6 @@
     "format": "prettier --write . && eslint --fix",
     "check": "prettier --check .",
     "check:certification": "prettier --check README.md package.json scripts src/server-fns/money-requests.test.ts src/start.ts src/start.test.ts docs/certification",
-    "check:pay-to-payment-certification": "prettier --check README.md package.json scripts docs/certification convex/payToPayments.test.ts convex/payToPaymentRollout.test.ts convex/payToPaymentOperators.test.ts convex/payToPaymentRetention.test.ts convex/lib/zepto/webhook.test.ts convex/zeptoWebhook.test.ts",
     "typecheck": "tsc --noEmit",
     "certify:bank-account-money-request": "bun scripts/certify-bank-account-money-request.ts",
     "certify:pay-to-payment": "bun scripts/certify-pay-to-payment.ts"

@@ -64,6 +64,10 @@ describe('PayTo Payment deterministic certification', () => {
       'suite skipped',
       "describe.skip('disabled', () => { test('the named test'",
     ],
+    [
+      'parameterized suite skipped',
+      "describe.each([1]).skip('disabled', () => { test('the named test'",
+    ],
     ['quarantined', "test('the named test', { quarantine: true }"],
   ])('fails when mandatory evidence is %s', async (_reason, source) => {
     const firstReference = CERTIFICATION_SCENARIOS[0].evidence[0]
@@ -87,6 +91,15 @@ describe('PayTo Payment deterministic certification', () => {
     await expect(
       verifyCertificationEvidence((path) => readFile(path, 'utf8')),
     ).resolves.toBeUndefined()
+  })
+
+  test('fails when a required parameterized scenario case is removed', async () => {
+    await expect(
+      verifyCertificationEvidence(async (path) => {
+        const source = await readFile(path, 'utf8')
+        return source.replace("'a malformed success body'", "'removed case'")
+      }),
+    ).rejects.toThrow('Certification case is missing')
   })
 
   test('renders sanitized evidence bound to code and runtime configuration', () => {
