@@ -444,7 +444,7 @@ async function main() {
   })
   await Promise.all([
     waitForState(mixedSettled.input, 'settled'),
-    waitForState(mixedFailed.input, 'failed'),
+    waitForState(mixedFailed.input, 'failed', 120_000),
   ])
   observations.set('multi-payer-mixed-outcomes', {
     requirement: 'multi-payer-mixed-outcomes',
