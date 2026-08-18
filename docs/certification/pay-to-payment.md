@@ -2,24 +2,24 @@
 
 | Field                     | Certified value                                                                              |
 | ------------------------- | -------------------------------------------------------------------------------------------- |
-| Commit                    | `6bfc969874428237ef153ce33340923fa2661d84`                                                   |
+| Commit                    | `776887c7ddbc1dbdcaec794ca4558fbcdf75c758`                                                   |
 | Evidence date             | 2026-08-18                                                                                   |
 | Environment               | Zepto sandbox                                                                                |
 | API version               | `20260101`                                                                                   |
 | Configuration fingerprint | `deterministic-test-fixtures-v1`                                                             |
 | Credential fingerprint    | `dcAnXbcpzqnEGb-9sKU4DgeVXAgSlP2svESDKJK8iIg`                                                |
-| Certification fingerprint | `YlaItW9xzXeWe8LEhz36oBogdh46Fydi7xdV-dQD99E`                                                |
+| Certification fingerprint | `cpcBRLMQioDchYk9K89kr2N8RQpiN9iKL7tF4okINFQ`                                                |
 | Evidence class            | Deterministic automated certification through production code seams; no live provider access |
 
 ## Command results
 
-| Gate                | Command                       | Result        |
-| ------------------- | ----------------------------- | ------------- |
-| formatting          | `bun run check:certification` | PASS (exit 0) |
-| linting             | `bun run lint`                | PASS (exit 0) |
-| type-checking       | `bun run typecheck`           | PASS (exit 0) |
-| complete-test-suite | `bun run test`                | PASS (exit 0) |
-| production-build    | `bun run build`               | PASS (exit 0) |
+| Gate                | Command                                      | Result        |
+| ------------------- | -------------------------------------------- | ------------- |
+| formatting          | `bun run check:pay-to-payment-certification` | PASS (exit 0) |
+| linting             | `bun run lint`                               | PASS (exit 0) |
+| type-checking       | `bun run typecheck`                          | PASS (exit 0) |
+| complete-test-suite | `bun run test`                               | PASS (exit 0) |
+| production-build    | `bun run build`                              | PASS (exit 0) |
 
 All commands ran from a clean worktree at the exact certified commit. Command output is excluded so credentials, routing details, provider payloads, raw webhook bodies, environment values, and other sensitive material cannot enter this evidence.
 
@@ -43,6 +43,12 @@ Every named test above was present and runnable before the quality gates ran. A 
 ## Activation decision
 
 This report certifies deterministic behavior for the recorded commit, environment, pinned API version, configuration fingerprint, and credential fingerprint only. Production activation remains denied: certification does not change a runtime gate, grant provider access, supply independent approvals, or replace fresh sanitized live Zepto sandbox evidence.
+
+## Known gaps
+
+- Live Zepto sandbox drills, provider delivery, quotas, enabled scopes, and production credentials are outside this deterministic evidence class and require fresh sanitized live evidence.
+- Ambiguous retry acknowledgement remains locked against automatic replay. Production approval requires written Zepto confirmation of a safe replay contract; deterministic evidence cannot close that provider gap.
+- Independent engineering, operations, security, legal/compliance, and Zepto approvals remain required before production initiation.
 
 ## Invalidation and rerun triggers
 
